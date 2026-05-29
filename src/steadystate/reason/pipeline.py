@@ -4,16 +4,20 @@ Every drift is scored deterministically and filtered by a Brain-Tuning bar into 
 Signal (counted firehose) or an Event. The Events are handed to the LLM correlator
 in one batch; it groups them by root cause, and each group becomes an Alert -- which
 is why several signals from different sources (a node out of storage) can fold into
-one Alert. Without a model the correlator degrades honestly: each Event becomes its
-own uncorrelated Alert.
+one Alert. The correlator is selectable (auto | llm | deterministic); without a model
+it degrades honestly to deterministic grouping by shared attribute (reason/correlate.py)
+-- shared-file / shared-namespace Events still fold into one Alert, not singleton noise.
 """
 
 from __future__ import annotations
+
+from collections.abc import Callable
 
 from ..act.plan import RemediationPlan, assess
 from ..domains import default_domains
 from ..domains.base import Domain
 from ..model import ChangeType, Drift
+from . import correlate as deterministic
 from .alert import Alert, Layer, Severity
 from .llm import Cluster, LLMAnalyst
 from .report import Report, Tuning, classify
@@ -22,6 +26,26 @@ _SEVERITY_RANK = {Severity.LOW: 0, Severity.MEDIUM: 1, Severity.HIGH: 2, Severit
 
 # An Event awaiting correlation: the drift plus its deterministic score.
 _Event = tuple[Drift, Severity, "str | None"]
+
+# A correlator turns the scored Events' drifts into Clusters (LLM or deterministic).
+Correlator = Callable[[list[Drift]], list[Cluster]]
+
+
+def select_correlator(mode: str, analyst: LLMAnalyst) -> Correlator:
+    """Resolve --correlator to the function that groups Events into Clusters.
+
+    - ``deterministic``: shared-attribute grouping, never a model call.
+    - ``llm``: the LLM correlator (which itself degrades to deterministic on failure).
+    - ``auto`` (default): the LLM correlator when a provider is configured, else
+      deterministic grouping with no model call attempted.
+    """
+    if mode == "deterministic":
+        return deterministic.correlate
+    if mode == "llm":
+        return analyst.correlate
+    if mode == "auto":
+        return analyst.correlate if analyst._provider() != "none" else deterministic.correlate
+    raise ValueError(f"unknown correlator: {mode!r} (expected auto | llm | deterministic)")
 
 
 def baseline_severity(drift: Drift) -> Severity:
@@ -45,10 +69,19 @@ class Pipeline:
         analyst: LLMAnalyst | None = None,
         domains: list[Domain] | None = None,
         tuning: Tuning = Tuning.DEFAULT,
+        correlator: Correlator | str | None = None,
     ) -> None:
         self.analyst = analyst or LLMAnalyst()
         self.domains = domains if domains is not None else default_domains()
         self.tuning = tuning
+        # correlator: a mode string ("auto"|"llm"|"deterministic"), an explicit callable,
+        # or None -> the analyst's own correlate (back-compat default for existing callers).
+        if correlator is None:
+            self.correlator: Correlator = self.analyst.correlate
+        elif isinstance(correlator, str):
+            self.correlator = select_correlator(correlator, self.analyst)
+        else:
+            self.correlator = correlator
 
     def _score(self, drift: Drift) -> tuple[Severity, str | None]:
         """Deterministic severity + which domain pack (if any) raised it."""
@@ -103,6 +136,6 @@ class Pipeline:
                 signals.append(self._signal(drift, severity, flagged_by))
             else:
                 events.append((drift, severity, flagged_by))
-        clusters = self.analyst.correlate([event[0] for event in events])
+        clusters = self.correlator([event[0] for event in events])
         alerts = [self._alert_from_cluster(cluster, events) for cluster in clusters]
         return Report(items=signals + alerts, tuning=self.tuning)

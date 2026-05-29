@@ -250,7 +250,8 @@ class LLMAnalyst:
 
     def correlate(self, drifts: list[Drift]) -> list[Cluster]:
         """Group drifts by root cause via the LLM. Without a provider -- or on any
-        failure / malformed reply -- degrades honestly: each drift is its own group."""
+        failure / malformed reply -- degrades honestly to deterministic grouping by
+        shared attribute (see reason/correlate.py), never one-per-drift noise."""
         if not drifts:
             return []
         text = self._complete(_CORRELATE_INSTRUCTION, _correlate_prompt(drifts))
@@ -258,16 +259,10 @@ class LLMAnalyst:
         return clusters if clusters is not None else self._uncorrelated(drifts)
 
     def _uncorrelated(self, drifts: list[Drift]) -> list[Cluster]:
-        return [
-            Cluster(
-                drift_indexes=[i],
-                title=drift.summary(),
-                why_it_matters=f"{drift.summary()}: declared and observed state diverge.",
-                recommended_action=None,
-                llm_backed=False,
-            )
-            for i, drift in enumerate(drifts)
-        ]
+        # Honest degrade: deterministic shared-attribute grouping, not singleton noise.
+        from .correlate import correlate as deterministic_correlate
+
+        return deterministic_correlate(drifts)
 
     def _complete(self, system: str, user: str) -> str | None:
         """Raw model text from the configured provider, or None if unavailable/failed."""
