@@ -22,14 +22,14 @@ def _drift(change_type=ChangeType.MODIFIED, kind="aws_s3_bucket", **kw) -> Drift
 
 def test_case_carries_recommended_action_from_executor(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    case = Pipeline().run([_drift(ChangeType.MODIFIED)])[0]
+    case = Pipeline().run([_drift(ChangeType.MODIFIED)]).surfaced[0]
     assert case.recommended_action  # populated, not None
     assert "Reconcile to declared state" in case.recommended_action
 
 
 def test_removed_case_recommends_manual_review(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    case = Pipeline().run([_drift(ChangeType.REMOVED)])[0]
+    case = Pipeline().run([_drift(ChangeType.REMOVED)]).surfaced[0]
     assert "Manual review" in case.recommended_action
 
 
@@ -42,7 +42,7 @@ def test_non_terraform_drift_has_no_terraform_action(monkeypatch):
         provenance=Provenance(source="argocd"),
     )
     # No Terraform executor for an ArgoCD drift -> we don't fabricate a `terraform apply`.
-    assert Pipeline().run([drift])[0].recommended_action is None
+    assert Pipeline().run([drift]).surfaced[0].recommended_action is None
 
 
 def test_security_pab_match_is_word_boundary():

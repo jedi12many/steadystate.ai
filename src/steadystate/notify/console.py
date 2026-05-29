@@ -1,11 +1,11 @@
-"""Console surface -- the v0 default. Slack/Teams (bidirectional ChatOps) come next."""
+"""Console surface -- the v0 default. Shows the full three-layer breakdown."""
 
 from __future__ import annotations
 
 from rich.console import Console
 from rich.panel import Panel
 
-from ..reason.case import Case
+from ..reason.report import Report
 
 _SEVERITY_STYLE = {"low": "dim", "medium": "yellow", "high": "red", "critical": "bold red"}
 
@@ -16,17 +16,35 @@ class ConsoleSurface:
     def __init__(self) -> None:
         self._console = Console()
 
-    def emit(self, cases: list[Case]) -> None:
-        if not cases:
-            self._console.print("[green]Steady state: no drift worth surfacing.[/green]")
+    def emit(self, report: Report) -> None:
+        if not report.all_cases:
+            self._console.print("[green]Steady state: no drift detected.[/green]")
             return
-        for case in cases:
+
+        for case in report.cases:  # page-worthy: full panel
             style = _SEVERITY_STYLE.get(case.severity.value, "white")
             backed = "LLM" if case.llm_backed else "deterministic"
             body = f"[{style}]{case.severity.value.upper()}[/{style}]  {case.why_it_matters}"
             if case.recommended_action:
                 body += f"\n\n[bold]Next:[/bold] {case.recommended_action}"
             self._console.print(Panel(body, title=f"{case.title}  |  {backed}", title_align="left"))
+
+        for case in report.alerts:  # recorded: one line each
+            style = _SEVERITY_STYLE.get(case.severity.value, "white")
+            self._console.print(
+                f"[{style}]ALERT {case.severity.value.upper()}[/{style}]  {case.title}"
+            )
+
+        if report.event_count:  # firehose: counted, not listed
+            self._console.print(
+                f"[dim]+ {report.event_count} event(s) below the bar (counted, not shown).[/dim]"
+            )
+
+        self._console.print(
+            f"[dim]tuning: {report.tuning.value}  |  "
+            f"{len(report.cases)} case(s), {len(report.alerts)} alert(s), "
+            f"{report.event_count} event(s)[/dim]"
+        )
 
     def emit_remediations(self, items: list) -> None:
         """Render remediation plans (and results, if applied).

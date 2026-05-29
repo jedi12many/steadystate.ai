@@ -12,6 +12,7 @@ from .notify import SURFACES, build_surfaces
 from .notify.base import Surface
 from .notify.console import ConsoleSurface
 from .reason.pipeline import Pipeline
+from .reason.report import Tuning
 from .sources import DRIFT_SOURCES, build_drift_source
 from .sources.terraform import TerraformSource
 
@@ -44,6 +45,13 @@ def _surfaces(names: list[str]) -> list[Surface]:
         raise typer.BadParameter(str(exc)) from None
 
 
+def _tuning(value: str) -> Tuning:
+    try:
+        return Tuning(value)
+    except ValueError:
+        raise typer.BadParameter("tuning must be: lenient | default | strict") from None
+
+
 @app.command()
 def scan(
     path: Path = typer.Argument(
@@ -61,14 +69,20 @@ def scan(
         "--to",
         help=f"Comma-separated surfaces to emit Cases to: {', '.join(sorted(SURFACES))}.",
     ),
+    tuning: str = typer.Option(
+        "default",
+        "--tuning",
+        help="Surfacing bar (moves Event/Alert/Case thresholds together): "
+        "lenient | default | strict.",
+    ),
 ) -> None:
     """Scan declared state for drift and surface the Cases."""
-    names = [name.strip() for name in to.split(",") if name.strip()]
-    surfaces = _surfaces(names)
+    surfaces = _surfaces([name.strip() for name in to.split(",") if name.strip()])
+    level = _tuning(tuning)
     drifts = _drift_source(source, path).collect_drift()
-    cases = Pipeline().run(drifts)
+    report = Pipeline(tuning=level).run(drifts)
     for surface in surfaces:
-        surface.emit(cases)
+        surface.emit(report)
 
 
 @app.command()
