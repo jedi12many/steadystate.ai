@@ -8,8 +8,9 @@ from pathlib import Path
 import typer
 
 from .act.terraform import TerraformExecutor
+from .notify import SURFACES, build_surfaces
+from .notify.base import Surface
 from .notify.console import ConsoleSurface
-from .notify.slack import SlackSurface
 from .reason.pipeline import Pipeline
 from .sources import DRIFT_SOURCES, build_drift_source
 from .sources.terraform import TerraformSource
@@ -34,6 +35,15 @@ def _drift_source(source: str, path: Path):
         raise typer.BadParameter(str(exc)) from None
 
 
+def _surfaces(names: list[str]) -> list[Surface]:
+    """Resolve --to to Surfaces via the registry in notify/__init__.py.
+    Adding a surface is a one-line registry entry -- this dispatcher never changes."""
+    try:
+        return build_surfaces(names)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from None
+
+
 @app.command()
 def scan(
     path: Path = typer.Argument(
@@ -46,16 +56,19 @@ def scan(
         "--source",
         help=f"Declared-state source: {' | '.join(sorted(DRIFT_SOURCES))}.",
     ),
-    slack: bool = typer.Option(
-        False, "--slack", help="Also emit Cases to Slack (needs SLACK_WEBHOOK_URL)."
+    to: str = typer.Option(
+        "console",
+        "--to",
+        help=f"Comma-separated surfaces to emit Cases to: {', '.join(sorted(SURFACES))}.",
     ),
 ) -> None:
     """Scan declared state for drift and surface the Cases."""
+    names = [name.strip() for name in to.split(",") if name.strip()]
+    surfaces = _surfaces(names)
     drifts = _drift_source(source, path).collect_drift()
     cases = Pipeline().run(drifts)
-    ConsoleSurface().emit(cases)
-    if slack:
-        SlackSurface().emit(cases)
+    for surface in surfaces:
+        surface.emit(cases)
 
 
 @app.command()

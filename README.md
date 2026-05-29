@@ -22,7 +22,7 @@ steadystate scan ./infra
   → reads your Terraform's own plan (declared vs real cloud state)
   → reconciles the drift into a canonical model
   → reasons about it (what matters, why) and writes Cases
-  → surfaces the Cases (console now; Slack next)
+  → surfaces the Cases (console, Slack, or Teams)
 ```
 
 No agent to install, no dashboard to learn. Point it at your IaC.
@@ -43,6 +43,17 @@ Point it at whichever model you're allowed to use:
   ```
 
 When both are set, Anthropic wins unless you set `STEADYSTATE_LLM_PROVIDER=openai`.
+
+## Sending findings to Slack / Teams
+
+`scan` writes to the console by default. Use `--to` (comma-separated) to fan findings out to other surfaces — adding one is a one-line registry entry, so the list grows without touching the CLI:
+
+```sh
+export TEAMS_WEBHOOK_URL=...                  # an incoming webhook from the Teams "Workflows" app
+steadystate scan ./infra --to console,teams   # print locally and post an Adaptive Card per Case
+```
+
+Slack works the same way (`--to slack`, `SLACK_WEBHOOK_URL`). If a surface's webhook isn't configured it says so once and skips — it never pretends it delivered.
 
 ## Design
 
