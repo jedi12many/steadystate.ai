@@ -9,6 +9,7 @@ import typer
 
 from .act.terraform import TerraformExecutor
 from .notify.console import ConsoleSurface
+from .notify.slack import SlackSurface
 from .reason.pipeline import Pipeline
 from .sources.terraform import TerraformSource
 
@@ -29,6 +30,9 @@ def scan(
         ...,
         help="A Terraform working dir, or a `terraform show -json` plan file.",
     ),
+    slack: bool = typer.Option(
+        False, "--slack", help="Also emit Cases to Slack (needs SLACK_WEBHOOK_URL)."
+    ),
 ) -> None:
     """Scan declared state for drift and surface the Cases."""
     if path.is_file():
@@ -38,6 +42,8 @@ def scan(
     drifts = source.collect_drift()
     cases = Pipeline().run(drifts)
     ConsoleSurface().emit(cases)
+    if slack:
+        SlackSurface().emit(cases)
 
 
 @app.command()
