@@ -64,7 +64,7 @@ steadystate scan ./infra --tuning strict    # lower the bars: more becomes Event
 steadystate scan ./infra --tuning lenient   # raise them: only the biggest drift surfaces
 ```
 
-`default` is the drop-and-watch middle. The console prints the full breakdown; Slack/Teams page on **Alerts** only. The LLM runs only at the Alert tier, so Signals and Events stay cheap.
+`default` is the drop-and-watch middle. The console prints the full breakdown; Slack/Teams page on **Alerts** only. The LLM is the correlator (Events → Alerts) — it groups signals from different sources that share one root cause; Signals never reach it.
 
 ## Design
 

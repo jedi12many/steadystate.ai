@@ -54,6 +54,89 @@ class Analysis:
     llm_backed: bool
 
 
+@dataclass
+class Cluster:
+    """A group of drifts the correlator believes share one root cause."""
+
+    drift_indexes: list[int]
+    title: str
+    why_it_matters: str
+    recommended_action: str | None
+    llm_backed: bool
+
+
+_CORRELATE_INSTRUCTION = (
+    "You are steadystate.ai's drift correlator. Below is a numbered list of infrastructure "
+    "drifts from one scan. Group the drifts that share a SINGLE root cause (e.g. several "
+    "symptoms of one node running out of storage). Most drifts are unrelated -- only group when "
+    "there is a real common cause; otherwise a drift is its own group of one. For each group give "
+    "a short title naming the cause, 1-2 plain sentences on why it matters, and one concrete next "
+    "step (or null if you cannot act). Be honest; never invent a cause the data does not support. "
+    'Return ONLY JSON, no prose: {"groups": [{"drift_indexes": [int, ...], "title": str, '
+    '"why_it_matters": str, "recommended_action": str or null}]} -- every index from 0 to N-1 '
+    "must appear in exactly one group."
+)
+
+
+def _correlate_prompt(drifts: list[Drift]) -> str:
+    blocks = [
+        f"[{i}] {d.summary()} (source={d.provenance.source})\n{d.to_json()}"
+        for i, d in enumerate(drifts)
+    ]
+    return "Drifts:\n\n" + "\n\n".join(blocks)
+
+
+def _extract_json(text: str) -> dict | None:
+    start, end = text.find("{"), text.rfind("}")
+    if start == -1 or end <= start:
+        return None
+    try:
+        data = json.loads(text[start : end + 1])
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _parse_clusters(text: str, n: int) -> list[Cluster] | None:
+    """Parse the correlator's JSON. Returns None (so the caller degrades) unless it
+    cleanly covers every drift index 0..n-1 exactly once -- never drop or dup a drift."""
+    data = _extract_json(text)
+    groups = data.get("groups") if data else None
+    if not isinstance(groups, list) or not groups:
+        return None
+    clusters: list[Cluster] = []
+    seen: set[int] = set()
+    for group in groups:
+        if not isinstance(group, dict):
+            return None
+        idxs, title = group.get("drift_indexes"), group.get("title")
+        why, action = group.get("why_it_matters"), group.get("recommended_action")
+        if not isinstance(idxs, list) or not idxs:
+            return None
+        if not isinstance(title, str) or not isinstance(why, str):
+            return None
+        if action is not None and not isinstance(action, str):
+            return None
+        norm: list[int] = []
+        for x in idxs:
+            if not isinstance(x, int) or isinstance(x, bool) or x < 0 or x >= n or x in seen:
+                return None
+            seen.add(x)
+            norm.append(x)
+        clusters.append(
+            Cluster(
+                drift_indexes=norm,
+                title=title,
+                why_it_matters=why,
+                recommended_action=action,
+                llm_backed=True,
+            )
+        )
+    if seen != set(range(n)):
+        return None
+    return clusters
+
+
 class LLMAnalyst:
     """Explains why a drift matters via Anthropic or any OpenAI-compatible endpoint.
     Degrades honestly when nothing is configured."""
@@ -162,3 +245,87 @@ class LLMAnalyst:
             payload = json.loads(response.read())
         text = payload["choices"][0]["message"]["content"].strip()
         return Analysis(why_it_matters=text, recommended_action=None, llm_backed=True)
+
+    # -- correlation --------------------------------------------------------
+
+    def correlate(self, drifts: list[Drift]) -> list[Cluster]:
+        """Group drifts by root cause via the LLM. Without a provider -- or on any
+        failure / malformed reply -- degrades honestly: each drift is its own group."""
+        if not drifts:
+            return []
+        text = self._complete(_CORRELATE_INSTRUCTION, _correlate_prompt(drifts))
+        clusters = _parse_clusters(text, len(drifts)) if text is not None else None
+        return clusters if clusters is not None else self._uncorrelated(drifts)
+
+    def _uncorrelated(self, drifts: list[Drift]) -> list[Cluster]:
+        return [
+            Cluster(
+                drift_indexes=[i],
+                title=drift.summary(),
+                why_it_matters=f"{drift.summary()}: declared and observed state diverge.",
+                recommended_action=None,
+                llm_backed=False,
+            )
+            for i, drift in enumerate(drifts)
+        ]
+
+    def _complete(self, system: str, user: str) -> str | None:
+        """Raw model text from the configured provider, or None if unavailable/failed."""
+        provider = self._provider()
+        if provider == "none":
+            return None
+        try:
+            if provider == "anthropic":
+                return self._complete_anthropic(system, user)
+            return self._complete_openai(system, user)
+        except ImportError:
+            # anthropic SDK missing; fall through to an OpenAI-compatible endpoint if set.
+            if provider == "anthropic" and self._openai_ready():
+                try:
+                    return self._complete_openai(system, user)
+                except Exception:
+                    return None
+            return None
+        except Exception:
+            # any model/network/parse failure -> caller degrades honestly; never crash a scan.
+            return None
+
+    def _complete_anthropic(self, system: str, user: str) -> str:
+        from anthropic import Anthropic
+
+        client = Anthropic(api_key=self.api_key)
+        message = client.messages.create(
+            model=self.model,
+            max_tokens=1024,
+            system=system,
+            messages=[{"role": "user", "content": user}],
+        )
+        return "".join(
+            block.text for block in message.content if getattr(block, "type", None) == "text"
+        ).strip()
+
+    def _complete_openai(self, system: str, user: str) -> str:
+        assert self.openai_base_url and self.openai_api_key and self.openai_model
+        url = self.openai_base_url.rstrip("/") + "/chat/completions"
+        body = json.dumps(
+            {
+                "model": self.openai_model,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                "max_tokens": 1024,
+            }
+        ).encode("utf-8")
+        request = urllib.request.Request(
+            url,
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.openai_api_key}",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=self.timeout) as response:
+            payload = json.loads(response.read())
+        return payload["choices"][0]["message"]["content"].strip()

@@ -44,7 +44,7 @@ def test_non_terraform_drift_has_no_terraform_action(monkeypatch):
         provenance=Provenance(source="argocd"),
     )
     # No Terraform executor for an ArgoCD drift -> we don't fabricate a `terraform apply`.
-    assert Pipeline().run([drift]).surfaced[0].recommended_action is None
+    assert Pipeline().run([drift]).alerts[0].recommended_action is None
 
 
 def test_security_pab_match_is_word_boundary():
