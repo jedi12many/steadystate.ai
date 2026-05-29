@@ -41,3 +41,9 @@ class Alert:
     llm_backed: bool = False  # did an LLM actually reason about this? (honesty)
     flagged_by: str | None = None  # domain pack that raised the severity, if any
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    # Memory annotations, populated by the state store during a stateful scan and
+    # left None when scanning statelessly (so Pipeline stays pure and the stateless
+    # path is unchanged). first_seen = when this finding was first recorded; status =
+    # its lifecycle state (open / muted / snoozed / resolved).
+    first_seen: datetime | None = None
+    status: str | None = None

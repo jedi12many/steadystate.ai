@@ -7,6 +7,7 @@ core stays trivially serializable to JSON for the LLM and for storage.
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -58,6 +59,21 @@ class Drift:
 
     def summary(self) -> str:
         return f"{self.change_type.value} {self.kind} {self.identity}"
+
+    @property
+    def fingerprint(self) -> str:
+        """A stable, idempotent id for *this resource drifting* -- the durable finding.
+
+        Deliberately coarse: ``source|identity|change_type``. "This resource is
+        drifting" is one finding whose details (declared/observed properties) churn
+        underneath; the fingerprint must not churn with them, or every property tweak
+        would read as a brand-new finding and defeat the new-vs-recurring memory. Same
+        drift re-ingested -> same fingerprint; a different source, identity, or change
+        type -> a different one. (kind is omitted on purpose: identity is already the
+        stable id, and a kind rename for the same identity is the same finding.)
+        """
+        raw = f"{self.provenance.source}|{self.identity}|{self.change_type.value}"
+        return hashlib.sha256(raw.encode()).hexdigest()
 
     def to_json(self) -> str:
         return json.dumps(dataclasses.asdict(self), default=str, indent=2)

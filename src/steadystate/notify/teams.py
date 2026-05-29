@@ -18,9 +18,14 @@ import logging
 import os
 import urllib.error
 import urllib.request
+from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
 from ..reason.alert import Alert
 from ..reason.report import Report
+
+if TYPE_CHECKING:
+    from ..reconcile_state import ResolvedFinding
 
 logger = logging.getLogger(__name__)
 
@@ -89,8 +94,9 @@ class TeamsSurface:
         self.webhook_url = webhook_url or os.environ.get("TEAMS_WEBHOOK_URL")
         self.timeout = timeout
 
-    def emit(self, report: Report) -> None:
+    def emit(self, report: Report, resolved: Sequence[ResolvedFinding] | None = None) -> None:
         # Page only on Alerts -- the top tier. Events/signals stay on the console.
+        # ``resolved`` is console-first in Phase 0; Teams ignores it for now.
         if not self.webhook_url:
             logger.warning(
                 "Teams surface enabled but no webhook configured "
