@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from ..reason.case import Case
+from ..reason.report import Report
 
 
 @runtime_checkable
 class Surface(Protocol):
     name: str
 
-    def emit(self, cases: list[Case]) -> None: ...
+    def emit(self, report: Report) -> None: ...

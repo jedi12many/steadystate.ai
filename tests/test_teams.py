@@ -9,6 +9,7 @@ import logging
 from steadystate.model import ChangeType, Drift, Provenance
 from steadystate.notify.teams import TeamsSurface, format_teams_message
 from steadystate.reason.case import Case, Layer, Severity
+from steadystate.reason.report import Report
 
 
 def _drift() -> Drift:
@@ -155,7 +156,7 @@ def test_emit_posts_once_per_case(monkeypatch):
     posted: list[dict] = []
     monkeypatch.setattr(surface, "_post", lambda payload: posted.append(payload))
 
-    surface.emit([_case(), _case(severity=Severity.CRITICAL)])
+    surface.emit(Report(all_cases=[_case(), _case(severity=Severity.CRITICAL)]))
     assert len(posted) == 2
     for payload in posted:
         assert payload["type"] == "message"
@@ -186,7 +187,7 @@ def test_emit_post_uses_urllib_with_configured_url(monkeypatch):
 
     monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
 
-    surface.emit([_case()])
+    surface.emit(Report(all_cases=[_case()]))
     assert seen["url"] == "https://outlook.office.test/webhook/abc"
     assert seen["content_type"] == "application/json"
     assert seen["has_auth"] is False  # the webhook URL is itself the secret
@@ -202,7 +203,7 @@ def test_no_webhook_is_a_noop(monkeypatch, caplog):
     monkeypatch.setattr(surface, "_post", lambda payload: posted.append(payload))
 
     with caplog.at_level(logging.WARNING, logger="steadystate.notify.teams"):
-        surface.emit([_case(), _case()])
+        surface.emit(Report(all_cases=[_case(), _case()]))
 
     assert posted == []  # nothing sent, no network touched
     assert len(caplog.records) == 1  # one honest line, no crash

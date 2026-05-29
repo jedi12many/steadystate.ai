@@ -17,6 +17,7 @@ import urllib.error
 import urllib.request
 
 from ..reason.case import Case
+from ..reason.report import Report
 
 logger = logging.getLogger(__name__)
 
@@ -49,15 +50,16 @@ class SlackSurface:
         self.webhook_url = webhook_url or os.environ.get("SLACK_WEBHOOK_URL")
         self.timeout = timeout
 
-    def emit(self, cases: list[Case]) -> None:
+    def emit(self, report: Report) -> None:
+        # Page only on Cases -- the highest bar. Alerts/events stay on the console.
         if not self.webhook_url:
             logger.warning(
                 "Slack surface enabled but no webhook configured "
                 "(set SLACK_WEBHOOK_URL or pass webhook_url); skipping %d case(s).",
-                len(cases),
+                len(report.cases),
             )
             return
-        for case in cases:
+        for case in report.cases:
             self._post(format_slack_message(case))
 
     def _post(self, payload: dict) -> None:

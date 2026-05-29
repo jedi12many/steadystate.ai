@@ -55,6 +55,17 @@ steadystate scan ./infra --to console,teams   # print locally and post an Adapti
 
 Slack works the same way (`--to slack`, `SLACK_WEBHOOK_URL`). If a surface's webhook isn't configured it says so once and skips — it never pretends it delivered.
 
+## Tuning what surfaces
+
+Every drift is an **Event** (counted). Scoring promotes the ones that matter into **Alerts** (recorded) and **Cases** (page-worthy — full narrative + recommended action). One knob moves all the bars together:
+
+```sh
+steadystate scan ./infra --tuning strict    # lower the bars: more becomes Alerts/Cases
+steadystate scan ./infra --tuning lenient   # raise them: only the biggest drift surfaces
+```
+
+`default` is the drop-and-watch middle. The console prints the full breakdown; Slack/Teams page on **Cases** only. The LLM runs only on what clears the bar, so Events stay cheap.
+
 ## Design
 
 See **[ARCHITECTURE.md](./ARCHITECTURE.md)** for the full design: the canonical state model, the four plugin seams (StateSource / Domain / Surface / Executor), the ChatOps operator model, and the build-vs-rent decisions.
