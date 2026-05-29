@@ -16,7 +16,7 @@ from collections.abc import Callable
 
 from ..act.plan import RemediationPlan, assess
 from ..domains import default_domains
-from ..domains.base import Domain
+from ..domains.base import Domain, Reference, references_for
 from ..model import ChangeType, Drift
 from .alert import Alert, Layer, Severity
 from .correlate import Cluster, Correlator, DeterministicCorrelator, LLMCorrelator
@@ -25,8 +25,9 @@ from .report import Report, Tuning, classify
 
 _SEVERITY_RANK = {Severity.LOW: 0, Severity.MEDIUM: 1, Severity.HIGH: 2, Severity.CRITICAL: 3}
 
-# An Event awaiting correlation: the drift plus its deterministic score.
-_Event = tuple[Drift, Severity, "str | None"]
+# An Event awaiting correlation: the drift, its deterministic score, the domain that
+# raised it (if any), and that domain's framework references for the drift (if any).
+_Event = tuple[Drift, Severity, "str | None", "list[Reference]"]
 
 # The correlator plugin registry: name -> factory(analyst) -> Correlator. Mirrors
 # DRIFT_SOURCES (sources/__init__.py) and SURFACES (notify/__init__.py): a new
@@ -102,18 +103,29 @@ class Pipeline:
         else:
             self.correlator = correlator
 
-    def _score(self, drift: Drift) -> tuple[Severity, str | None]:
-        """Deterministic severity + which domain pack (if any) raised it."""
+    def _score(self, drift: Drift) -> tuple[Severity, str | None, list[Reference]]:
+        """Deterministic severity, which domain pack (if any) raised it, and that pack's
+        framework references for the drift -- picked from the SAME domain, at the same
+        point, so severity and references can never come from different packs or disagree.
+        """
         severity = baseline_severity(drift)
         flagged_by: str | None = None
+        references: list[Reference] = []
         for domain in self.domains:
             scored = domain.score(drift)
             if scored is not None and _SEVERITY_RANK[scored] > _SEVERITY_RANK[severity]:
                 severity = scored
                 flagged_by = domain.name
-        return severity, flagged_by
+                references = references_for(domain, drift)
+        return severity, flagged_by, references
 
-    def _signal(self, drift: Drift, severity: Severity, flagged_by: str | None) -> Alert:
+    def _signal(
+        self,
+        drift: Drift,
+        severity: Severity,
+        flagged_by: str | None,
+        references: list[Reference],
+    ) -> Alert:
         # Below the Event bar: the counted firehose, never analyzed.
         return Alert(
             title=drift.summary(),
@@ -124,6 +136,7 @@ class Pipeline:
             recommended_action=None,
             llm_backed=False,
             flagged_by=flagged_by,
+            references=references,
         )
 
     def _alert_from_cluster(self, cluster: Cluster, events: list[_Event]) -> Alert:
@@ -131,6 +144,9 @@ class Pipeline:
         drifts = [m[0] for m in members]
         severity = max((m[1] for m in members), key=lambda s: _SEVERITY_RANK[s])
         flagged_by = next((m[2] for m in members if m[2] is not None), None)
+        # References ride with the flagging member, mirroring flagged_by: take the first
+        # member that contributed any (none when no pack mapped the cluster's drift).
+        references = next((m[3] for m in members if m[3]), [])
         action = cluster.recommended_action
         # A single Terraform Event with no model-suggested action -> the executor's plan.
         if action is None and len(drifts) == 1 and drifts[0].provenance.source == "terraform":
@@ -144,17 +160,18 @@ class Pipeline:
             recommended_action=action,
             llm_backed=cluster.llm_backed,
             flagged_by=flagged_by,
+            references=references,
         )
 
     def run(self, drifts: list[Drift]) -> Report:
         signals: list[Alert] = []
         events: list[_Event] = []
         for drift in drifts:
-            severity, flagged_by = self._score(drift)
+            severity, flagged_by, references = self._score(drift)
             if classify(severity, self.tuning) is Layer.SIGNAL:
-                signals.append(self._signal(drift, severity, flagged_by))
+                signals.append(self._signal(drift, severity, flagged_by, references))
             else:
-                events.append((drift, severity, flagged_by))
+                events.append((drift, severity, flagged_by, references))
         clusters = self.correlator.correlate([event[0] for event in events])
         alerts = [self._alert_from_cluster(cluster, events) for cluster in clusters]
         return Report(items=signals + alerts, tuning=self.tuning)

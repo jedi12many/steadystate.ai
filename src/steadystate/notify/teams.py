@@ -53,6 +53,10 @@ def format_teams_message(alert: Alert) -> dict:
         facts.append({"title": "Source", "value": alert.drifts[0].provenance.source})
     if alert.flagged_by is not None:  # omit the fact entirely when nothing flagged it
         facts.append({"title": "Flagged by", "value": alert.flagged_by})
+    if alert.references:  # omit the fact entirely when nothing mapped
+        # Config-exposure -> technique mapping, not behavioral detection.
+        chips = ", ".join(f"{ref.framework} {ref.id}" for ref in alert.references)
+        facts.append({"title": "References", "value": chips})
 
     body: list[dict] = [
         {

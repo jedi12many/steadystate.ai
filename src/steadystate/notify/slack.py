@@ -42,6 +42,10 @@ def format_slack_message(alert: Alert) -> dict:
     lines = [header, alert.why_it_matters]
     if alert.recommended_action:
         lines.append(f"*Next:* {alert.recommended_action}")
+    if alert.references:  # only when present; absent references add no line
+        # Config-exposure -> technique mapping, not behavioral detection.
+        chips = " ".join(f"`{ref.framework} {ref.id}`" for ref in alert.references)
+        lines.append(f"*References:* {chips}")
     text = "\n\n".join(lines)
     return {"text": text}
 

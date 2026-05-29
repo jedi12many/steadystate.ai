@@ -10,8 +10,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import Enum
+from typing import TYPE_CHECKING
 
 from ..model import Drift
+
+if TYPE_CHECKING:
+    # Imported under TYPE_CHECKING only: domains.base imports Severity from this module,
+    # so a runtime import here would be circular. Reference is a plain frozen value type.
+    from ..domains.base import Reference
 
 
 class Layer(str, Enum):
@@ -40,6 +46,10 @@ class Alert:
     recommended_action: str | None = None
     llm_backed: bool = False  # did an LLM actually reason about this? (honesty)
     flagged_by: str | None = None  # domain pack that raised the severity, if any
+    # Framework references the flagging domain mapped this drift to (MITRE ATT&CK today;
+    # CIS/STIG/CWE later, same field). Config-exposure -> technique mapping, NOT behavioral
+    # detection. Populated alongside flagged_by in the pipeline; empty when nothing mapped.
+    references: list[Reference] = field(default_factory=list)
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     # Memory annotations, populated by the state store during a stateful scan and
     # left None when scanning statelessly (so Pipeline stays pure and the stateless
