@@ -37,3 +37,42 @@ def test_parses_drift_and_changes_skipping_noop():
     by_id = {d.identity: d for d in drifts}
     assert by_id["aws_s3_bucket.logs"].change_type is ChangeType.MODIFIED
     assert by_id["aws_security_group.web"].change_type is ChangeType.REMOVED
+
+
+def test_resource_in_both_drift_and_changes_is_deduped_to_one():
+    # A real `terraform plan` (with refresh) lists a drifted-then-reconciled resource in
+    # BOTH sections. It's one finding -- dedupe by address, and keep the resource_changes
+    # view (declared = config, observed = reality), not the inverted resource_drift view.
+    plan = {
+        "resource_drift": [
+            {
+                "address": "google_compute_firewall.ssh",
+                "type": "google_compute_firewall",
+                "name": "ssh",
+                "change": {
+                    "actions": ["update"],
+                    "before": {"source_ranges": ["35.235.240.0/20"]},  # last-applied state
+                    "after": {"source_ranges": ["0.0.0.0/0"]},  # current reality
+                },
+            },
+        ],
+        "resource_changes": [
+            {
+                "address": "google_compute_firewall.ssh",
+                "type": "google_compute_firewall",
+                "name": "ssh",
+                "change": {
+                    "actions": ["update"],
+                    "before": {"source_ranges": ["0.0.0.0/0"]},  # current reality
+                    "after": {"source_ranges": ["35.235.240.0/20"]},  # declared config
+                },
+            },
+        ],
+    }
+    drifts = drifts_from_plan_json(plan)
+    assert len(drifts) == 1  # one finding, not a double-count
+    drift = drifts[0]
+    assert drift.identity == "google_compute_firewall.ssh"
+    # resource_changes wins: declared = config, observed = the opened-to-world reality.
+    assert drift.declared == {"source_ranges": ["35.235.240.0/20"]}
+    assert drift.observed == {"source_ranges": ["0.0.0.0/0"]}

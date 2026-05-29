@@ -42,17 +42,26 @@ def _drift_from_change(rc: dict) -> Drift | None:
 
 
 def drifts_from_plan_json(plan: dict) -> list[Drift]:
-    """Parse a `terraform show -json <plan>` document into Drift records. Pure + testable."""
-    out: list[Drift] = []
-    for rc in plan.get("resource_drift") or []:
-        d = _drift_from_change(rc)
-        if d is not None:
-            out.append(d)
-    for rc in plan.get("resource_changes") or []:
-        d = _drift_from_change(rc)
-        if d is not None:
-            out.append(d)
-    return out
+    """Parse a `terraform show -json <plan>` document into Drift records. Pure + testable.
+
+    A resource that drifted in reality AND has a planned reconciliation appears in BOTH
+    sections at once -- `resource_changes` and `resource_drift` -- but it's one finding, so
+    we dedupe by address. `resource_changes` wins: its before/after is exactly declared-config
+    (after) vs current reality (before), which is steadystate's declared-vs-observed framing;
+    `resource_drift` carries them in the opposite sense (current reality vs last-applied state),
+    so using it would invert declared/observed. resource_drift is the fallback only for
+    resources the plan won't change.
+    """
+    by_address: dict[str, Drift] = {}
+    order: list[str] = []
+    for section in ("resource_changes", "resource_drift"):
+        for rc in plan.get(section) or []:
+            d = _drift_from_change(rc)
+            if d is None or d.identity in by_address:
+                continue
+            by_address[d.identity] = d
+            order.append(d.identity)
+    return [by_address[a] for a in order]
 
 
 class TerraformSource:
