@@ -6,6 +6,7 @@ path is checked by monkeypatching urllib so no socket is ever opened.
 
 import logging
 
+from steadystate.domains.base import Reference
 from steadystate.model import ChangeType, Drift, Provenance
 from steadystate.notify.teams import TeamsSurface, format_teams_message
 from steadystate.reason.alert import Alert, Layer, Severity
@@ -120,6 +121,22 @@ def test_format_omits_flagged_by_fact_when_none():
 def test_format_includes_flagged_by_fact_when_set():
     card = _card(format_teams_message(_case(flagged_by="security")))
     assert _facts(card)["Flagged by"] == "security"
+
+
+def test_format_omits_references_fact_when_absent():
+    card = _card(format_teams_message(_case()))  # references defaults to []
+    assert "References" not in _facts(card)
+
+
+def test_format_includes_references_fact_when_present():
+    refs = [
+        Reference(framework="MITRE", id="T1530"),
+        Reference(framework="MITRE", id="T1190"),
+    ]
+    card = _card(format_teams_message(_case(references=refs)))
+    value = _facts(card)["References"]
+    assert "MITRE T1530" in value
+    assert "MITRE T1190" in value
 
 
 def test_severity_color_map():

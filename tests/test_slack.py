@@ -1,5 +1,6 @@
 import logging
 
+from steadystate.domains.base import Reference
 from steadystate.notify.slack import SlackSurface, format_slack_message
 from steadystate.reason.alert import Alert, Layer, Severity
 from steadystate.reason.report import Report
@@ -36,6 +37,18 @@ def test_format_marks_llm_backed():
 def test_format_omits_next_when_no_action():
     payload = format_slack_message(_case(recommended_action=None))
     assert "Next:" not in payload["text"]
+
+
+def test_format_renders_reference_chips_when_present():
+    refs = [Reference(framework="MITRE", id="T1530", name="Data from Cloud Storage")]
+    payload = format_slack_message(_case(references=refs))
+    assert "References:" in payload["text"]
+    assert "MITRE T1530" in payload["text"]
+
+
+def test_format_omits_references_when_absent():
+    payload = format_slack_message(_case())  # references defaults to []
+    assert "References:" not in payload["text"]
 
 
 def test_format_payload_is_json_serializable_dict():

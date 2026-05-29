@@ -24,6 +24,16 @@ if TYPE_CHECKING:
 _SEVERITY_STYLE = {"low": "dim", "medium": "yellow", "high": "red", "critical": "bold red"}
 
 
+def _reference_chips(alert: Alert) -> str:
+    """Compact framework chips like ``[MITRE T1530] [MITRE T1190]``, or "" if none.
+
+    Config-exposure -> technique mapping, not behavioral detection -- the chip names the
+    technique the recognized config change *enables*. Empty string when the Alert carries
+    no references, so the stateless/no-reference path renders exactly as before.
+    """
+    return " ".join(f"[{ref.framework} {ref.id}]" for ref in alert.references)
+
+
 def _memory_marker(alert: Alert, now: datetime | None) -> str | None:
     """The state badge for an Alert's title (NEW / seen Nd / muted / snoozed), or None.
 
@@ -81,6 +91,9 @@ class ConsoleSurface:
             body = f"[{style}]{alert.severity.value.upper()}[/{style}]  {alert.why_it_matters}"
             if alert.recommended_action:
                 body += f"\n\n[bold]Next:[/bold] {alert.recommended_action}"
+            chips = _reference_chips(alert)
+            if chips:  # only when references exist; absent references render nothing
+                body += f"\n\n[dim]{chips}[/dim]"
             self._console.print(Panel(body, title=title, title_align="left"))
 
         if resolved:

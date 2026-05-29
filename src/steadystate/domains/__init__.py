@@ -8,14 +8,20 @@ compliance (CIS, STIG, ...) enter -- as packs, never as core.
 
 from __future__ import annotations
 
-from .base import Domain
+from .base import Domain, Reference, references_for
 from .security import SecurityDomain
 
 # The packs the pipeline loads by default. Append new packs here; pipeline.py
 # does not change.
 DEFAULT_DOMAINS: list[Domain] = [SecurityDomain()]
 
-__all__ = ["DEFAULT_DOMAINS", "Domain", "default_domains"]
+__all__ = [
+    "DEFAULT_DOMAINS",
+    "Domain",
+    "Reference",
+    "default_domains",
+    "references_for",
+]
 
 
 def default_domains() -> list[Domain]:

@@ -11,6 +11,36 @@ from __future__ import annotations
 
 from ..model import Drift
 from ..reason.alert import Severity
+from .base import Reference
+
+# Config-exposure -> ATT&CK technique map. Honest framing: we map a recognized
+# exposure-increasing config change to the technique it *enables*; this is NOT
+# behavioral attack detection. The same predicates that raise severity in score()
+# pick these references, so severity and references can never disagree.
+_T1530 = Reference(
+    framework="MITRE",
+    id="T1530",
+    name="Data from Cloud Storage",
+    url="https://attack.mitre.org/techniques/T1530/",
+)
+_T1190 = Reference(
+    framework="MITRE",
+    id="T1190",
+    name="Exploit Public-Facing Application",
+    url="https://attack.mitre.org/techniques/T1190/",
+)
+_T1098 = Reference(
+    framework="MITRE",
+    id="T1098",
+    name="Account Manipulation",
+    url="https://attack.mitre.org/techniques/T1098/",
+)
+_T1562 = Reference(
+    framework="MITRE",
+    id="T1562",
+    name="Impair Defenses",
+    url="https://attack.mitre.org/techniques/T1562/",
+)
 
 _OPEN_CIDRS = {"0.0.0.0/0", "::/0"}
 _PUBLIC_ACLS = {"public-read", "public-read-write", "authenticated-read"}
@@ -134,3 +164,27 @@ class SecurityDomain:
         if _policy_widened(declared, observed):
             return Severity.HIGH
         return None
+
+    def references(self, drift: Drift) -> list[Reference]:
+        """ATT&CK techniques the recognized exposure *enables* (not attacks observed).
+
+        Reuses the exact predicates score() uses, so a drift that raises severity here
+        always carries the matching technique(s) and the two can never disagree. Returns
+        [] for recognized-but-unmapped or unrecognized drift -- we never fabricate a tie.
+        """
+        declared = _as_dict(drift.declared)
+        observed = _as_dict(drift.observed)
+        kind = drift.kind.lower()
+
+        out: list[Reference] = []
+        if _is_pab_kind(kind) and _public_access_block_relaxed(declared, observed):
+            # Relaxing public-access-block both impairs a guardrail (T1562) and exposes
+            # the bucket's data (T1530); surface both.
+            out.extend((_T1562, _T1530))
+        if _acl_went_public(declared, observed):
+            out.append(_T1530)
+        if _opened_to_world(declared, observed):
+            out.append(_T1190)
+        if _policy_widened(declared, observed):
+            out.append(_T1098)
+        return out

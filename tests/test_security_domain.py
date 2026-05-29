@@ -1,3 +1,8 @@
+import dataclasses
+
+import pytest
+
+from steadystate.domains import Reference, references_for
 from steadystate.domains.security import SecurityDomain
 from steadystate.model import ChangeType, Drift, Provenance
 from steadystate.reason.alert import Severity
@@ -177,3 +182,140 @@ def test_pipeline_empty_domains_uses_baseline_only(monkeypatch):
     case = Pipeline(domains=[]).run([drift]).alerts[0]
     assert case.severity is Severity.MEDIUM  # no domain to raise it
     assert case.flagged_by is None
+
+
+# --- framework references: config-exposure -> ATT&CK technique mapping ------
+# Honest framing: each reference names the technique a recognized config change
+# *enables*; this is mapping, not behavioral detection. The same predicates that
+# raise severity pick the references, so the two can never disagree.
+
+
+def _ids(refs) -> list[str]:
+    return [ref.id for ref in refs]
+
+
+def test_acl_going_public_references_t1530():
+    drift = _drift(
+        "aws_s3_bucket_acl", declared={"acl": "public-read"}, observed={"acl": "private"}
+    )
+    refs = SecurityDomain().references(drift)
+    assert _ids(refs) == ["T1530"]
+    assert refs[0].framework == "MITRE"
+    assert refs[0].name == "Data from Cloud Storage"
+    assert refs[0].url == "https://attack.mitre.org/techniques/T1530/"
+
+
+def test_public_access_block_relaxed_references_t1562_and_t1530():
+    drift = _drift(
+        "aws_s3_bucket_public_access_block",
+        declared={"block_public_acls": False, "restrict_public_buckets": False},
+        observed={"block_public_acls": True, "restrict_public_buckets": True},
+    )
+    # Relaxing the guardrail both impairs a defense (T1562) and exposes storage (T1530).
+    assert _ids(SecurityDomain().references(drift)) == ["T1562", "T1530"]
+
+
+def test_ingress_opened_to_world_references_t1190():
+    drift = _drift(
+        "aws_security_group_rule",
+        declared={"cidr_blocks": ["0.0.0.0/0"]},
+        observed={"cidr_blocks": ["10.0.0.0/8"]},
+    )
+    assert _ids(SecurityDomain().references(drift)) == ["T1190"]
+
+
+def test_wildcard_iam_policy_references_t1098():
+    drift = _drift(
+        "aws_iam_policy",
+        declared={"Statement": [{"Effect": "Allow", "Action": "*", "Resource": "*"}]},
+        observed={
+            "Statement": [{"Effect": "Allow", "Action": "s3:GetObject", "Resource": "arn:x"}]
+        },
+    )
+    assert _ids(SecurityDomain().references(drift)) == ["T1098"]
+
+
+def test_recognized_but_unchanged_yields_no_references():
+    # Already-open ingress: score() returns None, so references() returns none either.
+    drift = _drift(
+        "aws_security_group_rule",
+        declared={"cidr_blocks": ["0.0.0.0/0"]},
+        observed={"cidr_blocks": ["0.0.0.0/0"]},
+    )
+    assert SecurityDomain().score(drift) is None
+    assert SecurityDomain().references(drift) == []
+
+
+def test_unrecognized_drift_yields_no_references():
+    drift = _drift(
+        "aws_instance",
+        declared={"instance_type": "t3.large"},
+        observed={"instance_type": "t3.medium"},
+    )
+    assert SecurityDomain().references(drift) == []
+
+
+def test_references_never_disagree_with_score():
+    # Anything score() flags carries at least one reference; anything it ignores carries none.
+    domain = SecurityDomain()
+    cases = [
+        _drift("aws_s3_bucket_acl", declared={"acl": "public-read"}, observed={"acl": "private"}),
+        _drift(
+            "aws_security_group_rule",
+            declared={"cidr_blocks": ["0.0.0.0/0"]},
+            observed={"cidr_blocks": []},
+        ),
+        _drift("aws_instance", declared={"x": 1}, observed={"x": 2}),  # ignored
+    ]
+    for drift in cases:
+        flagged = domain.score(drift) is not None
+        assert bool(domain.references(drift)) is flagged
+
+
+def test_references_for_falls_back_to_empty_for_a_pack_without_references():
+    # A pack that doesn't implement references() must still work via the getattr fallback.
+    class BareDomain:
+        name = "bare"
+
+        def score(self, drift):
+            return None
+
+    drift = _drift("aws_instance", declared={"x": 1}, observed={"x": 2})
+    assert references_for(BareDomain(), drift) == []
+
+
+def test_references_for_delegates_to_an_implementing_pack():
+    drift = _drift(
+        "aws_s3_bucket_acl", declared={"acl": "public-read"}, observed={"acl": "private"}
+    )
+    assert _ids(references_for(SecurityDomain(), drift)) == ["T1530"]
+
+
+def test_reference_is_immutable():
+    ref = Reference(framework="MITRE", id="T1530")
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        ref.id = "T9999"  # type: ignore[misc]
+
+
+def test_pipeline_carries_references_end_to_end(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    drift = _drift(
+        "aws_security_group_rule",
+        declared={"cidr_blocks": ["0.0.0.0/0"]},
+        observed={"cidr_blocks": ["10.0.0.0/8"]},
+    )
+    case = Pipeline().run([drift]).alerts[0]
+    assert case.flagged_by == "security"
+    assert _ids(case.references) == ["T1190"]
+
+
+def test_pipeline_no_security_angle_carries_no_references(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    drift = _drift(
+        "aws_instance",
+        declared={"instance_type": "t3.large"},
+        observed={"instance_type": "t3.medium"},
+    )
+    case = Pipeline().run([drift]).alerts[0]
+    assert case.flagged_by is None
+    assert case.references == []

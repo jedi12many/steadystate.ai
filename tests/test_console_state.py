@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 
 from rich.console import Console
 
+from steadystate.domains.base import Reference
 from steadystate.model import ChangeType, Drift, Provenance
 from steadystate.notify.console import ConsoleSurface
 from steadystate.reason.alert import Alert, Layer, Severity
@@ -29,7 +30,7 @@ def _drift() -> Drift:
     )
 
 
-def _alert(*, first_seen=None, status=None) -> Alert:
+def _alert(*, first_seen=None, status=None, references=None) -> Alert:
     return Alert(
         title="modified aws_s3_bucket aws_s3_bucket.logs",
         severity=Severity.MEDIUM,
@@ -38,6 +39,7 @@ def _alert(*, first_seen=None, status=None) -> Alert:
         layer=Layer.ALERT,
         first_seen=first_seen,
         status=status,
+        references=references or [],
     )
 
 
@@ -94,3 +96,15 @@ def test_stateless_alert_has_no_marker():
     assert "NEW" not in out
     assert "seen" not in out
     assert "MUTED" not in out
+
+
+def test_reference_chip_renders_when_present():
+    refs = [Reference(framework="MITRE", id="T1530", name="Data from Cloud Storage")]
+    out = _render(Report(items=[_alert(references=refs)]), now=_t(4))
+    assert "[MITRE T1530]" in out
+
+
+def test_no_reference_chip_when_absent():
+    # The default (no references) renders exactly as before -- no chip line.
+    out = _render(Report(items=[_alert()]), now=_t(4))
+    assert "MITRE" not in out
