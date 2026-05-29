@@ -7,6 +7,7 @@ later -- that's the whole point of keeping the core domain-agnostic.
 
 from __future__ import annotations
 
+from ..act.plan import RemediationPlan, assess
 from ..domains.base import Domain
 from ..domains.security import SecurityDomain
 from ..model import ChangeType, Drift
@@ -30,6 +31,14 @@ def baseline_severity(drift: Drift) -> Severity:
     return Severity.LOW
 
 
+def _action_from_plan(plan: RemediationPlan) -> str:
+    """Render the executor's remediation plan as a concrete recommended action,
+    so every Case says what to do about the drift (closing reason -> act)."""
+    if plan.eligible:
+        return f"Reconcile to declared state: {' '.join(plan.command)} ({plan.blast_radius})"
+    return f"Manual review required: {plan.reason}"
+
+
 class Pipeline:
     def __init__(
         self,
@@ -50,6 +59,12 @@ class Pipeline:
                 if scored is not None and _SEVERITY_RANK[scored] > _SEVERITY_RANK[severity]:
                     severity = scored
                     flagged_by = domain.name
+            recommended_action = analysis.recommended_action
+            # The executor (and its plan) is Terraform-specific today, so only
+            # derive a reconcile action for Terraform drift; other sources will
+            # get their own executors.
+            if recommended_action is None and drift.provenance.source == "terraform":
+                recommended_action = _action_from_plan(assess(drift))
             cases.append(
                 Case(
                     title=drift.summary(),
@@ -57,7 +72,7 @@ class Pipeline:
                     drifts=[drift],
                     why_it_matters=analysis.why_it_matters,
                     layer=Layer.CASE,
-                    recommended_action=analysis.recommended_action,
+                    recommended_action=recommended_action,
                     llm_backed=analysis.llm_backed,
                     flagged_by=flagged_by,
                 )
