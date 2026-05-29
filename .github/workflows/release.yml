@@ -28,6 +28,6 @@ jobs:
           twine check dist/*  # sanity-check sdist+wheel metadata before publishing
       - name: Publish GitHub Release
         # GitHub Releases only -- no PyPI publish. Attaches the built artifacts.
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: dist/*
