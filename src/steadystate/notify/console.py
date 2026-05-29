@@ -1,4 +1,4 @@
-"""Console surface -- the v0 default. Shows the full three-tier breakdown."""
+"""Console surface -- the v0 default. Shows correlated Alerts + a Signal count."""
 
 from __future__ import annotations
 
@@ -21,31 +21,25 @@ class ConsoleSurface:
             self._console.print("[green]Steady state: no drift detected.[/green]")
             return
 
-        for alert in report.alerts:  # surfaced: full panel
+        for alert in report.alerts:
             style = _SEVERITY_STYLE.get(alert.severity.value, "white")
             backed = "LLM" if alert.llm_backed else "deterministic"
+            title = f"{alert.title}  |  {backed}"
+            if len(alert.drifts) > 1:
+                title += f"  |  {len(alert.drifts)} correlated"
             body = f"[{style}]{alert.severity.value.upper()}[/{style}]  {alert.why_it_matters}"
             if alert.recommended_action:
                 body += f"\n\n[bold]Next:[/bold] {alert.recommended_action}"
-            self._console.print(
-                Panel(body, title=f"{alert.title}  |  {backed}", title_align="left")
-            )
+            self._console.print(Panel(body, title=title, title_align="left"))
 
-        for event in report.events:  # recorded: one line each
-            style = _SEVERITY_STYLE.get(event.severity.value, "white")
-            self._console.print(
-                f"[{style}]EVENT {event.severity.value.upper()}[/{style}]  {event.title}"
-            )
-
-        if report.signal_count:  # firehose: counted, not listed
+        if report.signal_count:
             self._console.print(
                 f"[dim]+ {report.signal_count} signal(s) below the bar (counted, not shown).[/dim]"
             )
 
         self._console.print(
-            f"[dim]tuning: {report.tuning.value}  |  "
-            f"{len(report.alerts)} alert(s), {len(report.events)} event(s), "
-            f"{report.signal_count} signal(s)[/dim]"
+            f"[dim]tuning: {report.tuning.value}  |  {len(report.alerts)} alert(s) "
+            f"from {report.event_count} event(s), {report.signal_count} signal(s)[/dim]"
         )
 
     def emit_remediations(self, items: list) -> None:

@@ -137,7 +137,7 @@ def test_pipeline_raises_severity_via_security_domain(monkeypatch):
         declared={"cidr_blocks": ["0.0.0.0/0"]},
         observed={"cidr_blocks": ["10.0.0.0/8"]},
     )
-    case = Pipeline().run([drift]).surfaced[0]
+    case = Pipeline().run([drift]).alerts[0]
     assert case.severity is Severity.HIGH  # baseline MODIFIED=medium, raised to high
     assert case.flagged_by == "security"
 
@@ -149,7 +149,7 @@ def test_pipeline_keeps_baseline_when_no_security_angle(monkeypatch):
         declared={"instance_type": "t3.large"},
         observed={"instance_type": "t3.medium"},
     )
-    case = Pipeline().run([drift]).surfaced[0]
+    case = Pipeline().run([drift]).alerts[0]
     assert case.severity is Severity.MEDIUM
     assert case.flagged_by is None
 
@@ -162,7 +162,7 @@ def test_pipeline_does_not_lower_a_higher_baseline(monkeypatch):
         observed=None,
         change_type=ChangeType.REMOVED,  # baseline HIGH, domain also HIGH -> stays HIGH, no flag
     )
-    case = Pipeline().run([drift]).surfaced[0]
+    case = Pipeline().run([drift]).alerts[0]
     assert case.severity is Severity.HIGH
     assert case.flagged_by is None
 
@@ -174,6 +174,6 @@ def test_pipeline_empty_domains_uses_baseline_only(monkeypatch):
         declared={"acl": "public-read"},
         observed={"acl": "private"},
     )
-    case = Pipeline(domains=[]).run([drift]).surfaced[0]
+    case = Pipeline(domains=[]).run([drift]).alerts[0]
     assert case.severity is Severity.MEDIUM  # no domain to raise it
     assert case.flagged_by is None

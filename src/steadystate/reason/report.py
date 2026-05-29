@@ -1,13 +1,13 @@
-"""Three-tier surfacing + the Brain Tuning knob.
+"""Two-stage surfacing + the Brain Tuning knob.
 
-Severity decides a drift's tier; tuning sets the bars:
+Severity decides whether a drift is a Signal or an Event; tuning sets that one bar.
+Signals are the counted firehose. Events go to the correlator (reason/llm.py), which
+groups them by root cause -- each group becomes an Alert. So Alerts are produced by
+correlation, not by a severity threshold: a pile of individually-minor Events can
+still raise one real Alert.
 
-- SIGNAL -- the firehose: every drift. Counted, not surfaced individually.
-- EVENT  -- cleared the filter: recorded, lower prominence.
-- ALERT  -- analyzed + correlated: surfaced, with or without a recommended action.
-
-One operator knob (lenient / default / strict) moves the bars together: strict
-lowers them (more surfaces), lenient raises them (more stays a counted Signal).
+The tuning knob moves the Signal->Event bar: strict lowers it (more becomes Events,
+so more reaches correlation), lenient raises it (more stays a counted Signal).
 """
 
 from __future__ import annotations
@@ -26,46 +26,38 @@ class Tuning(str, Enum):
 
 _RANK = {Severity.LOW: 0, Severity.MEDIUM: 1, Severity.HIGH: 2, Severity.CRITICAL: 3}
 
-# (event_floor, alert_floor) per tuning. A higher floor is quieter -- more drift
-# stays a counted Signal instead of paging someone.
-_FLOORS: dict[Tuning, tuple[Severity, Severity]] = {
-    Tuning.STRICT: (Severity.LOW, Severity.MEDIUM),
-    Tuning.DEFAULT: (Severity.MEDIUM, Severity.HIGH),
-    Tuning.LENIENT: (Severity.HIGH, Severity.CRITICAL),
+# The single Signal->Event bar per tuning. A higher floor is quieter -- more drift
+# stays a counted Signal instead of reaching correlation.
+_EVENT_FLOOR = {
+    Tuning.STRICT: Severity.LOW,
+    Tuning.DEFAULT: Severity.MEDIUM,
+    Tuning.LENIENT: Severity.HIGH,
 }
 
 
 def classify(severity: Severity, tuning: Tuning) -> Layer:
-    """Which tier a drift of this severity lands in, under this tuning."""
-    event_floor, alert_floor = _FLOORS[tuning]
-    if _RANK[severity] >= _RANK[alert_floor]:
-        return Layer.ALERT
-    if _RANK[severity] >= _RANK[event_floor]:
+    """Signal or Event, under this tuning. (Alerts come from correlation, not here.)"""
+    if _RANK[severity] >= _RANK[_EVENT_FLOOR[tuning]]:
         return Layer.EVENT
     return Layer.SIGNAL
 
 
 @dataclass
 class Report:
-    """The result of a scan: every drift as an Alert carrying its tier, plus the
-    tuning that classified them. Consumers read it by tier."""
+    """The result of a scan: counted Signals plus correlated Alerts (each Alert bundles
+    the Events that share its root cause), with the tuning that produced them."""
 
     items: list[Alert] = field(default_factory=list)
     tuning: Tuning = Tuning.DEFAULT
 
     @property
     def alerts(self) -> list[Alert]:
-        """ALERT tier -- surfaced, analyzed, with an optional recommended action."""
+        """Correlated groups -- the surfaced unit, with an optional recommended action."""
         return [i for i in self.items if i.layer is Layer.ALERT]
 
     @property
-    def events(self) -> list[Alert]:
-        """EVENT tier -- cleared the filter, recorded, lower prominence than an Alert."""
-        return [i for i in self.items if i.layer is Layer.EVENT]
-
-    @property
     def signals(self) -> list[Alert]:
-        """SIGNAL tier -- the raw firehose, normally counted rather than listed."""
+        """The raw firehose below the Event bar -- normally counted, not listed."""
         return [i for i in self.items if i.layer is Layer.SIGNAL]
 
     @property
@@ -74,10 +66,5 @@ class Report:
 
     @property
     def event_count(self) -> int:
-        return len(self.events)
-
-    @property
-    def surfaced(self) -> list[Alert]:
-        """Everything above the raw Signal tier (Alerts then Events) -- what the
-        console shows."""
-        return self.alerts + self.events
+        """How many Events fed correlation -- the drifts bundled across all Alerts."""
+        return sum(len(a.drifts) for a in self.alerts)

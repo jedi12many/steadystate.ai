@@ -1,10 +1,11 @@
-"""The reasoning pipeline: drift -> three-tier classification -> Report.
+"""The reasoning pipeline: drift -> Signal/Event -> (LLM correlation) -> Alerts.
 
-Every drift is a Signal (the firehose). Deterministic scoring plus a Brain-Tuning
-bar promote the ones that matter into Events (recorded) and Alerts (surfaced). The
-LLM analyst and the executor's recommended action run only at the Alert tier --
-analysis + correlation are what turn an Event into an Alert. Signals and Events are
-counted/recorded, not analyzed. The bar moves with the tuning knob.
+Every drift is scored deterministically and filtered by a Brain-Tuning bar into a
+Signal (counted firehose) or an Event. The Events are handed to the LLM correlator
+in one batch; it groups them by root cause, and each group becomes an Alert -- which
+is why several signals from different sources (a node out of storage) can fold into
+one Alert. Without a model the correlator degrades honestly: each Event becomes its
+own uncorrelated Alert.
 """
 
 from __future__ import annotations
@@ -14,14 +15,17 @@ from ..domains import default_domains
 from ..domains.base import Domain
 from ..model import ChangeType, Drift
 from .alert import Alert, Layer, Severity
-from .llm import LLMAnalyst
+from .llm import Cluster, LLMAnalyst
 from .report import Report, Tuning, classify
 
 _SEVERITY_RANK = {Severity.LOW: 0, Severity.MEDIUM: 1, Severity.HIGH: 2, Severity.CRITICAL: 3}
 
+# An Event awaiting correlation: the drift plus its deterministic score.
+_Event = tuple[Drift, Severity, "str | None"]
+
 
 def baseline_severity(drift: Drift) -> Severity:
-    """Deterministic floor, before any domain pack or LLM weighs in."""
+    """Deterministic floor, before any domain pack weighs in."""
     if drift.change_type is ChangeType.REMOVED:
         return Severity.HIGH  # something we declared is gone from reality
     if drift.change_type is ChangeType.MODIFIED:
@@ -30,7 +34,6 @@ def baseline_severity(drift: Drift) -> Severity:
 
 
 def _action_from_plan(plan: RemediationPlan) -> str:
-    """Render the executor's remediation plan as a concrete recommended action."""
     if plan.eligible:
         return f"Reconcile to declared state: {' '.join(plan.command)} ({plan.blast_radius})"
     return f"Manual review required: {plan.reason}"
@@ -58,47 +61,48 @@ class Pipeline:
                 flagged_by = domain.name
         return severity, flagged_by
 
-    def _counted(
-        self, drift: Drift, severity: Severity, layer: Layer, flagged_by: str | None
-    ) -> Alert:
-        # Signals/Events are recorded, not analyzed -- no LLM call, no executor action.
+    def _signal(self, drift: Drift, severity: Severity, flagged_by: str | None) -> Alert:
+        # Below the Event bar: the counted firehose, never analyzed.
         return Alert(
             title=drift.summary(),
             severity=severity,
             drifts=[drift],
             why_it_matters=f"{drift.summary()}: declared and observed state diverge.",
-            layer=layer,
+            layer=Layer.SIGNAL,
             recommended_action=None,
             llm_backed=False,
             flagged_by=flagged_by,
         )
 
-    def _analyze(self, drift: Drift, severity: Severity, flagged_by: str | None) -> Alert:
-        # Alert tier: analysis (+ correlation, later) turns an Event into an Alert.
-        analysis = self.analyst.analyze(drift)
-        recommended_action = analysis.recommended_action
-        # The executor's plan is Terraform-specific today, so only derive a reconcile
-        # action for Terraform drift; other sources await their own executors.
-        if recommended_action is None and drift.provenance.source == "terraform":
-            recommended_action = _action_from_plan(assess(drift))
+    def _alert_from_cluster(self, cluster: Cluster, events: list[_Event]) -> Alert:
+        members = [events[i] for i in cluster.drift_indexes]
+        drifts = [m[0] for m in members]
+        severity = max((m[1] for m in members), key=lambda s: _SEVERITY_RANK[s])
+        flagged_by = next((m[2] for m in members if m[2] is not None), None)
+        action = cluster.recommended_action
+        # A single Terraform Event with no model-suggested action -> the executor's plan.
+        if action is None and len(drifts) == 1 and drifts[0].provenance.source == "terraform":
+            action = _action_from_plan(assess(drifts[0]))
         return Alert(
-            title=drift.summary(),
+            title=cluster.title,
             severity=severity,
-            drifts=[drift],
-            why_it_matters=analysis.why_it_matters,
+            drifts=drifts,
+            why_it_matters=cluster.why_it_matters,
             layer=Layer.ALERT,
-            recommended_action=recommended_action,
-            llm_backed=analysis.llm_backed,
+            recommended_action=action,
+            llm_backed=cluster.llm_backed,
             flagged_by=flagged_by,
         )
 
     def run(self, drifts: list[Drift]) -> Report:
-        items: list[Alert] = []
+        signals: list[Alert] = []
+        events: list[_Event] = []
         for drift in drifts:
             severity, flagged_by = self._score(drift)
-            layer = classify(severity, self.tuning)
-            if layer is Layer.ALERT:
-                items.append(self._analyze(drift, severity, flagged_by))
+            if classify(severity, self.tuning) is Layer.SIGNAL:
+                signals.append(self._signal(drift, severity, flagged_by))
             else:
-                items.append(self._counted(drift, severity, layer, flagged_by))
-        return Report(items=items, tuning=self.tuning)
+                events.append((drift, severity, flagged_by))
+        clusters = self.analyst.correlate([event[0] for event in events])
+        alerts = [self._alert_from_cluster(cluster, events) for cluster in clusters]
+        return Report(items=signals + alerts, tuning=self.tuning)
