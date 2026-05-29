@@ -7,6 +7,7 @@ from steadystate.cli import _drift_source
 from steadystate.domains.security import SecurityDomain
 from steadystate.model import ChangeType, Drift, Provenance
 from steadystate.reason.pipeline import Pipeline
+from steadystate.reason.report import Tuning
 
 
 def _drift(change_type=ChangeType.MODIFIED, kind="aws_s3_bucket", **kw) -> Drift:
@@ -22,14 +23,15 @@ def _drift(change_type=ChangeType.MODIFIED, kind="aws_s3_bucket", **kw) -> Drift
 
 def test_case_carries_recommended_action_from_executor(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    case = Pipeline().run([_drift(ChangeType.MODIFIED)]).surfaced[0]
+    # MEDIUM drift reaches the Alert tier under strict tuning (actions live on Alerts).
+    case = Pipeline(tuning=Tuning.STRICT).run([_drift(ChangeType.MODIFIED)]).alerts[0]
     assert case.recommended_action  # populated, not None
     assert "Reconcile to declared state" in case.recommended_action
 
 
 def test_removed_case_recommends_manual_review(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    case = Pipeline().run([_drift(ChangeType.REMOVED)]).surfaced[0]
+    case = Pipeline().run([_drift(ChangeType.REMOVED)]).alerts[0]
     assert "Manual review" in case.recommended_action
 
 

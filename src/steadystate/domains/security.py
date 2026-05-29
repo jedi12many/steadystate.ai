@@ -10,7 +10,7 @@ core keeps its own baseline and we never fabricate a security angle.
 from __future__ import annotations
 
 from ..model import Drift
-from ..reason.case import Severity
+from ..reason.alert import Severity
 
 _OPEN_CIDRS = {"0.0.0.0/0", "::/0"}
 _PUBLIC_ACLS = {"public-read", "public-read-write", "authenticated-read"}

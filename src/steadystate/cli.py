@@ -67,16 +67,16 @@ def scan(
     to: str = typer.Option(
         "console",
         "--to",
-        help=f"Comma-separated surfaces to emit Cases to: {', '.join(sorted(SURFACES))}.",
+        help=f"Comma-separated surfaces to emit Alerts to: {', '.join(sorted(SURFACES))}.",
     ),
     tuning: str = typer.Option(
         "default",
         "--tuning",
-        help="Surfacing bar (moves Event/Alert/Case thresholds together): "
+        help="Surfacing bar (moves the Signal/Event/Alert tiers together): "
         "lenient | default | strict.",
     ),
 ) -> None:
-    """Scan declared state for drift and surface the Cases."""
+    """Scan declared state for drift and surface the Alerts."""
     surfaces = _surfaces([name.strip() for name in to.split(",") if name.strip()])
     level = _tuning(tuning)
     drifts = _drift_source(source, path).collect_drift()

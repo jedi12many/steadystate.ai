@@ -1,4 +1,4 @@
-"""Surface plugins: push Cases out (and, later, take operator input back).
+"""Surface plugins: push Alerts out (and, later, take operator input back).
 
 Surfaces register here so `--to <name>` dispatches without hand-editing the CLI
 for each one. Add a surface: write its module in this package, then add a single

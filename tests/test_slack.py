@@ -1,11 +1,11 @@
 import logging
 
 from steadystate.notify.slack import SlackSurface, format_slack_message
-from steadystate.reason.case import Case, Layer, Severity
+from steadystate.reason.alert import Alert, Layer, Severity
 from steadystate.reason.report import Report
 
 
-def _case(**overrides) -> Case:
+def _case(**overrides) -> Alert:
     base = {
         "title": "Public S3 bucket",
         "severity": Severity.HIGH,
@@ -14,7 +14,7 @@ def _case(**overrides) -> Case:
         "recommended_action": "Re-apply terraform to restore the private ACL.",
     }
     base.update(overrides)
-    return Case(**base)
+    return Alert(**base)
 
 
 def test_format_includes_title_severity_and_action():
@@ -39,7 +39,7 @@ def test_format_omits_next_when_no_action():
 
 
 def test_format_payload_is_json_serializable_dict():
-    payload = format_slack_message(_case(severity=Severity.CRITICAL, layer=Layer.CASE))
+    payload = format_slack_message(_case(severity=Severity.CRITICAL, layer=Layer.ALERT))
     assert isinstance(payload, dict)
     assert set(payload) == {"text"}
 
@@ -53,7 +53,7 @@ def test_no_webhook_degrades_honestly(monkeypatch, caplog):
     monkeypatch.setattr(surface, "_post", lambda payload: posted.append(payload))
 
     with caplog.at_level(logging.WARNING, logger="steadystate.notify.slack"):
-        surface.emit(Report(all_cases=[_case(), _case()]))
+        surface.emit(Report(items=[_case(), _case()]))
 
     assert posted == []  # nothing sent, no network touched
     assert len(caplog.records) == 1  # exactly one clear line

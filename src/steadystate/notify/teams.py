@@ -1,6 +1,6 @@
 """Microsoft Teams surface -- outbound v1.
 
-Posts one Adaptive Card per Case to a Teams incoming webhook. Outbound only for
+Posts one Adaptive Card per Alert to a Teams incoming webhook. Outbound only for
 now (no operator replies yet); the webhook URL comes from the constructor or the
 TEAMS_WEBHOOK_URL env var. Uses stdlib urllib so we take on no new dependency.
 
@@ -19,12 +19,12 @@ import os
 import urllib.error
 import urllib.request
 
-from ..reason.case import Case
+from ..reason.alert import Alert
 from ..reason.report import Report
 
 logger = logging.getLogger(__name__)
 
-# Case severity -> Adaptive Card TextBlock color (its named-color vocabulary).
+# Severity -> Adaptive Card TextBlock color (its named-color vocabulary).
 _SEVERITY_COLOR = {
     "critical": "attention",
     "high": "attention",
@@ -33,35 +33,35 @@ _SEVERITY_COLOR = {
 }
 
 
-def format_teams_message(case: Case) -> dict:
-    """Build the webhook payload for one Case. Pure + testable (no network).
+def format_teams_message(alert: Alert) -> dict:
+    """Build the webhook payload for one Alert. Pure + testable (no network).
 
     Returns a Teams "message" wrapping a single Adaptive Card attachment.
     """
-    color = _SEVERITY_COLOR.get(case.severity.value, "default")
+    color = _SEVERITY_COLOR.get(alert.severity.value, "default")
 
     facts = [
-        {"title": "Severity", "value": case.severity.value},
-        {"title": "Layer", "value": case.layer.value},
+        {"title": "Severity", "value": alert.severity.value},
+        {"title": "Tier", "value": alert.layer.value},
     ]
-    if case.drifts:  # source lives on the first drift's provenance, if we have one
-        facts.append({"title": "Source", "value": case.drifts[0].provenance.source})
-    if case.flagged_by is not None:  # omit the fact entirely when nothing flagged it
-        facts.append({"title": "Flagged by", "value": case.flagged_by})
+    if alert.drifts:  # source lives on the first drift's provenance, if we have one
+        facts.append({"title": "Source", "value": alert.drifts[0].provenance.source})
+    if alert.flagged_by is not None:  # omit the fact entirely when nothing flagged it
+        facts.append({"title": "Flagged by", "value": alert.flagged_by})
 
     body: list[dict] = [
         {
             "type": "TextBlock",
-            "text": f"{case.severity.value.upper()}: {case.title}",
+            "text": f"{alert.severity.value.upper()}: {alert.title}",
             "weight": "bolder",
             "wrap": True,
             "color": color,
         },
         {"type": "FactSet", "facts": facts},
-        {"type": "TextBlock", "text": case.why_it_matters, "wrap": True},
+        {"type": "TextBlock", "text": alert.why_it_matters, "wrap": True},
     ]
-    if case.recommended_action is not None:  # omit the block when there's no next step
-        body.append({"type": "TextBlock", "text": case.recommended_action, "wrap": True})
+    if alert.recommended_action is not None:  # omit the block when there's no next step
+        body.append({"type": "TextBlock", "text": alert.recommended_action, "wrap": True})
 
     card = {
         "type": "AdaptiveCard",
@@ -81,7 +81,7 @@ def format_teams_message(case: Case) -> dict:
 
 
 class TeamsSurface:
-    """A Surface that POSTs each Case as an Adaptive Card to a Teams webhook."""
+    """A Surface that POSTs each Alert as an Adaptive Card to a Teams webhook."""
 
     name = "teams"
 
@@ -90,16 +90,16 @@ class TeamsSurface:
         self.timeout = timeout
 
     def emit(self, report: Report) -> None:
-        # Page only on Cases -- the highest bar. Alerts/events stay on the console.
+        # Page only on Alerts -- the top tier. Events/signals stay on the console.
         if not self.webhook_url:
             logger.warning(
                 "Teams surface enabled but no webhook configured "
-                "(set TEAMS_WEBHOOK_URL or pass webhook_url); skipping %d case(s).",
-                len(report.cases),
+                "(set TEAMS_WEBHOOK_URL or pass webhook_url); skipping %d alert(s).",
+                len(report.alerts),
             )
             return
-        for case in report.cases:
-            self._post(format_teams_message(case))
+        for alert in report.alerts:
+            self._post(format_teams_message(alert))
 
     def _post(self, payload: dict) -> None:
         assert self.webhook_url is not None  # emit() guards a configured webhook

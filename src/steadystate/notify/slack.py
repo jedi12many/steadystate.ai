@@ -1,6 +1,6 @@
 """Slack surface -- outbound v1.
 
-Posts a compact message per Case to a Slack incoming webhook. Outbound only for
+Posts a compact message per Alert to a Slack incoming webhook. Outbound only for
 now (no operator replies yet); the webhook URL comes from the constructor or the
 SLACK_WEBHOOK_URL env var. Uses stdlib urllib so we take on no new dependency.
 
@@ -16,7 +16,7 @@ import os
 import urllib.error
 import urllib.request
 
-from ..reason.case import Case
+from ..reason.alert import Alert
 from ..reason.report import Report
 
 logger = logging.getLogger(__name__)
@@ -29,20 +29,20 @@ _SEVERITY_EMOJI = {
 }
 
 
-def format_slack_message(case: Case) -> dict:
-    """Build the webhook payload for one Case. Pure + testable (no network)."""
-    emoji = _SEVERITY_EMOJI.get(case.severity.value, ":white_circle:")
-    backed = "LLM" if case.llm_backed else "deterministic"
-    header = f"{emoji} *{case.title}*  ({case.severity.value.upper()} | {backed})"
-    lines = [header, case.why_it_matters]
-    if case.recommended_action:
-        lines.append(f"*Next:* {case.recommended_action}")
+def format_slack_message(alert: Alert) -> dict:
+    """Build the webhook payload for one Alert. Pure + testable (no network)."""
+    emoji = _SEVERITY_EMOJI.get(alert.severity.value, ":white_circle:")
+    backed = "LLM" if alert.llm_backed else "deterministic"
+    header = f"{emoji} *{alert.title}*  ({alert.severity.value.upper()} | {backed})"
+    lines = [header, alert.why_it_matters]
+    if alert.recommended_action:
+        lines.append(f"*Next:* {alert.recommended_action}")
     text = "\n\n".join(lines)
     return {"text": text}
 
 
 class SlackSurface:
-    """A Surface that POSTs each Case to a Slack incoming webhook."""
+    """A Surface that POSTs each Alert to a Slack incoming webhook."""
 
     name = "slack"
 
@@ -51,16 +51,16 @@ class SlackSurface:
         self.timeout = timeout
 
     def emit(self, report: Report) -> None:
-        # Page only on Cases -- the highest bar. Alerts/events stay on the console.
+        # Page only on Alerts -- the top tier. Events/signals stay on the console.
         if not self.webhook_url:
             logger.warning(
                 "Slack surface enabled but no webhook configured "
-                "(set SLACK_WEBHOOK_URL or pass webhook_url); skipping %d case(s).",
-                len(report.cases),
+                "(set SLACK_WEBHOOK_URL or pass webhook_url); skipping %d alert(s).",
+                len(report.alerts),
             )
             return
-        for case in report.cases:
-            self._post(format_slack_message(case))
+        for alert in report.alerts:
+            self._post(format_slack_message(alert))
 
     def _post(self, payload: dict) -> None:
         assert self.webhook_url is not None  # emit() guards a configured webhook

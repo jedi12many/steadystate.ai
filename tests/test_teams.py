@@ -8,7 +8,7 @@ import logging
 
 from steadystate.model import ChangeType, Drift, Provenance
 from steadystate.notify.teams import TeamsSurface, format_teams_message
-from steadystate.reason.case import Case, Layer, Severity
+from steadystate.reason.alert import Alert, Layer, Severity
 from steadystate.reason.report import Report
 
 
@@ -24,7 +24,7 @@ def _drift() -> Drift:
     )
 
 
-def _case(**overrides) -> Case:
+def _case(**overrides) -> Alert:
     base = {
         "title": "Public S3 bucket",
         "severity": Severity.HIGH,
@@ -33,7 +33,7 @@ def _case(**overrides) -> Case:
         "recommended_action": "Re-apply terraform to restore the private ACL.",
     }
     base.update(overrides)
-    return Case(**base)
+    return Alert(**base)
 
 
 # --- structural walkers over the Adaptive Card (order-independent) -----------
@@ -96,7 +96,7 @@ def test_format_card_carries_title_and_severity_and_reasoning():
 
     facts = _facts(card)
     assert facts["Severity"] == case.severity.value  # enum .value per contract
-    assert facts["Layer"] == case.layer.value
+    assert facts["Tier"] == case.layer.value
     assert facts["Source"] == "terraform"  # drifts[0].provenance.source
 
     assert case.why_it_matters in _card_text(card)
@@ -142,7 +142,7 @@ def test_severity_color_map():
 def test_format_payload_is_json_serializable():
     import json
 
-    payload = format_teams_message(_case(severity=Severity.CRITICAL, layer=Layer.CASE))
+    payload = format_teams_message(_case(severity=Severity.CRITICAL, layer=Layer.ALERT))
     # Round-trips cleanly -- no enums or datetimes leaked into the payload.
     assert json.loads(json.dumps(payload)) == payload
 
@@ -156,7 +156,7 @@ def test_emit_posts_once_per_case(monkeypatch):
     posted: list[dict] = []
     monkeypatch.setattr(surface, "_post", lambda payload: posted.append(payload))
 
-    surface.emit(Report(all_cases=[_case(), _case(severity=Severity.CRITICAL)]))
+    surface.emit(Report(items=[_case(), _case(severity=Severity.CRITICAL)]))
     assert len(posted) == 2
     for payload in posted:
         assert payload["type"] == "message"
@@ -187,7 +187,7 @@ def test_emit_post_uses_urllib_with_configured_url(monkeypatch):
 
     monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
 
-    surface.emit(Report(all_cases=[_case()]))
+    surface.emit(Report(items=[_case()]))
     assert seen["url"] == "https://outlook.office.test/webhook/abc"
     assert seen["content_type"] == "application/json"
     assert seen["has_auth"] is False  # the webhook URL is itself the secret
@@ -203,7 +203,7 @@ def test_no_webhook_is_a_noop(monkeypatch, caplog):
     monkeypatch.setattr(surface, "_post", lambda payload: posted.append(payload))
 
     with caplog.at_level(logging.WARNING, logger="steadystate.notify.teams"):
-        surface.emit(Report(all_cases=[_case(), _case()]))
+        surface.emit(Report(items=[_case(), _case()]))
 
     assert posted == []  # nothing sent, no network touched
     assert len(caplog.records) == 1  # one honest line, no crash

@@ -1,4 +1,4 @@
-"""The Surface plugin seam: where Cases go, and (later) where operator replies come from."""
+"""The Surface plugin seam: where Alerts go, and (later) where operator replies come from."""
 
 from __future__ import annotations
 

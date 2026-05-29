@@ -1,4 +1,9 @@
-"""The reasoning output model and the three layers (Event -> Alert -> Case)."""
+"""The reasoning output model and the three tiers: Signal -> Event -> Alert.
+
+A drift starts as a Signal (raw, counted). Filtering promotes the ones worth
+recording to Events. Analysis + correlation promote those to Alerts -- the
+surfaced artifact, with or without a recommended action (sometimes we can't act).
+"""
 
 from __future__ import annotations
 
@@ -10,9 +15,9 @@ from ..model import Drift
 
 
 class Layer(str, Enum):
-    EVENT = "event"  # raw, counted, not surfaced
-    ALERT = "alert"  # cleared a bar; worth recording, not paging
-    CASE = "case"  # correlated + actionable; the thing we put in front of an operator
+    SIGNAL = "signal"  # raw drift -- the firehose, counted
+    EVENT = "event"  # cleared the filter -- recorded
+    ALERT = "alert"  # analyzed + correlated -- surfaced, with or without an action
 
 
 class Severity(str, Enum):
@@ -23,14 +28,15 @@ class Severity(str, Enum):
 
 
 @dataclass
-class Case:
-    """A correlated, actionable finding."""
+class Alert:
+    """A reasoned finding at some tier. Alerts (the top tier) carry the narrative
+    plus an optional recommended action; lower tiers are recorded/counted."""
 
     title: str
     severity: Severity
     drifts: list[Drift]
     why_it_matters: str  # the reasoning; honest about it when no LLM was available
-    layer: Layer = Layer.CASE
+    layer: Layer = Layer.ALERT
     recommended_action: str | None = None
     llm_backed: bool = False  # did an LLM actually reason about this? (honesty)
     flagged_by: str | None = None  # domain pack that raised the severity, if any

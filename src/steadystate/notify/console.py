@@ -1,4 +1,4 @@
-"""Console surface -- the v0 default. Shows the full three-layer breakdown."""
+"""Console surface -- the v0 default. Shows the full three-tier breakdown."""
 
 from __future__ import annotations
 
@@ -17,33 +17,35 @@ class ConsoleSurface:
         self._console = Console()
 
     def emit(self, report: Report) -> None:
-        if not report.all_cases:
+        if not report.items:
             self._console.print("[green]Steady state: no drift detected.[/green]")
             return
 
-        for case in report.cases:  # page-worthy: full panel
-            style = _SEVERITY_STYLE.get(case.severity.value, "white")
-            backed = "LLM" if case.llm_backed else "deterministic"
-            body = f"[{style}]{case.severity.value.upper()}[/{style}]  {case.why_it_matters}"
-            if case.recommended_action:
-                body += f"\n\n[bold]Next:[/bold] {case.recommended_action}"
-            self._console.print(Panel(body, title=f"{case.title}  |  {backed}", title_align="left"))
-
-        for case in report.alerts:  # recorded: one line each
-            style = _SEVERITY_STYLE.get(case.severity.value, "white")
+        for alert in report.alerts:  # surfaced: full panel
+            style = _SEVERITY_STYLE.get(alert.severity.value, "white")
+            backed = "LLM" if alert.llm_backed else "deterministic"
+            body = f"[{style}]{alert.severity.value.upper()}[/{style}]  {alert.why_it_matters}"
+            if alert.recommended_action:
+                body += f"\n\n[bold]Next:[/bold] {alert.recommended_action}"
             self._console.print(
-                f"[{style}]ALERT {case.severity.value.upper()}[/{style}]  {case.title}"
+                Panel(body, title=f"{alert.title}  |  {backed}", title_align="left")
             )
 
-        if report.event_count:  # firehose: counted, not listed
+        for event in report.events:  # recorded: one line each
+            style = _SEVERITY_STYLE.get(event.severity.value, "white")
             self._console.print(
-                f"[dim]+ {report.event_count} event(s) below the bar (counted, not shown).[/dim]"
+                f"[{style}]EVENT {event.severity.value.upper()}[/{style}]  {event.title}"
+            )
+
+        if report.signal_count:  # firehose: counted, not listed
+            self._console.print(
+                f"[dim]+ {report.signal_count} signal(s) below the bar (counted, not shown).[/dim]"
             )
 
         self._console.print(
             f"[dim]tuning: {report.tuning.value}  |  "
-            f"{len(report.cases)} case(s), {len(report.alerts)} alert(s), "
-            f"{report.event_count} event(s)[/dim]"
+            f"{len(report.alerts)} alert(s), {len(report.events)} event(s), "
+            f"{report.signal_count} signal(s)[/dim]"
         )
 
     def emit_remediations(self, items: list) -> None:

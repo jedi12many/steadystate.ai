@@ -13,6 +13,6 @@ def test_pipeline_degrades_honestly_without_llm(monkeypatch):
     )
     report = Pipeline().run([drift])
     # REMOVED -> HIGH -> CASE under default tuning.
-    assert len(report.cases) == 1
-    assert report.cases[0].llm_backed is False  # honest: no fabricated reasoning
-    assert report.cases[0].severity.value == "high"  # a removed declared resource
+    assert len(report.alerts) == 1
+    assert report.alerts[0].llm_backed is False  # honest: no fabricated reasoning
+    assert report.alerts[0].severity.value == "high"  # a removed declared resource
