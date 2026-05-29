@@ -16,6 +16,7 @@ from pathlib import Path
 
 from .argocd import ArgoCDSource
 from .base import DriftSource
+from .docker_compose import DockerComposeSource
 from .terraform import TerraformSource
 
 
@@ -29,15 +30,23 @@ def _argocd(path: Path) -> DriftSource:
     return ArgoCDSource(app=json.loads(path.read_text()))
 
 
+def _docker_compose(path: Path) -> DriftSource:
+    # A directory = a live Compose project (run `docker compose config` + `ps`).
+    # A file = a captured {"config": {...}, "ps": [...]} snapshot (testing / offline).
+    if path.is_file():
+        snap = json.loads(path.read_text())
+        return DockerComposeSource(config=snap.get("config"), ps=snap.get("ps"))
+    return DockerComposeSource(working_dir=path)
+
+
 # name -> factory(path) -> DriftSource. Indexed by the CLI's --source choice.
+# docker-compose has no native plan diff, so it reconciles declared services
+# (`docker compose config`) against running containers (`docker compose ps`).
 DRIFT_SOURCES: dict[str, Callable[[Path], DriftSource]] = {
     "terraform": _terraform,
     "argocd": _argocd,
+    "docker-compose": _docker_compose,
 }
-
-# docker-compose is a declared-only StateSource (no native reconcile), so it is
-# deliberately NOT a drift source yet -- it needs the observed-state/reconcile path
-# before `scan` can use it. Tracked as the deferred StateSource work.
 
 __all__ = ["DRIFT_SOURCES", "build_drift_source"]
 

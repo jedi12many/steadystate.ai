@@ -16,7 +16,7 @@ change between releases until 1.0.0. Releases are published as GitHub Releases.
 - Console surface: render Cases and remediation plans to the terminal.
 - Slack surface: outbound Case push (stdlib urllib, no new dep) behind `scan --slack`.
 - ArgoCD drift source: ingest an Application's own diff as Drift.
-- docker-compose declared-state source (declared-only StateSource; reconcile path deferred).
+- docker-compose source: declared services (`docker compose config`) reconciled against running containers (`docker compose ps`) on presence + image tag, surfaced via `scan --source docker-compose` (proves the declared-vs-observed reconcile path for non-Drift StateSources).
 - Security domain pack: raises severity only for positively-recognized exposure-increasing drift (open CIDR, public ACL/bucket, relaxed public-access-block, wildcard IAM).
 - CLI `--source` selector dispatched through the source registry.
 - Executor-backed `fix` command surfacing guardrailed recommended actions (`--apply` runs the eligible ones).
