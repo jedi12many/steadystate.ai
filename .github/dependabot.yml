@@ -1,0 +1,12 @@
+version: 2
+updates:
+  # Keep pyproject runtime/dev deps fresh.
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+  # Keep the pinned action majors fresh, so e.g. checkout@v4 doesn't silently age.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

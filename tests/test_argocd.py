@@ -36,7 +36,9 @@ def test_only_out_of_sync_become_drift():
 
     by_id = {d.identity: d for d in drifts}
     assert "apps/Deployment/guestbook/frontend" in by_id
-    assert "rbac.authorization.k8s.io/ClusterRole/guestbook-admin" in by_id  # cluster-scoped: no namespace
+    assert (
+        "rbac.authorization.k8s.io/ClusterRole/guestbook-admin" in by_id
+    )  # cluster-scoped: no namespace
 
     d = by_id["apps/Deployment/guestbook/frontend"]
     assert d.kind == "Deployment"

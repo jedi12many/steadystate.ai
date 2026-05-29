@@ -9,3 +9,5 @@ build/
 .ruff_cache/
 .steadystate.tfplan
 .env
+.coverage
+htmlcov/

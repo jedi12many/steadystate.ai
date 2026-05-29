@@ -92,7 +92,9 @@ def test_iam_policy_widening_to_wildcard_is_high():
     drift = _drift(
         "aws_iam_policy",
         declared={"Statement": [{"Effect": "Allow", "Action": "*", "Resource": "*"}]},
-        observed={"Statement": [{"Effect": "Allow", "Action": "s3:GetObject", "Resource": "arn:x"}]},
+        observed={
+            "Statement": [{"Effect": "Allow", "Action": "s3:GetObject", "Resource": "arn:x"}]
+        },
     )
     assert SecurityDomain().score(drift) is Severity.HIGH
 
@@ -107,7 +109,9 @@ def test_iam_deny_wildcard_is_ignored():
     drift = _drift(
         "aws_iam_policy",
         declared={"Statement": [{"Effect": "Deny", "Action": "*", "Resource": "*"}]},
-        observed={"Statement": [{"Effect": "Allow", "Action": "s3:GetObject", "Resource": "arn:x"}]},
+        observed={
+            "Statement": [{"Effect": "Allow", "Action": "s3:GetObject", "Resource": "arn:x"}]
+        },
     )
     assert SecurityDomain().score(drift) is None
 
