@@ -21,8 +21,8 @@ It is **not** another dashboard to babysit. Steady state is silence; you only he
 steadystate scan ./infra
   → reads your Terraform's own plan (declared vs real cloud state)
   → reconciles the drift into a canonical model
-  → reasons about it (what matters, why) and writes Cases
-  → surfaces the Cases (console, Slack, or Teams)
+  → reasons about it: signals → filter → events → analyze + correlate → Alerts
+  → surfaces the Alerts (console, Slack, or Teams)
 ```
 
 No agent to install, no dashboard to learn. Point it at your IaC.
@@ -50,21 +50,21 @@ When both are set, Anthropic wins unless you set `STEADYSTATE_LLM_PROVIDER=opena
 
 ```sh
 export TEAMS_WEBHOOK_URL=...                  # an incoming webhook from the Teams "Workflows" app
-steadystate scan ./infra --to console,teams   # print locally and post an Adaptive Card per Case
+steadystate scan ./infra --to console,teams   # print locally and post an Adaptive Card per Alert
 ```
 
 Slack works the same way (`--to slack`, `SLACK_WEBHOOK_URL`). If a surface's webhook isn't configured it says so once and skips — it never pretends it delivered.
 
 ## Tuning what surfaces
 
-Every drift is an **Event** (counted). Scoring promotes the ones that matter into **Alerts** (recorded) and **Cases** (page-worthy — full narrative + recommended action). One knob moves all the bars together:
+Every drift starts as a **Signal** (counted). Filtering records the ones worth keeping as **Events**; analysis + correlation raise those into **Alerts** — surfaced, with full narrative and (where we can act) a recommended action. One knob moves all the bars together:
 
 ```sh
-steadystate scan ./infra --tuning strict    # lower the bars: more becomes Alerts/Cases
+steadystate scan ./infra --tuning strict    # lower the bars: more becomes Events/Alerts
 steadystate scan ./infra --tuning lenient   # raise them: only the biggest drift surfaces
 ```
 
-`default` is the drop-and-watch middle. The console prints the full breakdown; Slack/Teams page on **Cases** only. The LLM runs only on what clears the bar, so Events stay cheap.
+`default` is the drop-and-watch middle. The console prints the full breakdown; Slack/Teams page on **Alerts** only. The LLM runs only at the Alert tier, so Signals and Events stay cheap.
 
 ## Design
 

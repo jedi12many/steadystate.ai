@@ -39,7 +39,7 @@ DECLARED state (plugins — must be EASY)        OBSERVED state (rented)
    Reconciler → DRIFT records (what diverged, since when, traced to the declaring file)
         ▼
    Reasoning core  (BUILD — the IP)
-     Events → Alerts → Cases (3-layer scoring) · correlate · honest LLM "why this matters"
+     Signals → Events → Alerts (3-tier scoring) · correlate · honest LLM "why this matters"
         ▼
    Domain packs score it:   [security]  [compliance]  [cost]  [reliability] …  (plugins, §6)
         ▼
@@ -57,14 +57,14 @@ Everything reduces to one model so the core stays source-agnostic:
 - **DeclaredState** / **ObservedState** — sets of Resources from the desired and actual sides.
 - **Drift** — a reconciled divergence: `{ resource_identity, change_type (added/removed/modified), declared, observed, detected_at, provenance }`.
 
-Conventions (learned the hard way): **stable/idempotent resource IDs** (re-ingest is a no-op, not a duplicate), **source ranking** when two sources disagree, and provenance on everything so a Case can point at the exact line that declared a thing.
+Conventions (learned the hard way): **stable/idempotent resource IDs** (re-ingest is a no-op, not a duplicate), **source ranking** when two sources disagree, and provenance on everything so an Alert can point at the exact line that declared a thing.
 
 ## 5. Build vs rent
 
 | Layer | Decision | Notes |
 |---|---|---|
 | **Collect** | **rent** (thin plugin per source) | Use each tool's own output: `terraform show/plan -json`, ArgoCD API (it already diffs!), `docker compose config`, `ansible-inventory`. |
-| **Reason** | **BUILD — the IP** | Canonical model, reconciler, 3-layer scoring, correlation, honest LLM analysis. |
+| **Reason** | **BUILD — the IP** | Canonical model, reconciler, 3-tier scoring (Signal/Event/Alert), correlation, honest LLM analysis. |
 | **Decide/Act** | **BUILD the guardrails / rent execution** | apply-eligibility + snapshot/revert + would-break; the actual change runs via your CD/terraform/ansible. |
 | **Store** | rent / embed | SQLite when standalone; otherwise the host store. |
 | **Surface** | **rent** | Slack/Teams (primary), API, optional Grafana app. No custom dashboard. |
@@ -75,7 +75,7 @@ The core defines four interfaces; everything domain- or vendor-specific is a plu
 
 1. **StateSource** — declared state in (terraform, argocd, …). `discover()` + `collect() -> [Resource]`.
 2. **Domain** — what drift *means* (security, compliance/CIS/STIG, cost, reliability). Contributes the resources/properties it cares about, the rules, scoring inputs, and optional remediation recipes. **This is how security & compliance enter — as packs, not core.**
-3. **Surface** — push Cases out + (bidirectionally) take operator input back (Slack, Teams, API).
+3. **Surface** — push Alerts out + (bidirectionally) take operator input back (Slack, Teams, API).
 4. **Executor** — perform a guardrailed remediation (run the terraform/ansible/kubectl).
 
 The engine itself is **not** a plugin inside someone else's product (it's a stateful service + an embeddable library). The *integrations* are the plugins.
@@ -84,17 +84,17 @@ The engine itself is **not** a plugin inside someone else's product (it's a stat
 
 The tool **lives in Slack/Teams**, not in a dashboard you must remember to open.
 
-1. **Detect → reason → push.** Drift → a Case (what drifted, why it matters, recommended fix) → posted to the right channel/thread. Default-quiet.
+1. **Detect → reason → push.** Drift → an Alert (what drifted, why it matters, recommended fix) → posted to the right channel/thread. Default-quiet.
 2. **Converse** (operator replies in-thread, to the generative AI):
    - **Understand** — "what changed?", "why does it matter?", "show the diff", "who declared this?" → grounded answers (declared vs observed + git provenance).
    - **Acknowledge / declare intent** — "that was me, intentional" → acked, trusted, won't re-nag. Also snooze / false-positive.
    - **Remediate** — "fix it / bring it back to declared" → guardrailed executor (apply-eligibility → snapshot → apply → verify → offer revert). The AI states the action + blast radius and waits for go.
    - **Escalate** — page / open a ticket.
-3. **Record.** The thread + actions become the Case's audit trail. The conversation *is* the documentation.
+3. **Record.** The thread + actions become the Alert's audit trail. The conversation *is* the documentation.
 
 **Bidirectional** (Events API + bot), not outbound-only. **Chat is a trigger, not a bypass:** operator identity → role, high-blast-radius needs explicit confirm, same guardrails as everywhere.
 
-This is why the **web UI is thin**: onboarding/config, a read-only Cases list, settings/audit. (Could even be a Grafana app → zero owned frontend.)
+This is why the **web UI is thin**: onboarding/config, a read-only Alerts list, settings/audit. (Could even be a Grafana app → zero owned frontend.)
 
 ## 8. Decisions (locked)
 
@@ -108,7 +108,7 @@ This is why the **web UI is thin**: onboarding/config, a read-only Cases list, s
 `steadystate scan ./infra` →
 1. **Terraform StateSource**: run `terraform plan -json` (terraform already diffs declared vs real cloud state) → parse resource changes.
 2. **Reconcile** those into **Drift** records (canonical model).
-3. **Reason**: 3-layer scoring + an honest LLM "why this drift matters" → **Cases**.
+3. **Reason**: 3-tier scoring (signals → events → alerts) + an honest LLM "why this drift matters" → **Alerts**.
 4. **Surface**: print to console (and a Slack push behind a flag).
 
 No domain packs, no executor, no UI yet. Proves: ingest → reconcile → reason → surface, and the plugin seams.
@@ -122,8 +122,8 @@ No domain packs, no executor, no UI yet. Proves: ingest → reconcile → reason
 
 ## 11. Roadmap
 
-1. **Drift v0** — Terraform → Cases on the console (§9).
-2. **Slack ChatOps** — push Cases + bidirectional ack/ask/snooze.
+1. **Drift v0** — Terraform → Alerts on the console (§9).
+2. **Slack ChatOps** — push Alerts + bidirectional ack/ask/snooze.
 3. **First domain pack** — prove the `Domain` seam (likely a small CIS or security rule set).
 4. **Guardrailed executor** — "fix it from chat," reversibly.
 5. **More sources** — ArgoCD (rides its own diff), docker-compose, ansible.

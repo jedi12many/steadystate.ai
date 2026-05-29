@@ -1,6 +1,6 @@
 from steadystate.domains.security import SecurityDomain
 from steadystate.model import ChangeType, Drift, Provenance
-from steadystate.reason.case import Severity
+from steadystate.reason.alert import Severity
 from steadystate.reason.pipeline import Pipeline
 
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Protocol, runtime_checkable
 
 from ..model import Drift
-from ..reason.case import Severity
+from ..reason.alert import Severity
 
 
 @runtime_checkable

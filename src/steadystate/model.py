@@ -25,7 +25,7 @@ class ChangeType(str, Enum):
 
 @dataclass
 class Provenance:
-    """Where a resource/drift came from, so a Case can point at the exact source."""
+    """Where a resource/drift came from, so an Alert can point at the exact source."""
 
     source: str  # e.g. "terraform"
     address: str | None = None  # e.g. "aws_s3_bucket.logs"
