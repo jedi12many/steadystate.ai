@@ -55,6 +55,12 @@ class Drift:
     provenance: Provenance
     declared: dict | None = None  # desired properties (None if the resource is extra)
     observed: dict | None = None  # actual properties (None if the resource is missing)
+    # Whether declared config actually diverges from observed reality in a way that can be
+    # reconciled. True for an ordinary drift. False when a source detects that reality moved
+    # but config doesn't assert the changed attribute (e.g. terraform resource_drift with a
+    # no-op plan) -- there's nothing to apply, so it's informational: floored to LOW baseline
+    # severity and given no auto-remediation, though a domain pack may still raise it.
+    actionable: bool = True
     detected_at: datetime = field(default_factory=_now)
 
     def summary(self) -> str:

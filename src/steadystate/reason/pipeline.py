@@ -68,6 +68,11 @@ def select_correlator(mode: str, analyst: LLMAnalyst) -> Correlator:
 
 def baseline_severity(drift: Drift) -> Severity:
     """Deterministic floor, before any domain pack weighs in."""
+    if not drift.actionable:
+        # Reality moved but config doesn't assert it (no plan to reconcile): informational,
+        # so it stays a counted Signal by default rather than paging. A domain pack can still
+        # raise it (e.g. a bucket gone public is CRITICAL no matter how it was detected).
+        return Severity.LOW
     if drift.change_type is ChangeType.REMOVED:
         return Severity.HIGH  # something we declared is gone from reality
     if drift.change_type is ChangeType.MODIFIED:
@@ -148,9 +153,13 @@ class Pipeline:
         # member that contributed any (none when no pack mapped the cluster's drift).
         references = next((m[3] for m in members if m[3]), [])
         action = cluster.recommended_action
-        # A single Terraform Event with no model-suggested action -> the executor's plan.
-        if action is None and len(drifts) == 1 and drifts[0].provenance.source == "terraform":
-            action = _action_from_plan(assess(drifts[0]))
+        # A single *actionable* Terraform Event with no model-suggested action -> the
+        # executor's plan. A non-actionable drift has no reconciliation, so we don't offer
+        # a "terraform apply" that would be a no-op.
+        if action is None and len(drifts) == 1:
+            only = drifts[0]
+            if only.provenance.source == "terraform" and only.actionable:
+                action = _action_from_plan(assess(only))
         return Alert(
             title=cluster.title,
             severity=severity,

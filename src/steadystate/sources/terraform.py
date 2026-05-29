@@ -26,7 +26,7 @@ _ACTION_MAP = {
 }
 
 
-def _drift_from_change(rc: dict) -> Drift | None:
+def _drift_from_change(rc: dict, *, actionable: bool) -> Drift | None:
     change = rc.get("change") or {}
     actions = tuple(a for a in change.get("actions", []) if a not in ("no-op", "read"))
     if not actions:
@@ -38,6 +38,7 @@ def _drift_from_change(rc: dict) -> Drift | None:
         provenance=Provenance(source="terraform", address=rc.get("address")),
         declared=change.get("after"),
         observed=change.get("before"),
+        actionable=actionable,
     )
 
 
@@ -54,9 +55,13 @@ def drifts_from_plan_json(plan: dict) -> list[Drift]:
     """
     by_address: dict[str, Drift] = {}
     order: list[str] = []
-    for section in ("resource_changes", "resource_drift"):
+    # resource_changes first: it's the plan's reconciliation, so those drifts are actionable
+    # (terraform apply will fix them) and win the dedup. resource_drift-only entries are NOT
+    # actionable -- reality moved but the plan is a no-op for them, so there's nothing to
+    # apply; they're floored to LOW downstream (see baseline_severity).
+    for section, actionable in (("resource_changes", True), ("resource_drift", False)):
         for rc in plan.get(section) or []:
-            d = _drift_from_change(rc)
+            d = _drift_from_change(rc, actionable=actionable)
             if d is None or d.identity in by_address:
                 continue
             by_address[d.identity] = d

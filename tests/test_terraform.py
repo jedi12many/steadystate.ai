@@ -76,3 +76,33 @@ def test_resource_in_both_drift_and_changes_is_deduped_to_one():
     # resource_changes wins: declared = config, observed = the opened-to-world reality.
     assert drift.declared == {"source_ranges": ["35.235.240.0/20"]}
     assert drift.observed == {"source_ranges": ["0.0.0.0/0"]}
+    assert drift.actionable is True  # from resource_changes: the plan can reconcile it
+
+
+def test_resource_changes_drift_is_actionable():
+    plan = {
+        "resource_changes": [
+            {
+                "address": "aws_s3_bucket.logs",
+                "type": "aws_s3_bucket",
+                "name": "logs",
+                "change": {"actions": ["update"], "before": {"x": 1}, "after": {"x": 2}},
+            },
+        ],
+    }
+    assert drifts_from_plan_json(plan)[0].actionable is True
+
+
+def test_resource_drift_only_is_not_actionable():
+    # Reality moved (refresh detected it) but there's no plan to reconcile -> informational.
+    plan = {
+        "resource_drift": [
+            {
+                "address": "google_compute_instance.vm",
+                "type": "google_compute_instance",
+                "name": "vm",
+                "change": {"actions": ["update"], "before": {"x": 1}, "after": {"x": 2}},
+            },
+        ],
+    }
+    assert drifts_from_plan_json(plan)[0].actionable is False
