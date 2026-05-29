@@ -26,3 +26,13 @@ class DriftSource(Protocol):
     name: str
 
     def collect_drift(self) -> list[Drift]: ...
+
+
+@runtime_checkable
+class ObservedSource(Protocol):
+    """A source that enumerates OBSERVED resources (what is actually running), to be
+    diffed against a StateSource's declared resources by reconcile()."""
+
+    name: str
+
+    def collect_observed(self) -> list[Resource]: ...
