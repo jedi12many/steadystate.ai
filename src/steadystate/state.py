@@ -139,10 +139,13 @@ class StateStore:
 
         * new fingerprint -> insert with ``first_seen == last_seen == now``, ``open``;
         * known fingerprint -> refresh ``last_seen`` + severity/title, preserve the
-          original ``first_seen`` and any operator status (mute/snooze survive a
-          re-sighting -- only the reconciler/operator changes status);
+          original ``first_seen``; a *mute* or an *active* snooze survives a re-sighting
+          (operator state isn't cleared by merely seeing the finding again);
         * a previously ``resolved`` fingerprint that recurs -> reactivated to ``open``
-          (it's drifting again), keeping its original ``first_seen`` so age is honest.
+          (it's drifting again), keeping its original ``first_seen`` so age is honest;
+        * a finding whose snooze has *lapsed* (snooze_until in the past) -> folded back
+          to ``open`` and snooze_until cleared, so a re-surfaced finding never lingers
+          labelled ``snoozed`` once the snooze no longer suppresses it.
 
         Returns ``{fingerprint: {"is_new": bool, "first_seen": str, "status": str}}``
         for exactly the fingerprints in ``seen`` -- what the surface needs to render
@@ -164,13 +167,11 @@ class StateStore:
                     "status": OPEN,
                 }
                 continue
-            # A resolved finding that reappears is drifting again -> reopen it; any
-            # other status (open/muted/snoozed) is the operator's, leave it be.
-            status = OPEN if existing.status == RESOLVED else existing.status
+            status, snooze_until = self._refreshed_status(existing, now_s)
             self._conn.execute(
                 "UPDATE findings SET last_seen = ?, last_severity = ?, "
-                "last_title = ?, status = ? WHERE fingerprint = ?",
-                (now_s, severity, title, status, fingerprint),
+                "last_title = ?, status = ?, snooze_until = ? WHERE fingerprint = ?",
+                (now_s, severity, title, status, snooze_until, fingerprint),
             )
             out[fingerprint] = {
                 "is_new": False,
@@ -178,6 +179,23 @@ class StateStore:
                 "status": status,
             }
         return out
+
+    @staticmethod
+    def _refreshed_status(existing: Finding, now_s: str) -> tuple[str, str | None]:
+        """The (status, snooze_until) a re-seen finding should carry.
+
+        Reopens a resolved finding (it's drifting again) and folds a lapsed snooze back
+        to open; a mute or an active snooze is the operator's state and is preserved.
+        """
+        if existing.status == RESOLVED:
+            return OPEN, existing.snooze_until
+        if (
+            existing.status == SNOOZED
+            and existing.snooze_until is not None
+            and now_s >= existing.snooze_until
+        ):
+            return OPEN, None
+        return existing.status, existing.snooze_until
 
     def resolve_absent(self, current_fingerprints: set[str], now: datetime) -> list[str]:
         """Resolve ``open`` findings that did NOT appear in this scan; return them.

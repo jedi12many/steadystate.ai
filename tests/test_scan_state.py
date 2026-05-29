@@ -85,10 +85,12 @@ def test_snoozed_alert_dropped_until_expiry_then_returns():
     reconcile(dropped, store, now=_t(2))
     assert dropped.alerts == []
 
-    # After the snooze lapses the Alert surfaces again.
+    # After the snooze lapses the Alert surfaces again -- and reads as open, not snoozed
+    # (the lapsed snooze was folded back, so the console won't mislabel it SNOOZED).
     returned = _report(_alert(drift))
     reconcile(returned, store, now=_t(6))
     assert len(returned.alerts) == 1
+    assert returned.alerts[0].status == "open"
 
 
 def test_partially_suppressed_alert_survives_and_shows_status():

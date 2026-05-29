@@ -150,6 +150,28 @@ def test_snooze_suppresses_until_expiry_then_lapses():
     assert store.is_suppressed(fp, _t(6)) is False
 
 
+def test_record_folds_lapsed_snooze_back_to_open():
+    # A snoozed finding seen again *after* its snooze lapses returns to open (and its
+    # snooze_until is cleared) so it never lingers mislabelled snoozed once it surfaces.
+    store = StateStore()
+    fp = _drift().fingerprint
+    store.snooze(fp, until=_t(3), actor="bob", now=_t(1))
+    # Seen again before expiry: still snoozed.
+    assert store.record({fp: ("low", "t")}, _t(2))[fp]["status"] == "snoozed"
+    # Seen again after expiry: folded to open.
+    assert store.record({fp: ("low", "t")}, _t(5))[fp]["status"] == OPEN
+    finding = store.get(fp)
+    assert finding is not None
+    assert finding.snooze_until is None
+
+
+def test_record_preserves_mute_across_resighting():
+    store = StateStore()
+    fp = _drift().fingerprint
+    store.mute(fp, "noise", "alice", _t(1))
+    assert store.record({fp: ("low", "t")}, _t(2))[fp]["status"] == "muted"
+
+
 def test_is_suppressed_false_for_unknown_and_open():
     store = StateStore()
     fp = _drift().fingerprint
