@@ -11,10 +11,15 @@ from __future__ import annotations
 from .base import Domain, PolicyFinding, Reference, evaluate_with, references_for
 from .compliance import DockerComplianceDomain
 from .security import SecurityDomain
+from .security_gcp import GCPSecurityDomain
 
 # The packs the pipeline loads by default. Append new packs here; pipeline.py
 # does not change.
-DEFAULT_DOMAINS: list[Domain] = [SecurityDomain(), DockerComplianceDomain()]
+DEFAULT_DOMAINS: list[Domain] = [
+    SecurityDomain(),
+    GCPSecurityDomain(),
+    DockerComplianceDomain(),
+]
 
 __all__ = [
     "DEFAULT_DOMAINS",
