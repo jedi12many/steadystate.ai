@@ -23,8 +23,10 @@ Like the LLM parser, the output covers every input index exactly once.
 
 from __future__ import annotations
 
+from typing import Protocol, runtime_checkable
+
 from ..model import Drift
-from .llm import Cluster
+from .llm import Cluster, LLMAnalyst
 
 
 def _namespace(identity: str) -> str | None:
@@ -99,3 +101,54 @@ def correlate(drifts: list[Drift]) -> list[Cluster]:
         )
         for key in order
     ]
+
+
+# -- the Correlator plugin seam --------------------------------------------------
+#
+# Correlation is a registered plugin seam, mirroring DriftSource (sources/__init__.py)
+# and Surface (notify/__init__.py): a correlator is anything with a `name` and a
+# `correlate(drifts) -> list[Cluster]`, and the built-ins below register in the
+# CORRELATORS table (reason/pipeline.py) so an out-of-tree correlator is one line.
+
+
+@runtime_checkable
+class Correlator(Protocol):
+    """Groups scored Events' drifts into Clusters (one Cluster -> one Alert).
+
+    The seam mirrors Surface/DriftSource: a `name` plus one method. Implementations
+    may reason with a model or group mechanically -- the pipeline only calls
+    ``correlate`` and reads ``name`` for honest labelling.
+    """
+
+    name: str
+
+    def correlate(self, drifts: list[Drift]) -> list[Cluster]: ...
+
+
+class DeterministicCorrelator:
+    """Built-in: shared-attribute grouping, never a model call.
+
+    A thin object adapter over the pure module-level ``correlate()`` above, so the
+    grouping logic stays a unit-testable function and the seam stays object-shaped.
+    """
+
+    name = "deterministic"
+
+    def correlate(self, drifts: list[Drift]) -> list[Cluster]:
+        return correlate(drifts)
+
+
+class LLMCorrelator:
+    """Built-in: LLM root-cause grouping, degrading honestly to deterministic.
+
+    Delegates to the analyst's own ``correlate`` (which falls back to shared-attribute
+    grouping on any failure / missing provider), so this never crashes a scan.
+    """
+
+    name = "llm"
+
+    def __init__(self, analyst: LLMAnalyst) -> None:
+        self._analyst = analyst
+
+    def correlate(self, drifts: list[Drift]) -> list[Cluster]:
+        return self._analyst.correlate(drifts)
