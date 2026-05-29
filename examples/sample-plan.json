@@ -1,0 +1,33 @@
+{
+  "format_version": "1.2",
+  "resource_drift": [
+    {
+      "address": "aws_s3_bucket_public_access_block.logs",
+      "type": "aws_s3_bucket_public_access_block",
+      "name": "logs",
+      "change": {
+        "actions": ["update"],
+        "before": {"block_public_acls": true, "block_public_policy": true},
+        "after": {"block_public_acls": false, "block_public_policy": false}
+      }
+    }
+  ],
+  "resource_changes": [
+    {
+      "address": "aws_security_group_rule.ssh_world",
+      "type": "aws_security_group_rule",
+      "name": "ssh_world",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {"cidr_blocks": ["0.0.0.0/0"], "from_port": 22, "to_port": 22, "protocol": "tcp"}
+      }
+    },
+    {
+      "address": "aws_instance.web",
+      "type": "aws_instance",
+      "name": "web",
+      "change": {"actions": ["no-op"]}
+    }
+  ]
+}
