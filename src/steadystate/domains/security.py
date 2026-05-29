@@ -50,6 +50,11 @@ def _opened_to_world(declared: dict, observed: dict) -> bool:
     return bool(gained - (_cidrs(observed) & _OPEN_CIDRS))
 
 
+def _is_pab_kind(kind: str) -> bool:
+    # word-boundary match, not a loose substring (avoids the over-match trap)
+    return kind == "public_access_block" or kind.endswith("_public_access_block")
+
+
 def _public_access_block_relaxed(declared: dict, observed: dict) -> bool:
     for key in _PAB_KEYS:
         if key not in declared:
@@ -120,7 +125,7 @@ class SecurityDomain:
         observed = _as_dict(drift.observed)
         kind = drift.kind.lower()
 
-        if "public_access_block" in kind and _public_access_block_relaxed(declared, observed):
+        if _is_pab_kind(kind) and _public_access_block_relaxed(declared, observed):
             return Severity.CRITICAL
         if _acl_went_public(declared, observed):
             return Severity.CRITICAL
