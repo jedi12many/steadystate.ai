@@ -22,6 +22,7 @@ change between releases until 1.0.0. Releases are published as GitHub Releases.
 - Executor-backed `fix` command surfacing guardrailed recommended actions (`--apply` runs the eligible ones).
 - Plugin registries: `DRIFT_SOURCES` (sources) and `DEFAULT_DOMAINS` (domains) so sources/packs register without editing the CLI or pipeline.
 - Foundation: CI hardening, mypy + coverage gates, and tag-driven release automation cutting GitHub Releases.
+- LLM provider abstraction: the analyst targets any OpenAI-compatible `/chat/completions` endpoint (OpenAI, Azure OpenAI, GitHub Models, internal gateway) via `STEADYSTATE_LLM_BASE_URL`/`STEADYSTATE_LLM_API_KEY`/`STEADYSTATE_LLM_MODEL`, alongside Anthropic (`ANTHROPIC_API_KEY`); auto-selected (Anthropic wins) or forced via `STEADYSTATE_LLM_PROVIDER`. No new dependency (stdlib urllib); still degrades honestly when unset.
 
 ### Changed
 
