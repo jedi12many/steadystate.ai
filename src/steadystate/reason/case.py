@@ -33,4 +33,5 @@ class Case:
     layer: Layer = Layer.CASE
     recommended_action: str | None = None
     llm_backed: bool = False  # did an LLM actually reason about this? (honesty)
+    flagged_by: str | None = None  # domain pack that raised the severity, if any
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
