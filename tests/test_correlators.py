@@ -103,5 +103,7 @@ def test_cli_accepts_each_registered_correlator(tmp_path):
     plan.write_text(json.dumps({"resource_changes": []}))
     runner = typer_testing.CliRunner()
     for name in [*sorted(CORRELATORS), "auto"]:
-        result = runner.invoke(app, ["scan", str(plan), "--correlator", name])
+        # --stateless: this guard is about correlator wiring, not the state store, so
+        # keep it from touching the filesystem (state has its own tests).
+        result = runner.invoke(app, ["scan", str(plan), "--correlator", name, "--stateless"])
         assert result.exit_code == 0, f"--correlator {name} failed: {result.output}"

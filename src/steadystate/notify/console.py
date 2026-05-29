@@ -1,13 +1,53 @@
-"""Console surface -- the v0 default. Shows correlated Alerts + a Signal count."""
+"""Console surface -- the v0 default. Shows correlated Alerts + a Signal count.
+
+When a state store backs the scan (the default), each Alert is annotated with its
+memory: a NEW marker the first time a finding is seen, an age ("seen Nd") on
+recurrence, and a muted/snoozed tag when an operator has silenced it. Findings that
+cleared since the last scan are listed once under "Resolved since last scan".
+"""
 
 from __future__ import annotations
+
+from collections.abc import Sequence
+from datetime import datetime
+from typing import TYPE_CHECKING
 
 from rich.console import Console
 from rich.panel import Panel
 
+from ..reason.alert import Alert
 from ..reason.report import Report
 
+if TYPE_CHECKING:
+    from ..reconcile_state import ResolvedFinding
+
 _SEVERITY_STYLE = {"low": "dim", "medium": "yellow", "high": "red", "critical": "bold red"}
+
+
+def _memory_marker(alert: Alert, now: datetime | None) -> str | None:
+    """The state badge for an Alert's title (NEW / seen Nd / muted / snoozed), or None.
+
+    None when the scan is stateless (``status`` unset) -- the title then renders exactly
+    as it did before this feature, so the stateless path is visually unchanged.
+
+    The NEW-vs-age decision needs a reference for "this scan's time". Tests pin it via
+    ``now``; in production we use the Alert's own ``created_at`` (stamped in the pure
+    pipeline a hair *before* reconcile stamps ``first_seen``), so a first-seen finding has
+    ``first_seen >= created_at`` (NEW) and a recurrence has ``first_seen < created_at``
+    (an age). This keeps the marker correct without threading a clock through every
+    Surface -- Slack/Teams stay untouched.
+    """
+    if alert.status is None:
+        return None
+    if alert.status in ("muted", "snoozed"):
+        return alert.status.upper()
+    if alert.first_seen is None:
+        return None
+    reference = now if now is not None else alert.created_at
+    if alert.first_seen >= reference:
+        return "NEW"
+    days = max((reference - alert.first_seen).days, 0)
+    return f"seen {days}d"
 
 
 class ConsoleSurface:
@@ -16,8 +56,16 @@ class ConsoleSurface:
     def __init__(self) -> None:
         self._console = Console()
 
-    def emit(self, report: Report) -> None:
-        if not report.items:
+    def emit(
+        self,
+        report: Report,
+        resolved: Sequence[ResolvedFinding] | None = None,
+        now: datetime | None = None,
+    ) -> None:
+        # ``now`` is the optional scan-time reference for NEW-vs-age (tests pin it); when
+        # None, each Alert's own created_at is used (see _memory_marker). We deliberately
+        # do NOT coerce it to wall-clock here, so the per-Alert fallback stays available.
+        if not report.items and not resolved:
             self._console.print("[green]Steady state: no drift detected.[/green]")
             return
 
@@ -25,12 +73,21 @@ class ConsoleSurface:
             style = _SEVERITY_STYLE.get(alert.severity.value, "white")
             backed = "LLM" if alert.llm_backed else "deterministic"
             title = f"{alert.title}  |  {backed}"
+            marker = _memory_marker(alert, now)
+            if marker:
+                title = f"{marker}  |  {title}"
             if len(alert.drifts) > 1:
                 title += f"  |  {len(alert.drifts)} correlated"
             body = f"[{style}]{alert.severity.value.upper()}[/{style}]  {alert.why_it_matters}"
             if alert.recommended_action:
                 body += f"\n\n[bold]Next:[/bold] {alert.recommended_action}"
             self._console.print(Panel(body, title=title, title_align="left"))
+
+        if resolved:
+            titles = ", ".join(r.title for r in resolved)
+            self._console.print(
+                f"[green]Resolved since last scan: {len(resolved)}[/green] [dim]({titles})[/dim]"
+            )
 
         if report.signal_count:
             self._console.print(
