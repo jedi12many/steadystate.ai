@@ -8,8 +8,8 @@ later -- that's the whole point of keeping the core domain-agnostic.
 from __future__ import annotations
 
 from ..act.plan import RemediationPlan, assess
+from ..domains import default_domains
 from ..domains.base import Domain
-from ..domains.security import SecurityDomain
 from ..model import ChangeType, Drift
 from .case import Case, Layer, Severity
 from .llm import LLMAnalyst
@@ -46,7 +46,7 @@ class Pipeline:
         domains: list[Domain] | None = None,
     ) -> None:
         self.analyst = analyst or LLMAnalyst()
-        self.domains = domains if domains is not None else [SecurityDomain()]
+        self.domains = domains if domains is not None else default_domains()
 
     def run(self, drifts: list[Drift]) -> list[Case]:
         cases: list[Case] = []

@@ -11,7 +11,7 @@ from .act.terraform import TerraformExecutor
 from .notify.console import ConsoleSurface
 from .notify.slack import SlackSurface
 from .reason.pipeline import Pipeline
-from .sources.argocd import ArgoCDSource
+from .sources import DRIFT_SOURCES, build_drift_source
 from .sources.terraform import TerraformSource
 
 app = typer.Typer(
@@ -26,16 +26,12 @@ def _root() -> None:
 
 
 def _drift_source(source: str, path: Path):
-    """Build a drift source from the --source choice. Terraform and ArgoCD both
-    reconcile natively (DriftSource). docker-compose is declared-only and needs a
-    reconcile flow, so it is not a scan source yet."""
-    if source == "terraform":
-        if path.is_file():
-            return TerraformSource(plan_json=json.loads(path.read_text()))
-        return TerraformSource(working_dir=path)
-    if source == "argocd":
-        return ArgoCDSource(app=json.loads(path.read_text()))
-    raise typer.BadParameter(f"unknown source '{source}' (expected: terraform | argocd)")
+    """Resolve --source to a DriftSource via the registry in sources/__init__.py.
+    Adding a source is a one-line registry entry -- this dispatcher never changes."""
+    try:
+        return build_drift_source(source, path)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from None
 
 
 @app.command()
@@ -46,7 +42,9 @@ def scan(
         "or an ArgoCD Application JSON file (with --source argocd).",
     ),
     source: str = typer.Option(
-        "terraform", "--source", help="Declared-state source: terraform | argocd."
+        "terraform",
+        "--source",
+        help=f"Declared-state source: {' | '.join(sorted(DRIFT_SOURCES))}.",
     ),
     slack: bool = typer.Option(
         False, "--slack", help="Also emit Cases to Slack (needs SLACK_WEBHOOK_URL)."
