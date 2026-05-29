@@ -27,6 +27,23 @@ steadystate scan ./infra
 
 No agent to install, no dashboard to learn. Point it at your IaC.
 
+## Enabling AI reasoning (optional)
+
+The drift core runs with **no LLM** — detection, scoring, the security pack, and the guardrailed executor are all deterministic. An LLM only adds the plain-language *"why this matters"* narrative, and the analyst degrades honestly when none is configured.
+
+Point it at whichever model you're allowed to use:
+
+- **Anthropic** — `pip install steadystate[llm]`, then set `ANTHROPIC_API_KEY`.
+- **Any OpenAI-compatible endpoint** (OpenAI, Azure OpenAI, GitHub Models, an internal gateway) — no extra install:
+
+  ```sh
+  export STEADYSTATE_LLM_BASE_URL=...   # your /chat/completions endpoint
+  export STEADYSTATE_LLM_API_KEY=...    # your token
+  export STEADYSTATE_LLM_MODEL=...      # a model that endpoint serves
+  ```
+
+When both are set, Anthropic wins unless you set `STEADYSTATE_LLM_PROVIDER=openai`.
+
 ## Design
 
 See **[ARCHITECTURE.md](./ARCHITECTURE.md)** for the full design: the canonical state model, the four plugin seams (StateSource / Domain / Surface / Executor), the ChatOps operator model, and the build-vs-rent decisions.
