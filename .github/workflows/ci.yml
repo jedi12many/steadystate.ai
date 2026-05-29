@@ -28,7 +28,7 @@ jobs:
     # outside contributors still get CI without touching the fleet box.
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Set up venv + install
         run: |
           python3 -m venv .venv
