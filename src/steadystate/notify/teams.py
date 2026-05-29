@@ -51,6 +51,8 @@ def format_teams_message(alert: Alert) -> dict:
     ]
     if alert.drifts:  # source lives on the first drift's provenance, if we have one
         facts.append({"title": "Source", "value": alert.drifts[0].provenance.source})
+    elif alert.findings:  # a standing-policy Alert has no drift; source is on the finding
+        facts.append({"title": "Source", "value": alert.findings[0].provenance.source})
     if alert.flagged_by is not None:  # omit the fact entirely when nothing flagged it
         facts.append({"title": "Flagged by", "value": alert.flagged_by})
     if alert.references:  # omit the fact entirely when nothing mapped
