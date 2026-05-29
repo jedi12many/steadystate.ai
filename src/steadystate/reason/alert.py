@@ -16,8 +16,8 @@ from ..model import Drift
 
 if TYPE_CHECKING:
     # Imported under TYPE_CHECKING only: domains.base imports Severity from this module,
-    # so a runtime import here would be circular. Reference is a plain frozen value type.
-    from ..domains.base import Reference
+    # so a runtime import here would be circular. Both are plain frozen value types.
+    from ..domains.base import PolicyFinding, Reference
 
 
 class Layer(str, Enum):
@@ -50,6 +50,10 @@ class Alert:
     # CIS/STIG/CWE later, same field). Config-exposure -> technique mapping, NOT behavioral
     # detection. Populated alongside flagged_by in the pipeline; empty when nothing mapped.
     references: list[Reference] = field(default_factory=list)
+    # The policy origin of a *baseline* Alert (CIS/STIG), where drifts is empty: the
+    # PolicyFinding(s) a Domain.evaluate generated. Carries the data the surfaces render
+    # and the fingerprint reconciliation keys memory on. Empty for ordinary drift Alerts.
+    findings: list[PolicyFinding] = field(default_factory=list)
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     # Memory annotations, populated by the state store during a stateful scan and
     # left None when scanning statelessly (so Pipeline stays pure and the stateless

@@ -8,18 +8,21 @@ compliance (CIS, STIG, ...) enter -- as packs, never as core.
 
 from __future__ import annotations
 
-from .base import Domain, Reference, references_for
+from .base import Domain, PolicyFinding, Reference, evaluate_with, references_for
+from .compliance import DockerComplianceDomain
 from .security import SecurityDomain
 
 # The packs the pipeline loads by default. Append new packs here; pipeline.py
 # does not change.
-DEFAULT_DOMAINS: list[Domain] = [SecurityDomain()]
+DEFAULT_DOMAINS: list[Domain] = [SecurityDomain(), DockerComplianceDomain()]
 
 __all__ = [
     "DEFAULT_DOMAINS",
     "Domain",
+    "PolicyFinding",
     "Reference",
     "default_domains",
+    "evaluate_with",
     "references_for",
 ]
 

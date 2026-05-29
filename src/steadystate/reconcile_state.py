@@ -39,7 +39,11 @@ class ResolvedFinding:
 
 
 def _fingerprints(alert: Alert) -> list[str]:
-    return [d.fingerprint for d in alert.drifts]
+    # Drift Alerts key memory on their member drifts; standing-policy Alerts (drifts empty)
+    # key on their PolicyFindings. Both fingerprints are source|identity|<discriminator>, so
+    # the store treats them identically -- this is the one seam that makes new/recurring/
+    # resolved + mute/snooze work for policy findings, with no change to StateStore.
+    return [d.fingerprint for d in alert.drifts] + [f.fingerprint for f in alert.findings]
 
 
 def _display(drift: Drift, alert: Alert) -> tuple[str, str]:
@@ -70,6 +74,10 @@ def reconcile(
     for item in report.items:
         for drift in item.drifts:
             seen[drift.fingerprint] = _display(drift, item)
+        # Standing-policy findings carry their own fingerprint + a stable title (the rule's
+        # one-liner), so they record exactly like drifts -- the store never knows the difference.
+        for pf in item.findings:
+            seen[pf.fingerprint] = (item.severity.value, pf.title)
 
     # 2. Record + read back per-fingerprint state.
     state = store.record(seen, now)

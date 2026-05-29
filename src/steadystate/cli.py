@@ -18,6 +18,7 @@ from .reason.pipeline import CORRELATORS, Pipeline, build_correlator
 from .reason.report import Tuning
 from .reconcile_state import reconcile
 from .sources import DRIFT_SOURCES, build_drift_source
+from .sources.base import StateSource
 from .sources.terraform import TerraformSource
 from .state import StateStore
 
@@ -125,8 +126,13 @@ def scan(
     level = _tuning(tuning)
     analyst = LLMAnalyst()
     grouping = _correlator(correlator, analyst)
-    drifts = _drift_source(source, path).collect_drift()
-    report = Pipeline(analyst=analyst, tuning=level, correlator=grouping).run(drifts)
+    src = _drift_source(source, path)
+    drifts = src.collect_drift()
+    # The declared inventory feeds the standing-policy pass (CIS/STIG). Only sources that
+    # enumerate declared state implement StateSource; native drift sources (Terraform,
+    # ArgoCD) don't, so they contribute no baseline findings -- guard rather than assume.
+    resources = src.collect_declared() if isinstance(src, StateSource) else []
+    report = Pipeline(analyst=analyst, tuning=level, correlator=grouping).run(drifts, resources)
     # The Pipeline is pure; memory is applied here, between run() and emit(). Stateless
     # scans skip the store entirely and surface exactly as before (Alerts un-annotated).
     # One `now` for the whole scan so the store's timestamps and the console's NEW-vs-age

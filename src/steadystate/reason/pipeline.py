@@ -16,8 +16,8 @@ from collections.abc import Callable
 
 from ..act.plan import RemediationPlan, assess
 from ..domains import default_domains
-from ..domains.base import Domain, Reference, references_for
-from ..model import ChangeType, Drift
+from ..domains.base import Domain, PolicyFinding, Reference, evaluate_with, references_for
+from ..model import ChangeType, Drift, Resource
 from .alert import Alert, Layer, Severity
 from .correlate import Cluster, Correlator, DeterministicCorrelator, LLMCorrelator
 from .llm import LLMAnalyst
@@ -163,7 +163,31 @@ class Pipeline:
             references=references,
         )
 
-    def run(self, drifts: list[Drift]) -> Report:
+    def _alert_from_finding(self, finding: PolicyFinding, flagged_by: str, layer: Layer) -> Alert:
+        """Turn a standing-policy violation into an Alert (or, below the bar, a Signal).
+
+        No drift, so ``drifts`` is empty and the finding rides in ``findings`` -- that's what
+        carries the fingerprint reconciliation keys memory on and the detail the surfaces
+        render. Not correlated in v1: posture violations are independent, not root-cause-linked.
+        """
+        return Alert(
+            title=finding.title,
+            severity=finding.severity,
+            drifts=[],
+            why_it_matters=finding.detail,
+            layer=layer,
+            recommended_action=None,
+            llm_backed=False,
+            flagged_by=flagged_by,
+            references=list(finding.references),
+            findings=[finding],
+        )
+
+    def run(self, drifts: list[Drift], resources: list[Resource] | None = None) -> Report:
+        """Reason about ``drifts`` and, when given the declared ``resources`` inventory, the
+        standing-policy posture of that baseline. ``resources`` defaults to None so the
+        stateless drift path is byte-for-byte unchanged (no policy pass, no behaviour change).
+        """
         signals: list[Alert] = []
         events: list[_Event] = []
         for drift in drifts:
@@ -174,4 +198,16 @@ class Pipeline:
                 events.append((drift, severity, flagged_by, references))
         clusters = self.correlator.correlate([event[0] for event in events])
         alerts = [self._alert_from_cluster(cluster, events) for cluster in clusters]
-        return Report(items=signals + alerts, tuning=self.tuning)
+
+        # Standing-policy pass over the declared baseline (CIS/STIG): each domain that
+        # implements evaluate() generates findings the same Brain-Tuning bar sorts into
+        # Signals (counted) or surfaced Alerts. Independent of the drift path above.
+        policy_alerts: list[Alert] = []
+        for domain in self.domains:
+            for finding in evaluate_with(domain, resources or []):
+                below_bar = classify(finding.severity, self.tuning) is Layer.SIGNAL
+                layer = Layer.SIGNAL if below_bar else Layer.ALERT
+                alert = self._alert_from_finding(finding, domain.name, layer)
+                (signals if below_bar else policy_alerts).append(alert)
+
+        return Report(items=signals + alerts + policy_alerts, tuning=self.tuning)

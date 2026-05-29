@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import hashlib
+from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
-from ..model import Drift
+from ..model import Drift, Provenance, Resource
 from ..reason.alert import Severity
 
 
@@ -26,6 +27,40 @@ class Reference:
     id: str  # e.g. "T1530"
     name: str = ""  # human-readable technique name, e.g. "Data from Cloud Storage"
     url: str | None = None  # e.g. "https://attack.mitre.org/techniques/T1530/"
+
+
+@dataclass(frozen=True)
+class PolicyFinding:
+    """A standing-policy violation a Domain *generates* from a baseline -- not a drift.
+
+    Where ``score`` reacts to a divergence between declared and observed state, a baseline
+    pack (CIS/STIG/...) audits the declared posture itself and emits a PolicyFinding for
+    each rule a resource violates, whether or not anything drifted. Honest framing: this is
+    *config-posture evaluation, NOT runtime/behavioral detection* -- we read the declared
+    configuration and report the rules it fails.
+
+    Frozen value type, like Reference: packs build them statelessly and an Alert carries
+    them. ``fingerprint`` mirrors :pyattr:`~steadystate.model.Drift.fingerprint` exactly
+    (``source|identity|rule_id`` instead of ``...|change_type``) so the state store -- which
+    only ever sees fingerprints + a (severity, title) pair -- gives policy findings the same
+    new/recurring/resolved + mute/snooze memory as drift, with no store change.
+    """
+
+    rule_id: str  # e.g. "CIS-Docker-5.4" -- stable per rule, part of the fingerprint
+    identity: str  # the resource it's about (e.g. the compose service name)
+    provenance: Provenance
+    severity: Severity
+    title: str  # one-line, stable per fingerprint: "service 'web' runs privileged"
+    detail: str  # the narrative: why it matters
+    references: list[Reference] = field(default_factory=list)  # CIS/MITRE chips (Reference rail)
+
+    @property
+    def fingerprint(self) -> str:
+        """A stable, idempotent id for *this resource violating this rule* -- the durable
+        finding. ``source|identity|rule_id``: same resource failing the same rule re-scanned
+        -> same fingerprint; a different rule or resource -> a different one."""
+        raw = f"{self.provenance.source}|{self.identity}|{self.rule_id}"
+        return hashlib.sha256(raw.encode()).hexdigest()
 
 
 @runtime_checkable
@@ -49,6 +84,14 @@ class Domain(Protocol):
     # to an empty list, so non-implementing packs keep working unchanged and we never force
     # every domain to implement it. The security pack lights it up; CIS/STIG/CWE reuse the
     # same convention later.
+    #
+    # evaluate() is a second OPTIONAL extension, off the Protocol for the same reason. A
+    # baseline pack MAY add
+    #
+    #     def evaluate(self, resources: list[Resource]) -> list[PolicyFinding]: ...
+    #
+    # to audit the declared inventory and *generate* findings (CIS/STIG), rather than only
+    # scoring an existing drift. evaluate_with (below) probes it the same getattr way.
 
 
 def references_for(domain: object, drift: Drift) -> list[Reference]:
@@ -62,4 +105,18 @@ def references_for(domain: object, drift: Drift) -> list[Reference]:
     if getter is None:
         return []
     result = getter(drift)
+    return list(result) if result else []
+
+
+def evaluate_with(domain: object, resources: list[Resource]) -> list[PolicyFinding]:
+    """The standing-policy findings ``domain`` generates over ``resources``, or [] if none.
+
+    Optional-by-convention, exactly like :func:`references_for`: a baseline pack opts in by
+    defining ``evaluate(self, resources)``. Packs that don't are unaffected -- the Domain
+    Protocol (just ``score``) is never broadened, so every existing pack keeps working.
+    """
+    getter = getattr(domain, "evaluate", None)
+    if getter is None:
+        return []
+    result = getter(resources)
     return list(result) if result else []
