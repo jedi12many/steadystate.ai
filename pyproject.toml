@@ -15,7 +15,14 @@ dependencies = [
 
 [project.optional-dependencies]
 llm = ["anthropic>=0.40"]
-dev = ["pytest>=8", "ruff>=0.6"]
+dev = [
+    "pytest>=8",
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "pytest-cov>=5",
+    "build>=1.2",
+    "twine>=5",
+]
 
 [project.scripts]
 steadystate = "steadystate.cli:main"
@@ -33,3 +40,29 @@ packages = ["src/steadystate"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+
+[tool.ruff.lint]
+# E/F = pyflakes+pycodestyle, I = import sort, B = bugbear, UP = pyupgrade,
+# SIM = simplify. Keep the set tight so the gate stays signal, not noise.
+select = ["E", "F", "I", "B", "UP", "SIM"]
+# UP042 wants StrEnum over (str, Enum); that changes str() output, so it's a
+# separate, behavior-affecting change -- not this config PR.
+ignore = ["UP042"]
+
+[tool.ruff.lint.flake8-bugbear]
+# Typer's API intentionally puts Argument()/Option() in parameter defaults.
+extend-immutable-calls = ["typer.Argument", "typer.Option"]
+
+[tool.mypy]
+# Deliberately lenient: a green gate on the current tree, not a type crusade.
+# Tighten incrementally later -- do NOT add disallow/strict flags here without
+# first making the codebase pass them.
+python_version = "3.11"
+ignore_missing_imports = true
+files = ["src/steadystate"]
+
+[tool.coverage.run]
+source = ["steadystate"]
+
+[tool.coverage.report]
+show_missing = true

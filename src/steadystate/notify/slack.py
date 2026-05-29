@@ -61,6 +61,7 @@ class SlackSurface:
             self._post(format_slack_message(case))
 
     def _post(self, payload: dict) -> None:
+        assert self.webhook_url is not None  # emit() guards a configured webhook
         data = json.dumps(payload).encode("utf-8")
         request = urllib.request.Request(
             self.webhook_url,

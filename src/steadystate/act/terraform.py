@@ -29,38 +29,55 @@ class TerraformExecutor:
         plan = self.plan_for(drift)
         if not plan.eligible:
             return RemediationResult(
-                plan=plan, applied=False, verified=False,
+                plan=plan,
+                applied=False,
+                verified=False,
                 detail="Refused: not apply-eligible (see reason).",
             )
         if not confirm:
             return RemediationResult(
-                plan=plan, applied=False, verified=False,
+                plan=plan,
+                applied=False,
+                verified=False,
                 detail="Dry run: pass confirm=True (or --apply) to reconcile.",
             )
         if self.working_dir is None:
             return RemediationResult(
-                plan=plan, applied=False, verified=False,
+                plan=plan,
+                applied=False,
+                verified=False,
                 detail="No terraform working dir configured; cannot apply.",
             )
         snapshot = self._snapshot()
         self._run(plan.command)
         cleared = not self._still_drifting(drift)
         return RemediationResult(
-            plan=plan, applied=True, verified=cleared, snapshot=snapshot,
-            detail="Applied and verified clear." if cleared else "Applied, but drift still present on re-check.",
+            plan=plan,
+            applied=True,
+            verified=cleared,
+            snapshot=snapshot,
+            detail="Applied and verified clear."
+            if cleared
+            else "Applied, but drift still present on re-check.",
         )
 
     # --- live terraform (guarded; not exercised by unit tests) ---
 
     def _snapshot(self) -> dict:
+        assert self.working_dir is not None  # remediate() guards this before calling
         planfile = self.working_dir / ".steadystate.snapshot.tfplan"
         subprocess.run(
             ["terraform", "plan", "-refresh=true", "-out", str(planfile)],
-            cwd=self.working_dir, check=True, capture_output=True,
+            cwd=self.working_dir,
+            check=True,
+            capture_output=True,
         )
         res = subprocess.run(
             ["terraform", "show", "-json", str(planfile)],
-            cwd=self.working_dir, check=True, capture_output=True, text=True,
+            cwd=self.working_dir,
+            check=True,
+            capture_output=True,
+            text=True,
         )
         return json.loads(res.stdout)
 
