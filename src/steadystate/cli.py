@@ -52,6 +52,12 @@ def _tuning(value: str) -> Tuning:
         raise typer.BadParameter("tuning must be: lenient | default | strict") from None
 
 
+def _correlator(value: str) -> str:
+    if value not in {"auto", "llm", "deterministic"}:
+        raise typer.BadParameter("correlator must be: auto | llm | deterministic")
+    return value
+
+
 @app.command()
 def scan(
     path: Path = typer.Argument(
@@ -75,12 +81,20 @@ def scan(
         help="Surfacing bar (moves the Signal/Event/Alert tiers together): "
         "lenient | default | strict.",
     ),
+    correlator: str = typer.Option(
+        "auto",
+        "--correlator",
+        help="How to group Events into Alerts: auto (LLM if a provider is configured, "
+        "else deterministic) | llm (force LLM, degrades on failure) | deterministic "
+        "(shared-attribute grouping, no model call).",
+    ),
 ) -> None:
     """Scan declared state for drift and surface the Alerts."""
     surfaces = _surfaces([name.strip() for name in to.split(",") if name.strip()])
     level = _tuning(tuning)
+    grouping = _correlator(correlator)
     drifts = _drift_source(source, path).collect_drift()
-    report = Pipeline(tuning=level).run(drifts)
+    report = Pipeline(tuning=level, correlator=grouping).run(drifts)
     for surface in surfaces:
         surface.emit(report)
 
