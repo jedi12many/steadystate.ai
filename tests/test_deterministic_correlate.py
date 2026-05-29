@@ -10,9 +10,13 @@ model by monkeypatching LLMAnalyst._complete to raise if touched.
 import pytest
 
 from steadystate.model import ChangeType, Drift, Provenance
-from steadystate.reason.correlate import correlate
+from steadystate.reason.correlate import (
+    DeterministicCorrelator,
+    LLMCorrelator,
+    correlate,
+)
 from steadystate.reason.llm import LLMAnalyst
-from steadystate.reason.pipeline import Pipeline, select_correlator
+from steadystate.reason.pipeline import Pipeline, build_correlator, select_correlator
 
 
 def _drift(
@@ -133,36 +137,57 @@ def test_why_lists_multiple_kinds_in_a_group():
     assert "aws_instance" in why and "aws_subnet" in why
 
 
-# --- selection (auto / llm / deterministic) ---------------------------------
+# --- selection via build_correlator (auto / llm / deterministic) -------------
+#
+# Correlator selection is now the registry builder (build_correlator), which returns
+# Correlator *instances*, not bare functions. select_correlator is kept as a thin
+# back-compat wrapper; these tests pin both, preserving the old selection intent.
 
 
-def test_select_deterministic_is_pure_function(monkeypatch):
+def test_build_deterministic_returns_deterministic_correlator(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    chosen = select_correlator("deterministic", LLMAnalyst())
-    assert chosen is correlate
+    chosen = build_correlator("deterministic", LLMAnalyst())
+    assert isinstance(chosen, DeterministicCorrelator)
+    assert chosen.name == "deterministic"
+    # still the pure grouping under the hood -- it delegates to correlate().
+    assert chosen.correlate([]) == correlate([])
 
 
-def test_select_auto_uses_deterministic_without_provider(monkeypatch):
+def test_build_llm_returns_llm_correlator(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    chosen = build_correlator("llm", LLMAnalyst())
+    assert isinstance(chosen, LLMCorrelator)
+    assert chosen.name == "llm"
+
+
+def test_build_auto_uses_deterministic_without_provider(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("STEADYSTATE_LLM_BASE_URL", raising=False)
     monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
     analyst = LLMAnalyst()
     assert analyst._provider() == "none"
-    assert select_correlator("auto", analyst) is correlate
+    assert isinstance(build_correlator("auto", analyst), DeterministicCorrelator)
 
 
-def test_select_auto_uses_llm_with_provider(monkeypatch):
+def test_build_auto_uses_llm_with_provider(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     analyst = LLMAnalyst()
     assert analyst._provider() == "anthropic"
-    chosen = select_correlator("auto", analyst)
-    # a bound method is a fresh object each access, so compare the underlying func + self.
-    assert chosen is not correlate  # not the deterministic one
-    assert getattr(chosen, "__func__", None) is LLMAnalyst.correlate
-    assert getattr(chosen, "__self__", None) is analyst
+    chosen = build_correlator("auto", analyst)
+    assert isinstance(chosen, LLMCorrelator)  # not the deterministic one
+    # the LLM correlator groups via this exact analyst.
+    assert chosen._analyst is analyst
 
 
-def test_select_rejects_unknown_mode():
+def test_build_rejects_unknown_mode():
+    with pytest.raises(ValueError, match="unknown correlator"):
+        build_correlator("magic", LLMAnalyst())
+
+
+def test_select_correlator_is_back_compat_wrapper(monkeypatch):
+    # The old entry point still resolves through the registry builder.
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    assert isinstance(select_correlator("deterministic", LLMAnalyst()), DeterministicCorrelator)
     with pytest.raises(ValueError, match="unknown correlator"):
         select_correlator("magic", LLMAnalyst())
 

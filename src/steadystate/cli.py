@@ -11,7 +11,9 @@ from .act.terraform import TerraformExecutor
 from .notify import SURFACES, build_surfaces
 from .notify.base import Surface
 from .notify.console import ConsoleSurface
-from .reason.pipeline import Pipeline
+from .reason.correlate import Correlator
+from .reason.llm import LLMAnalyst
+from .reason.pipeline import CORRELATORS, Pipeline, build_correlator
 from .reason.report import Tuning
 from .sources import DRIFT_SOURCES, build_drift_source
 from .sources.terraform import TerraformSource
@@ -52,10 +54,13 @@ def _tuning(value: str) -> Tuning:
         raise typer.BadParameter("tuning must be: lenient | default | strict") from None
 
 
-def _correlator(value: str) -> str:
-    if value not in {"auto", "llm", "deterministic"}:
-        raise typer.BadParameter("correlator must be: auto | llm | deterministic")
-    return value
+def _correlator(value: str, analyst: LLMAnalyst) -> Correlator:
+    """Resolve --correlator to a Correlator via the registry in reason/pipeline.py.
+    Adding a correlator is a one-line registry entry -- this dispatcher never changes."""
+    try:
+        return build_correlator(value, analyst)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from None
 
 
 @app.command()
@@ -85,16 +90,17 @@ def scan(
         "auto",
         "--correlator",
         help="How to group Events into Alerts: auto (LLM if a provider is configured, "
-        "else deterministic) | llm (force LLM, degrades on failure) | deterministic "
-        "(shared-attribute grouping, no model call).",
+        f"else deterministic) | {' | '.join(sorted(CORRELATORS))} (force one; the LLM "
+        "correlator degrades on failure, deterministic never calls a model).",
     ),
 ) -> None:
     """Scan declared state for drift and surface the Alerts."""
     surfaces = _surfaces([name.strip() for name in to.split(",") if name.strip()])
     level = _tuning(tuning)
-    grouping = _correlator(correlator)
+    analyst = LLMAnalyst()
+    grouping = _correlator(correlator, analyst)
     drifts = _drift_source(source, path).collect_drift()
-    report = Pipeline(tuning=level, correlator=grouping).run(drifts)
+    report = Pipeline(analyst=analyst, tuning=level, correlator=grouping).run(drifts)
     for surface in surfaces:
         surface.emit(report)
 
