@@ -1,29 +1,30 @@
 # steadystate.ai
 
-**Drift detection, reasoning, and guardrailed remediation for your infrastructure.**
+**Detect drift *and* malfunction in your infrastructure, reason about what matters, and remediate — guardrailed.**
 
-You already declared what your infrastructure *should* be — in Terraform, Ansible, Kubernetes/Rancher, ArgoCD, or docker-compose. steadystate.ai watches the gap between that **declared state** and **observed reality**, reasons about the **drift** (security/compliance packs, root-cause correlation, live-health enrichment), surfaces only what matters (console, Slack/Teams, Prometheus/Grafana), and — at the autonomy level *you* choose — brings it back to steady state, guardrailed and approvable from your phone.
+You already declared what your infrastructure *should* be — in Terraform, Ansible, Kubernetes/Rancher, ArgoCD, or docker-compose. steadystate.ai watches whether your system is still in **steady state** — running *as declared* **and** *healthy* — and reasons about every departure: **drift** (config diverged from what you declared) and **malfunction** (the config's fine, but it's failing). With security/compliance packs and root-cause correlation, it surfaces only what matters (console, Slack/Teams/Discord, Prometheus/Grafana) and — at the autonomy level *you* choose — brings it back to steady state, guardrailed and approvable from your phone.
 
 It is **not** another dashboard to babysit. Steady state is silence; you only hear from it when something has drifted in a way worth your attention.
 
-> **Status:** the full loop works — **detect → reason → surface → suggest → approve → act**, up to `--autonomy auto` self-healing — across six sources and three clouds. Approvals come back through a provider-agnostic inbound seam (Slack and Discord). A Teams inbound adapter and a remediation audit log are the next increments.
+> **Status:** the full loop works — **detect → probe → reason → surface → suggest → approve → act**, up to `--autonomy auto` self-healing — across six sources and three clouds. Both departures ship: **drift** detection and **malfunction** probing (`--probe`), correlated into one root-caused alert. Approvals come back through chat (Slack · Teams · Discord), with an append-only remediation audit log (`history`). Next: chat-summoned scans (`@steadystate probe <target>`).
 
 ## The idea
 
-- **Drift is the universal signal.** Security regressions, compliance violations, latent outages — they all show up first as a divergence from what you declared.
-- **The reasoning is the product.** Collection, storage, dashboards, and execution already exist and are better than we'd maintain — so we rent them. We build what nobody else has: the engine that decides *which drift matters and why*, and the guardrails that let it act safely.
-- **Security & compliance are plugins** (the AWS/GCP/Azure security packs, Docker CIS), not the core. The core just understands drift; domain packs teach it what drift *means*.
-- **You stay in control.** Observe-only by default; raise to suggest/auto when *you* decide. Every action — from a terminal or a Slack button — passes the same deterministic guardrails.
+- **A departure from steady state is the signal.** Either your config **drifted** from what you declared, or the config is fine but the system is **malfunctioning** (crashloop, OOMKill, failing healthcheck). Both are departures; reasoning about any of them is the product.
+- **The reasoning is the product.** Collection, storage, dashboards, and *detection* already exist and are better than we'd maintain — so we rent them (terraform's plan, kubectl's pod status, ArgoCD's health field). We build what nobody else has: the engine that decides *which departure matters and why* — including correlating a malfunction to the drift that caused it — and the guardrails that let it act safely.
+- **Security & compliance are plugins** (the AWS/GCP/Azure security packs, Docker CIS, k8s Pod Security), not the core. The core just understands departures; domain packs teach it what a config change *means*.
+- **You stay in control.** Alert-only by default; raise to suggest/auto when *you* decide. Every action — from a terminal or a chat button (Slack/Teams/Discord) — passes the same deterministic guardrails.
 
 ## The loop
 
 ```
-steadystate scan ./infra --source terraform --to slack --enrich prometheus --autonomy suggest
-  detect    each source rides its tool's own diff (terraform plan, ansible --check, kubectl get, Fleet status)
-  reason    domain packs score it · correlate by root cause · escalate if the resource is unhealthy now
-  surface   only what clears the bar -> console / Slack / Teams / Prometheus / Grafana
+steadystate scan ./infra --source k8s --probe auto --to slack --autonomy suggest
+  detect    drift — each source rides its tool's own diff (terraform plan, kubectl get, ArgoCD sync, …)
+  probe     malfunction — read live health (kubectl/docker/ArgoCD) into Symptoms, even with no drift
+  reason    score · correlate by root cause · diagnose a Symptom against a co-located Drift → one alert
+  surface   only what clears the bar -> console / Slack / Teams / Discord / Prometheus / Grafana
   suggest   record a gated remediation per eligible drift
-  approve   `steadystate approve <fp>`  — or tap Approve on the Slack alert (`steadystate listen`)
+  approve   `steadystate approve <fp>`  — or tap Approve on the alert in chat (`steadystate listen`)
   act       reconcile to declared, guardrailed: eligibility -> snapshot -> apply -> verify
 ```
 
@@ -43,15 +44,11 @@ No agent to install, no dashboard to learn. Point it at your IaC. Run `steadysta
 
 `console` · `slack` · `teams` · `discord` (alerts) · `prometheus` (Pushgateway metrics, incl. LLM cost) · `grafana` (annotations). An unconfigured surface says so once and skips — it never pretends it delivered.
 
-## Enrichment — live health in
+## Enrichment — escalate a drift by live metrics (`--enrich`)
 
-Cross-reference each alert against live operational state — a drift on a resource that's **failing right now** pages louder (severity bumped), correlating the symptom to the config change:
+`--enrich prometheus` cross-references each alert against a PromQL query you supply — a drift on a resource that's **failing right now** pages louder (severity bumped). A flaky/absent Prometheus degrades to a no-op; enrichment never breaks a scan.
 
-- `--enrich prometheus` — a PromQL query you supply returns series only when the resource is unhealthy.
-- `--enrich kubectl` — for a Kubernetes drift, reads pod health (CrashLoopBackOff, restarts, the worst pod's last log line) so you see *"crashlooping since the image drifted,"* not just *"image drifted."* Same `kubectl` access the source uses.
-- `--enrich docker` — for a docker-compose drift, reads container health (restarting / exited non-zero / failing healthcheck + the last log line) via `docker ps` on the compose-service label.
-
-A flaky/absent backend degrades to a no-op — enrichment never breaks a scan.
+> For pod/container health, prefer **`--probe`** (below). An enricher only *escalates an existing drift*; a probe *originates* the malfunction as a first-class Symptom even with no drift — and the diagnosis correlation does the escalation for you. `--enrich kubectl` / `--enrich docker` remain for now but are superseded by `--probe kubectl` / `--probe docker`.
 
 ## Probe — malfunction, not just drift (`--probe`)
 
@@ -99,7 +96,7 @@ See **[DEPLOYMENT.md](./DEPLOYMENT.md)** — the model plus three worked example
 
 ## Design
 
-See **[ARCHITECTURE.md](./ARCHITECTURE.md)** — the canonical state model, the five plugin seams (StateSource · Domain · Surface · Executor · Correlator) plus the Enricher, the guardrail model, and the build-vs-rent decisions.
+See **[ARCHITECTURE.md](./ARCHITECTURE.md)** — the evolved thesis (drift **and** malfunction), the canonical state model (Drift · PolicyFinding · Symptom), the plugin seams (StateSource · Domain · Surface + Inbound · Executor · Correlator · Probe, plus the Enricher), the guardrail model, and the build-vs-rent decisions.
 
 ## Built with
 
