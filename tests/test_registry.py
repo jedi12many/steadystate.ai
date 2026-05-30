@@ -8,6 +8,8 @@ import json
 import pytest
 import typer
 
+from steadystate.act import EXECUTORS, build_executor
+from steadystate.act.base import Executor
 from steadystate.cli import _drift_source
 from steadystate.domains import DEFAULT_DOMAINS, default_domains
 from steadystate.domains.base import Domain
@@ -73,3 +75,25 @@ def test_default_domains_conform_and_are_fresh():
     fresh = default_domains()
     assert fresh is not DEFAULT_DOMAINS  # a copy, so callers can't mutate the registry
     assert [type(d) for d in fresh] == [type(d) for d in DEFAULT_DOMAINS]
+
+
+def test_every_executor_maps_to_a_real_source():
+    # You can't act on a backend you can't observe -- executors are a subset of sources.
+    assert set(EXECUTORS) <= set(DRIFT_SOURCES)
+
+
+def test_build_executor_acts_for_terraform_and_is_none_for_observe_only(tmp_path):
+    assert isinstance(build_executor("terraform", tmp_path), Executor)
+    for name in set(DRIFT_SOURCES) - set(EXECUTORS):  # ansible/argocd/rancher/k8s/compose
+        assert build_executor(name, tmp_path) is None
+
+
+def test_fix_rejects_an_observe_only_source(tmp_path):
+    # `fix --source ansible` is a clean CLI error, not a crash -- there's no executor.
+    from steadystate.cli import app
+
+    runner = pytest.importorskip("typer.testing").CliRunner()
+    sample = tmp_path / "a.json"
+    sample.write_text(json.dumps({"plays": []}))
+    result = runner.invoke(app, ["fix", str(sample), "--source", "ansible"])
+    assert result.exit_code != 0

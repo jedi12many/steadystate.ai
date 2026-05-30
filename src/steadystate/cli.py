@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import contextlib
-import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import typer
 
-from .act.terraform import TerraformExecutor
+from .act import EXECUTORS, build_executor
 from .notify import SURFACES, build_surfaces
 from .notify.base import Surface
 from .notify.console import ConsoleSurface
@@ -22,7 +21,6 @@ from .reason.report import Tuning
 from .reconcile_state import reconcile
 from .sources import CAPABILITIES, DRIFT_SOURCES, build_drift_source
 from .sources.base import StateSource
-from .sources.terraform import TerraformSource
 from .state import StateStore
 
 DEFAULT_STATE_PATH = ".steadystate/state.db"
@@ -190,21 +188,27 @@ def scan(
 def fix(
     path: Path = typer.Argument(
         ...,
-        help="A Terraform working dir, or a `terraform show -json` plan file.",
+        help="Source input (same as `scan`): a Terraform dir/plan, or a captured source file.",
+    ),
+    source: str = typer.Option(
+        "terraform",
+        "--source",
+        help=f"Backend to remediate: {' | '.join(sorted(EXECUTORS))} "
+        "(other sources are observe-only -- run `commands` to see).",
     ),
     apply: bool = typer.Option(
         False, "--apply", help="Run the eligible remediations (default: dry run)."
     ),
 ) -> None:
     """Show guardrailed remediations for detected drift (use --apply to run the eligible ones)."""
-    if path.is_file():
-        source = TerraformSource(plan_json=json.loads(path.read_text()))
-        executor = TerraformExecutor()
-    else:
-        source = TerraformSource(working_dir=path)
-        executor = TerraformExecutor(working_dir=path)
+    executor = build_executor(source, path)
+    if executor is None:
+        raise typer.BadParameter(
+            f"source '{source}' is observe-only -- no executor to remediate with. "
+            "Run `steadystate commands` to see each plugin's act commands."
+        )
     items = []
-    for drift in source.collect_drift():
+    for drift in _drift_source(source, path).collect_drift():
         plan = executor.plan_for(drift)
         result = executor.remediate(drift, confirm=True) if (apply and plan.eligible) else None
         items.append((plan, result))
