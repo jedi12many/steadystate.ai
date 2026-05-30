@@ -1,9 +1,19 @@
 import logging
 
 from steadystate.domains.base import Reference
+from steadystate.model import ChangeType, Drift, Provenance
 from steadystate.notify.slack import SlackSurface, format_slack_message
 from steadystate.reason.alert import Alert, Layer, Severity
 from steadystate.reason.report import Report
+
+
+def _drift() -> Drift:
+    return Drift(
+        identity="aws_s3_bucket.logs",
+        kind="aws_s3_bucket",
+        change_type=ChangeType.MODIFIED,
+        provenance=Provenance(source="terraform"),
+    )
 
 
 def _case(**overrides) -> Alert:
@@ -49,6 +59,20 @@ def test_format_renders_reference_chips_when_present():
 def test_format_omits_references_when_absent():
     payload = format_slack_message(_case())  # references defaults to []
     assert "References:" not in payload["text"]
+
+
+def test_resource_line_shows_which_resource_drifted():
+    text = format_slack_message(_case(drifts=[_drift()]))["text"]
+    assert "Resource:" in text and "aws_s3_bucket.logs" in text
+
+
+def test_environment_line_when_labeled():
+    text = format_slack_message(_case(drifts=[_drift()], environment="prod-aws"))["text"]
+    assert "Environment:" in text and "prod-aws" in text
+
+
+def test_no_environment_line_by_default():
+    assert "Environment:" not in format_slack_message(_case())["text"]
 
 
 def test_format_payload_is_json_serializable_dict():

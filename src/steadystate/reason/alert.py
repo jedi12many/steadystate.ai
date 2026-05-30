@@ -66,3 +66,23 @@ class Alert:
     # (Prometheus today). Populated only when enrichment runs and the resource is failing
     # right now; None otherwise, so the stateless / un-enriched path is unchanged.
     runtime_context: str | None = None
+    # Operator-set scan label identifying *which environment* this came from (e.g. "prod-aws"),
+    # stamped from `scan --label` after the pipeline. None when unset (the pipeline stays pure),
+    # so surfaces show an environment line only when the operator asked for one.
+    environment: str | None = None
+
+    @property
+    def resources(self) -> list[str]:
+        """The identities of the resources this alert concerns -- its drifts' identities, else
+        its policy findings'. What a surface shows so an operator knows *which* resource drifted,
+        not merely that something did."""
+        if self.drifts:
+            return [drift.identity for drift in self.drifts]
+        return [finding.identity for finding in self.findings]
+
+    def resource_label(self, limit: int = 5) -> str:
+        """A compact 'which resources' string for surfaces: the identities, capped with a +N."""
+        names = self.resources
+        shown = ", ".join(names[:limit])
+        extra = len(names) - limit
+        return f"{shown} (+{extra} more)" if extra > 0 else shown

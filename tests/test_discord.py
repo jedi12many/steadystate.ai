@@ -92,6 +92,19 @@ def test_format_omits_references_when_absent():
     assert "References" not in _fields(_embed(format_discord_message(_case())))
 
 
+def test_resource_field_shows_which_resource_drifted():
+    assert _fields(_embed(format_discord_message(_case())))["Resource"] == "aws_s3_bucket.logs"
+
+
+def test_environment_field_when_labeled():
+    fields = _fields(_embed(format_discord_message(_case(environment="prod-aws"))))
+    assert fields["Environment"] == "prod-aws"
+
+
+def test_no_environment_field_by_default():
+    assert "Environment" not in _fields(_embed(format_discord_message(_case())))
+
+
 def test_footer_carries_the_fingerprint_for_slash_approval():
     embed = _embed(format_discord_message(_case()))
     assert _case().drifts[0].fingerprint in embed["footer"]["text"]

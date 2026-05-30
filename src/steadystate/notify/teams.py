@@ -49,10 +49,14 @@ def format_teams_message(alert: Alert) -> dict:
         {"title": "Severity", "value": alert.severity.value},
         {"title": "Tier", "value": alert.layer.value},
     ]
+    if alert.environment:  # which environment this scan came from (scan --label)
+        facts.append({"title": "Environment", "value": alert.environment})
     if alert.drifts:  # source lives on the first drift's provenance, if we have one
         facts.append({"title": "Source", "value": alert.drifts[0].provenance.source})
     elif alert.findings:  # a standing-policy Alert has no drift; source is on the finding
         facts.append({"title": "Source", "value": alert.findings[0].provenance.source})
+    if alert.resources:  # *which* resource(s) drifted -- the identity an operator triages on
+        facts.append({"title": "Resource", "value": alert.resource_label()})
     if alert.flagged_by is not None:  # omit the fact entirely when nothing flagged it
         facts.append({"title": "Flagged by", "value": alert.flagged_by})
     if alert.references:  # omit the fact entirely when nothing mapped

@@ -44,6 +44,47 @@ def test_build_surfaces_unknown_raises_valueerror():
         build_surfaces(["console", "nope"])
 
 
+def test_alert_resources_and_label_cap():
+    from steadystate.model import ChangeType, Drift, Provenance
+    from steadystate.reason.alert import Alert, Severity
+
+    def drift(i: int) -> Drift:
+        return Drift(
+            identity=f"aws_instance.web{i}",
+            kind="aws_instance",
+            change_type=ChangeType.MODIFIED,
+            provenance=Provenance(source="terraform"),
+        )
+
+    one = Alert(title="t", severity=Severity.HIGH, drifts=[drift(0)], why_it_matters="w")
+    assert one.resources == ["aws_instance.web0"]
+    assert one.resource_label() == "aws_instance.web0"
+
+    many = Alert(
+        title="t", severity=Severity.HIGH, drifts=[drift(i) for i in range(7)], why_it_matters="w"
+    )
+    assert many.resource_label(limit=5).endswith("(+2 more)")  # caps the list, counts the rest
+
+
+def test_alert_resources_fall_back_to_policy_findings():
+    from steadystate.domains.base import PolicyFinding, Severity
+    from steadystate.model import Provenance
+    from steadystate.reason.alert import Alert
+
+    finding = PolicyFinding(
+        rule_id="CIS-Docker-5.4",
+        identity="service:web",
+        provenance=Provenance(source="docker-compose"),
+        severity=Severity.HIGH,
+        title="web runs privileged",
+        detail="privileged: true",
+    )
+    alert = Alert(
+        title="t", severity=Severity.HIGH, drifts=[], why_it_matters="w", findings=[finding]
+    )
+    assert alert.resources == ["service:web"]  # no drift -> the policy finding's identity
+
+
 def test_cli_rejects_unknown_to_value(tmp_path):
     # Robust end-to-end check: an unknown --to is a clean non-zero CLI exit, not a
     # stack trace. Skipped only if the CLI test deps aren't importable.

@@ -89,6 +89,13 @@ class ConsoleSurface:
             if len(alert.drifts) > 1:
                 title += f"  |  {len(alert.drifts)} correlated"
             body = f"[{style}]{alert.severity.value.upper()}[/{style}]  {alert.why_it_matters}"
+            where = []
+            if alert.environment:  # which environment this scan came from (scan --label)
+                where.append(f"[bold]env:[/bold] {alert.environment}")
+            if alert.resources:  # *which* resource(s) drifted -- the identity to triage on
+                where.append(f"[bold]resource:[/bold] {alert.resource_label()}")
+            if where:
+                body += "\n\n" + "   ".join(where)
             if alert.recommended_action:
                 body += f"\n\n[bold]Next:[/bold] {alert.recommended_action}"
             chips = _reference_chips(alert)
