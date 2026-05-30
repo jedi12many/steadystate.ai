@@ -27,6 +27,8 @@ def _inputs(tmp_path):
         "terraform": _sample(tmp_path, "plan.json", {"resource_changes": []}),
         "argocd": _sample(tmp_path, "app.json", {"status": {"resources": []}}),
         "docker-compose": _sample(tmp_path, "compose.json", {"config": {"services": {}}, "ps": []}),
+        "k8s": _sample(tmp_path, "k8s.json", {"declared": [], "observed": []}),
+        "rancher": _sample(tmp_path, "gitrepo.json", {"status": {"resources": []}}),
     }
 
 
