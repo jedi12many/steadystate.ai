@@ -14,6 +14,7 @@ import json
 from collections.abc import Callable
 from pathlib import Path
 
+from .ansible import AnsibleSource
 from .argocd import ArgoCDSource
 from .base import Capabilities, DriftSource
 from .docker_compose import DockerComposeSource
@@ -30,6 +31,11 @@ def _terraform(path: Path) -> DriftSource:
 
 def _argocd(path: Path) -> DriftSource:
     return ArgoCDSource(app=json.loads(path.read_text()))
+
+
+def _ansible(path: Path) -> DriftSource:
+    # A FILE = captured `ANSIBLE_STDOUT_CALLBACK=json ansible-playbook --check --diff` output.
+    return AnsibleSource(result=json.loads(path.read_text()))
 
 
 def _rancher(path: Path) -> DriftSource:
@@ -60,6 +66,7 @@ def _k8s(path: Path) -> DriftSource:
 DRIFT_SOURCES: dict[str, Callable[[Path], DriftSource]] = {
     "terraform": _terraform,
     "argocd": _argocd,
+    "ansible": _ansible,
     "docker-compose": _docker_compose,
     "k8s": _k8s,
     "rancher": _rancher,
@@ -70,6 +77,7 @@ DRIFT_SOURCES: dict[str, Callable[[Path], DriftSource]] = {
 CAPABILITIES: dict[str, Capabilities] = {
     "terraform": TerraformSource.commands,
     "argocd": ArgoCDSource.commands,
+    "ansible": AnsibleSource.commands,
     "docker-compose": DockerComposeSource.commands,
     "k8s": KubernetesSource.commands,
     "rancher": RancherSource.commands,
