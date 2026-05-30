@@ -91,12 +91,17 @@ def _open_store(state: Path) -> StateStore:
     return StateStore(state)
 
 
-def _record_suggestions(store: StateStore, source: str, path: Path, report, now: datetime) -> None:
-    """Under `--autonomy suggest`, offer an eligible remediation per drift for approval. An
-    observe-only source (no executor) has nothing to suggest."""
+def _record_suggestions(
+    store: StateStore, source: str, path: Path, report, now: datetime
+) -> list[str]:
+    """Under `--autonomy suggest`/`auto`, offer an eligible remediation per drift. Returns the
+    fingerprints recorded (what `auto` then applies). An observe-only source (no executor) has
+    nothing to suggest. Only `plan.eligible` drifts are recorded -- a REMOVED drift, which would
+    destroy a live resource, is never eligible, so it can never reach the auto-apply path."""
     executor = build_executor(source, path)
     if executor is None:
-        return
+        return []
+    recorded: list[str] = []
     for alert in report.alerts:
         for drift in alert.drifts:
             plan = executor.plan_for(drift)
@@ -111,6 +116,28 @@ def _record_suggestions(store: StateStore, source: str, path: Path, report, now:
                     ),
                     now,
                 )
+                recorded.append(drift.fingerprint)
+    return recorded
+
+
+def _auto_apply(store: StateStore, fingerprints: list[str]) -> None:
+    """Under `--autonomy auto`, run each eligible pending remediation through the SAME guardrailed
+    approval core a human `approve` uses. The LLM is never in this decision: eligibility is
+    deterministic (act/plan.py), so a hallucinated analysis can't trigger an apply, and a REMOVED
+    drift is never eligible, so auto never destroys. Each apply is recorded as actor "auto"."""
+    if not fingerprints:
+        typer.echo("autonomy=auto: nothing eligible to apply.")
+        return
+    typer.echo(f"autonomy=auto: applying {len(fingerprints)} eligible remediation(s).")
+    results = []
+    for fingerprint in fingerprints:
+        message, result = apply_pending(store, fingerprint, "auto")
+        if result is not None:
+            results.append((result.plan, result))
+        else:  # drift already cleared, or an observe-only source slipped through
+            typer.echo(f"  {fingerprint}: {message}")
+    if results:
+        ConsoleSurface().emit_remediations(results)
 
 
 @app.command()
@@ -172,12 +199,18 @@ def scan(
         "observe",
         "--autonomy",
         help="observe (alert only, default) | suggest (record an eligible remediation per "
-        "drift to approve/decline later). Acting is always behind the executor guardrails.",
+        "drift to approve/decline later) | auto (apply every eligible remediation now -- "
+        "guardrailed, never destroys, LLM not in the decision). Acting is always behind the "
+        "executor guardrails.",
     ),
 ) -> None:
     """Scan declared state for drift and surface the Alerts."""
-    if autonomy not in ("observe", "suggest"):
-        raise typer.BadParameter("autonomy must be: observe | suggest")
+    if autonomy not in ("observe", "suggest", "auto"):
+        raise typer.BadParameter("autonomy must be: observe | suggest | auto")
+    if autonomy == "auto" and stateless:
+        raise typer.BadParameter(
+            "--autonomy auto needs the state store for its audit trail; remove --stateless."
+        )
     surfaces = _surfaces([name.strip() for name in to.split(",") if name.strip()])
     level = _tuning(tuning)
     # --no-llm forces the kill switch; otherwise the analyst reads STEADYSTATE_LLM_ENABLED.
@@ -213,8 +246,10 @@ def scan(
             with contextlib.suppress(Exception):
                 for call in analyst.calls:
                     store.record_llm_call(call, now)
-            if autonomy == "suggest":  # offer an eligible remediation per drift for approval
-                _record_suggestions(store, source, path, report, now)
+            if autonomy in ("suggest", "auto"):  # offer an eligible remediation per drift
+                recorded = _record_suggestions(store, source, path, report, now)
+                if autonomy == "auto":  # ...and, on auto, apply them through the same guardrails
+                    _auto_apply(store, recorded)
     for surface in surfaces:
         surface.emit(report, resolved=resolved)
 

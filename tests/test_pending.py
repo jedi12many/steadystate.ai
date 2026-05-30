@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import UTC, datetime
 
@@ -124,3 +125,61 @@ def test_approve_runs_the_executor_and_marks_approved(tmp_path):
     assert result.exit_code == 0
     with StateStore(db) as store:
         assert store.get_pending(fp).status == APPROVED
+
+
+# -- the scan -> auto-apply flow ------------------------------------------------
+
+
+def _auto_scan(tmp_path, plan_obj=_PLAN, source="terraform", extra=None):
+    plan = tmp_path / "plan.json"
+    plan.write_text(json.dumps(plan_obj))
+    db = tmp_path / "state.db"
+    args = ["scan", str(plan), "--source", source, "--autonomy", "auto",
+            "--state", str(db), "--to", "console"]  # fmt: skip
+    return _runner().invoke(app, args + (extra or [])), db
+
+
+# The _PLAN drift's fingerprint: sha256(source|identity|change_type) -- see model.Drift.
+_FP = hashlib.sha256(b"terraform|aws_s3_bucket.logs|modified").hexdigest()
+
+
+def test_auto_applies_an_eligible_drift_without_a_human(tmp_path):
+    # auto records the eligible MODIFIED drift AND drives it through the same guardrailed
+    # approval core -- so it lands APPROVED, actored "auto", with nothing left pending.
+    result, db = _auto_scan(tmp_path)
+    assert result.exit_code == 0
+    assert "autonomy=auto" in result.stdout
+    with StateStore(db) as store:
+        assert store.all_pending() == []  # applied, not left pending
+        action = store.get_pending(_FP)
+    assert action is not None
+    assert action.status == APPROVED and action.actor == "auto"
+
+
+def test_auto_never_applies_a_removed_drift(tmp_path):
+    # A delete is never eligible (it would destroy a live resource), so auto records nothing
+    # and applies nothing -- the deterministic guardrail, not the LLM, is the floor.
+    removed = {
+        "resource_changes": [
+            {
+                "address": "aws_s3_bucket.logs",
+                "type": "aws_s3_bucket",
+                "change": {"actions": ["delete"], "before": {"x": 1}, "after": None},
+            }
+        ]
+    }
+    result, db = _auto_scan(tmp_path, plan_obj=removed)
+    assert result.exit_code == 0
+    assert "nothing eligible to apply" in result.stdout
+    with StateStore(db) as store:
+        assert store.all_pending() == []
+
+
+def test_auto_rejects_stateless(tmp_path):
+    plan = tmp_path / "plan.json"
+    plan.write_text(json.dumps(_PLAN))
+    result = _runner().invoke(
+        app, ["scan", str(plan), "--autonomy", "auto", "--stateless", "--to", "console"]
+    )
+    assert result.exit_code != 0
+    assert "stateless" in result.stdout.lower() or "stateless" in str(result.output).lower()
