@@ -10,12 +10,14 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from .base import InboundAdapter
+from .discord import DiscordInbound
 from .slack import SlackInbound
 
 # name -> zero-arg factory -> InboundAdapter. Each reads its signing secret / public key from
 # the environment (like the outbound surfaces read their webhooks), so all are zero-arg.
 INBOUND: dict[str, Callable[[], InboundAdapter]] = {
     "slack": SlackInbound,
+    "discord": DiscordInbound,
 }
 
 __all__ = ["INBOUND", "build_inbound"]

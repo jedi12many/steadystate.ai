@@ -6,7 +6,7 @@ You already declared what your infrastructure *should* be — in Terraform, Ansi
 
 It is **not** another dashboard to babysit. Steady state is silence; you only hear from it when something has drifted in a way worth your attention.
 
-> **Status:** the full loop works — **detect → reason → surface → suggest → approve → act**, up to `--autonomy auto` self-healing — across six sources and three clouds. Approvals come back through a provider-agnostic inbound seam (Slack today). More chat adapters (Discord, Teams) and a remediation audit log are the next increments.
+> **Status:** the full loop works — **detect → reason → surface → suggest → approve → act**, up to `--autonomy auto` self-healing — across six sources and three clouds. Approvals come back through a provider-agnostic inbound seam (Slack and Discord). A Teams inbound adapter and a remediation audit log are the next increments.
 
 ## The idea
 
@@ -40,7 +40,7 @@ No agent to install, no dashboard to learn. Point it at your IaC.
 
 ## Surfaces — out (`--to`)
 
-`console` · `slack` · `teams` (alerts) · `prometheus` (Pushgateway metrics, incl. LLM cost) · `grafana` (annotations). An unconfigured surface says so once and skips — it never pretends it delivered.
+`console` · `slack` · `teams` · `discord` (alerts) · `prometheus` (Pushgateway metrics, incl. LLM cost) · `grafana` (annotations). An unconfigured surface says so once and skips — it never pretends it delivered.
 
 ## Enrichment — live health in
 
@@ -53,7 +53,7 @@ A human-set level; the deterministic guardrails are the floor under *all* of it.
 - `--autonomy observe` (default) — alert only.
 - `--autonomy suggest` — record an eligible remediation per drift; approve/decline it later:
   - **from the terminal:** `steadystate pending` → `steadystate approve <fingerprint>` / `decline <fingerprint>`.
-  - **from chat:** alerts carry **Approve/Decline** buttons; run `steadystate listen --from <channel>` (Slack today — the inbound seam is provider-agnostic) and point your chat app's interactivity URL at it — tap Approve from your phone and the same gated remediation runs.
+  - **from chat:** run `steadystate listen --from <channel>` and point your chat app's interactivity URL at it, then approve from your phone — the same gated remediation runs. **Slack:** tap the Approve/Decline button on the alert (HMAC-verified). **Discord:** type `/steadystate approve <fingerprint>` (Ed25519-verified; needs `pip install steadystate[discord]` + a Discord app — see [deploy/discord/](./deploy/discord/)).
 - `--autonomy auto` — apply every eligible remediation *now*, through the **same** guardrailed core a human approval uses (recorded as actor `auto`). This is the self-healing end state, and it's safe by construction: the apply gate is **deterministic** ([act/plan.py](src/steadystate/act/plan.py)), so the LLM is never in the decision, and a `REMOVED` drift is never eligible — auto reconciles *toward declared config*, it never destroys a live resource. It needs the state store for its audit trail, so `--stateless` is rejected.
 
 Acting is per-plugin: a source with an executor (terraform, ansible) can remediate; others are observe-only by declaration.
