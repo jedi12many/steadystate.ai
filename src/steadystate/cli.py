@@ -139,11 +139,18 @@ def scan(
         help="Skip the state store entirely: a pure, amnesiac scan (no memory, no "
         "suppression, no new/resolved markers).",
     ),
+    no_llm: bool = typer.Option(
+        False,
+        "--no-llm",
+        help="Kill switch: make no LLM calls this scan (correlation degrades to "
+        "deterministic, analysis to drift facts). Same as STEADYSTATE_LLM_ENABLED=false.",
+    ),
 ) -> None:
     """Scan declared state for drift and surface the Alerts."""
     surfaces = _surfaces([name.strip() for name in to.split(",") if name.strip()])
     level = _tuning(tuning)
-    analyst = LLMAnalyst()
+    # --no-llm forces the kill switch; otherwise the analyst reads STEADYSTATE_LLM_ENABLED.
+    analyst = LLMAnalyst(enabled=False if no_llm else None)
     grouping = _correlator(correlator, analyst)
     enricher = _enricher(enrich)
     src = _drift_source(source, path)
@@ -153,6 +160,7 @@ def scan(
     # ArgoCD) don't, so they contribute no baseline findings -- guard rather than assume.
     resources = src.collect_declared() if isinstance(src, StateSource) else []
     report = Pipeline(analyst=analyst, tuning=level, correlator=grouping).run(drifts, resources)
+    report.llm_calls = analyst.calls  # this scan's LLM spend, for the prometheus surface
     # Observability enrichment runs between run() and the state reconcile + emit, so a
     # severity bumped by a currently-failing resource flows into BOTH the state store and
     # the surfaces. None (--enrich none, the default) skips it; the enricher honestly

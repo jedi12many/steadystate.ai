@@ -23,6 +23,7 @@ import urllib.request
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
+from ..reason.cost import cost_usd, roll_up
 from ..reason.report import Report
 
 if TYPE_CHECKING:
@@ -81,6 +82,25 @@ def format_prometheus_metrics(
     lines.append("# HELP steadystate_last_scan_timestamp_seconds Unix time of this scan.")
     lines.append("# TYPE steadystate_last_scan_timestamp_seconds gauge")
     lines.append(f"steadystate_last_scan_timestamp_seconds {now}")
+
+    # LLM spend for this scan: a top-line total (always emitted, 0 when no model was used)
+    # plus a per-caller breakdown. Priced from the scan's recorded token counts.
+    total_cost = sum(cost_usd(c) for c in report.llm_calls)
+    lines.append(
+        "# HELP steadystate_llm_cost_usd_total Estimated USD spent on LLM calls this scan."
+    )
+    lines.append("# TYPE steadystate_llm_cost_usd_total gauge")
+    lines.append(f"steadystate_llm_cost_usd_total {total_cost}")
+
+    lines.append("# HELP steadystate_llm_calls_total LLM calls made this scan (incl. failures).")
+    lines.append("# TYPE steadystate_llm_calls_total gauge")
+    lines.append(f"steadystate_llm_calls_total {len(report.llm_calls)}")
+
+    lines.append("# HELP steadystate_llm_cost_usd Estimated USD spent this scan, by caller.")
+    lines.append("# TYPE steadystate_llm_cost_usd gauge")
+    for row in roll_up(report.llm_calls):  # only callers that actually spent this scan
+        label = _escape_label_value(row.caller)
+        lines.append(f'steadystate_llm_cost_usd{{caller="{label}"}} {row.cost_usd}')
 
     return "\n".join(lines) + "\n"  # exposition format ends with a trailing newline
 

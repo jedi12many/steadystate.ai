@@ -9,6 +9,7 @@ import logging
 
 from steadystate.notify.prometheus import PrometheusSurface, format_prometheus_metrics
 from steadystate.reason.alert import Alert, Layer, Severity
+from steadystate.reason.cost import LlmCall
 from steadystate.reason.report import Report
 
 _PINNED = 1_700_000_000.0  # a fixed unix time so exposition output is stable
@@ -189,3 +190,36 @@ def test_constructor_arg_overrides_missing_env(monkeypatch):
     surface = PrometheusSurface(pushgateway_url="http://pushgw.test:9091")
     assert surface.pushgateway_url == "http://pushgw.test:9091"
     assert surface.job == "steadystate"  # default job name
+
+
+# -- LLM spend metrics ----------------------------------------------------------
+
+
+def test_metrics_include_llm_cost_total_and_per_caller():
+    report = Report(
+        items=[_case()],
+        llm_calls=[
+            LlmCall(
+                "correlate", "anthropic", "claude-sonnet-4-6", input_tokens=1000, output_tokens=500
+            ),
+            LlmCall("correlate", "anthropic", "claude-sonnet-4-6", succeeded=False),  # failure row
+            LlmCall(
+                "analyze", "anthropic", "claude-opus-4-8", input_tokens=1000, output_tokens=1000
+            ),
+        ],
+    )
+    text = format_prometheus_metrics(report, now=_PINNED)
+
+    assert float(_value(text, "steadystate_llm_cost_usd_total")) > 0
+    assert _value(text, "steadystate_llm_calls_total") == "3"  # failures counted
+    lines = _metric_lines(text)
+    assert any('steadystate_llm_cost_usd{caller="correlate"}' in ln for ln in lines)
+    assert any('steadystate_llm_cost_usd{caller="analyze"}' in ln for ln in lines)
+
+
+def test_metrics_zero_llm_cost_when_no_calls():
+    text = format_prometheus_metrics(Report(items=[_case()]), now=_PINNED)
+    assert _value(text, "steadystate_llm_cost_usd_total") == "0"
+    assert _value(text, "steadystate_llm_calls_total") == "0"
+    # No per-caller breakdown when nothing was spent.
+    assert not any("steadystate_llm_cost_usd{caller=" in ln for ln in _metric_lines(text))

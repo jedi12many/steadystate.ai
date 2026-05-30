@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from .alert import Alert, Layer, Severity
+from .cost import LlmCall
 
 
 class Tuning(str, Enum):
@@ -49,6 +50,9 @@ class Report:
 
     items: list[Alert] = field(default_factory=list)
     tuning: Tuning = Tuning.DEFAULT
+    # This scan's LLM calls, attached by the CLI after run() (the pure pipeline leaves it
+    # empty). The Prometheus surface turns it into spend metrics; everyone else ignores it.
+    llm_calls: list[LlmCall] = field(default_factory=list)
 
     @property
     def alerts(self) -> list[Alert]:
