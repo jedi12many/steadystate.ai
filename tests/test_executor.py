@@ -150,6 +150,7 @@ def test_verified_true_when_residual_drift_clears(monkeypatch):
 
 def test_verified_false_when_drift_still_present(monkeypatch):
     # Post-apply re-collection STILL contains the identity -> applied but not verified.
+    monkeypatch.setattr("steadystate.act.terraform.time.sleep", lambda *_: None)  # no real waits
     calls: list[list[str]] = []
     _patch_subprocess(monkeypatch, calls)
     drift = _drift(ChangeType.MODIFIED)
@@ -196,3 +197,46 @@ def test_assess_modified_eligible_medium_and_targets_address():
     assert plan.eligible is True
     assert plan.risk is Risk.MEDIUM
     assert "aws_s3_bucket.logs" in plan.command
+
+
+# -- verify retry: cloud settings are eventually consistent ---------------------
+
+
+def test_verify_retries_through_propagation_lag(monkeypatch):
+    # The apply took, but the first re-checks still read the pre-apply value (cloud lag);
+    # the drift clears on a later attempt -> not still drifting.
+    monkeypatch.setattr("steadystate.act.terraform.time.sleep", lambda *_: None)
+    target = _drift(ChangeType.MODIFIED, "google_storage_bucket.sandbox")
+    other = _drift(ChangeType.MODIFIED, "x.other")
+    results = iter([[target], [target], [other]])  # drifts twice, then clears
+    assert TerraformExecutor._persists(lambda: next(results), target) is False
+
+
+def test_verify_reports_genuinely_persistent_drift(monkeypatch):
+    # A drift that survives every re-check (e.g. a provider that merged a set) stays not-verified.
+    monkeypatch.setattr("steadystate.act.terraform.time.sleep", lambda *_: None)
+    target = _drift(ChangeType.MODIFIED, "google_compute_firewall.ssh")
+    assert TerraformExecutor._persists(lambda: [target], target) is True
+
+
+def test_verify_clears_immediately_without_sleeping(monkeypatch):
+    slept: list[float] = []
+    monkeypatch.setattr("steadystate.act.terraform.time.sleep", lambda s: slept.append(s))
+    target = _drift(ChangeType.MODIFIED)
+    assert TerraformExecutor._persists(lambda: [], target) is False
+    assert slept == []  # cleared on the first check -> never waits
+
+
+def test_verify_ignores_non_actionable_refresh_drift(monkeypatch):
+    # After a clean apply a full plan can still list the resource as refresh-only drift
+    # (actionable=False -- terraform has nothing to apply). That must NOT count as still-drifting.
+    monkeypatch.setattr("steadystate.act.terraform.time.sleep", lambda *_: None)
+    target = _drift(ChangeType.MODIFIED, "google_storage_bucket.sandbox")
+    noise = Drift(
+        identity=target.identity,
+        kind="google_storage_bucket",
+        change_type=ChangeType.MODIFIED,
+        provenance=Provenance(source="terraform", address=target.identity),
+        actionable=False,
+    )
+    assert TerraformExecutor._persists(lambda: [noise], target) is False

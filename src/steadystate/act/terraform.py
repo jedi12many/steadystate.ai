@@ -9,11 +9,26 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time
+from collections.abc import Callable
 from pathlib import Path
 
 from ..model import Drift
 from .base import RemediationResult
 from .plan import RemediationPlan, assess
+
+# Verifying a reconcile against real cloud infra has two traps a naive "is the resource still in
+# the drift list?" check falls into:
+#   1. Refresh-only noise. Right after a clean apply, a full `terraform plan` refresh often lists
+#      the resource under `resource_drift` (server-set fields, IAM/storage eventual consistency)
+#      while it is a no-op in `resource_changes` -- terraform has *nothing left to apply*. Those
+#      drifts are marked actionable=False, so the verify only counts ACTIONABLE residual drift.
+#   2. Propagation lag. A setting can briefly still read its pre-apply value, so even an actionable
+#      re-check can false-negative for a few seconds; we re-check a few times before concluding.
+# A genuinely-unreconciled drift (e.g. a provider that merged a set) stays actionable through every
+# attempt and is still honestly reported as "applied, not verified".
+_VERIFY_ATTEMPTS = 3
+_VERIFY_DELAY_SECONDS = 4.0
 
 
 class TerraformExecutor:
@@ -87,5 +102,19 @@ class TerraformExecutor:
     def _still_drifting(self, drift: Drift) -> bool:
         from ..sources.terraform import TerraformSource
 
-        residual = TerraformSource(working_dir=self.working_dir).collect_drift()
-        return any(d.identity == drift.identity for d in residual)
+        source = TerraformSource(working_dir=self.working_dir)
+        return self._persists(source.collect_drift, drift)
+
+    @staticmethod
+    def _persists(collect: Callable[[], list[Drift]], drift: Drift) -> bool:
+        """True iff ``drift`` is still present after a few re-checks. Returns False as soon as it
+        clears (the apply took, allowing for cloud propagation lag); True only if it survives every
+        attempt. No subprocess here, so the retry policy is unit-testable with a fake collect."""
+        for attempt in range(_VERIFY_ATTEMPTS):
+            # Only an *actionable* residual counts: terraform would still change it. A refresh-only
+            # entry (actionable=False) means the reconcile took -- nothing left to apply.
+            if not any(d.identity == drift.identity and d.actionable for d in collect()):
+                return False
+            if attempt < _VERIFY_ATTEMPTS - 1:
+                time.sleep(_VERIFY_DELAY_SECONDS)
+        return True
