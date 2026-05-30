@@ -99,7 +99,9 @@ def test_footer_carries_the_fingerprint_for_slash_approval():
 
 def test_no_footer_without_a_fingerprint():
     bare = _embed(
-        format_discord_message(Alert(title="t", severity=Severity.LOW, why_it_matters="w"))
+        format_discord_message(
+            Alert(title="t", severity=Severity.LOW, drifts=[], why_it_matters="w")
+        )
     )
     assert "footer" not in bare
 
