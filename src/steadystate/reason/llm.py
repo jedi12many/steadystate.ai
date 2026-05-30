@@ -22,6 +22,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 
+from .._http import safe_urlopen
 from ..model import Drift
 from .cost import LlmCall
 
@@ -307,7 +308,7 @@ class LLMAnalyst:
             },
             method="POST",
         )
-        with urllib.request.urlopen(request, timeout=self.timeout) as response:
+        with safe_urlopen(request, timeout=self.timeout) as response:
             payload = json.loads(response.read())
         self._record("analyze", "openai", self._openai_usage(payload), succeeded=True)
         text = payload["choices"][0]["message"]["content"].strip()
@@ -393,7 +394,7 @@ class LLMAnalyst:
             },
             method="POST",
         )
-        with urllib.request.urlopen(request, timeout=self.timeout) as response:
+        with safe_urlopen(request, timeout=self.timeout) as response:
             payload = json.loads(response.read())
         self._record(caller, "openai", self._openai_usage(payload), succeeded=True)
         return payload["choices"][0]["message"]["content"].strip()

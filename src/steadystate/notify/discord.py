@@ -23,6 +23,7 @@ import urllib.request
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
+from .._http import safe_urlopen
 from ..reason.alert import Alert
 from ..reason.report import Report
 
@@ -135,7 +136,7 @@ class DiscordSurface:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+            with safe_urlopen(request, timeout=self.timeout) as response:
                 response.read()
         except (urllib.error.URLError, OSError) as exc:
             logger.warning("Discord delivery failed: %s", exc)

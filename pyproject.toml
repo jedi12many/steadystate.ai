@@ -23,6 +23,7 @@ dev = [
     "pytest-cov>=5",
     "build>=1.2",
     "twine>=5",
+    "bandit[toml]>=1.7",
 ]
 
 [project.scripts]
@@ -53,6 +54,19 @@ ignore = ["UP042"]
 [tool.ruff.lint.flake8-bugbear]
 # Typer's API intentionally puts Argument()/Option() in parameter defaults.
 extend-immutable-calls = ["typer.Argument", "typer.Option"]
+
+[tool.bandit]
+# Findings reviewed and accepted as inherent to the design (all LOW severity):
+#   B404 / B603 -- we shell out to terraform/kubectl/docker/ansible by necessity; the argv is
+#                  always a list and we never pass shell=True, so there's no shell-injection
+#                  surface (a weird arg is one opaque token, not a command).
+#   B607        -- those tools are resolved on PATH on purpose: a CLI wrapper can't hardcode an
+#                  absolute path that's valid across every operator's machine.
+#   B101        -- the asserts are type-narrowing guards (`assert x is not None`) the callers
+#                  already enforce; stripped under -O they degrade to a clear error, not a risk.
+# MEDIUM findings are handled inline at the call site, not skipped: B104 (a detection literal,
+# not a bind) and B310 (every urlopen goes through _http.safe_urlopen, which allow-lists http(s)).
+skips = ["B101", "B404", "B603", "B607"]
 
 [tool.mypy]
 # Deliberately lenient: a green gate on the current tree, not a type crusade.
