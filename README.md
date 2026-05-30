@@ -6,7 +6,7 @@ You already declared what your infrastructure *should* be — in Terraform, Ansi
 
 It is **not** another dashboard to babysit. Steady state is silence; you only hear from it when something has drifted in a way worth your attention.
 
-> **Status:** the full loop works — **detect → reason → surface → suggest → approve → act** — across six sources and three clouds. Auto-apply and a Teams inbound adapter are the next increments.
+> **Status:** the full loop works — **detect → reason → surface → suggest → approve → act**, up to `--autonomy auto` self-healing — across six sources and three clouds. A generalized inbound seam (Teams/email approval) and a remediation audit log are the next increments.
 
 ## The idea
 
@@ -46,7 +46,7 @@ No agent to install, no dashboard to learn. Point it at your IaC.
 
 `--enrich prometheus` cross-references each alert against a PromQL query you supply; a drift on a resource that's **failing right now** pages louder (severity bumped). A flaky Prometheus never breaks a scan.
 
-## Autonomy — observe → suggest → (auto)
+## Autonomy — observe → suggest → auto
 
 A human-set level; the deterministic guardrails are the floor under *all* of it.
 
@@ -54,6 +54,7 @@ A human-set level; the deterministic guardrails are the floor under *all* of it.
 - `--autonomy suggest` — record an eligible remediation per drift; approve/decline it later:
   - **from the terminal:** `steadystate pending` → `steadystate approve <fingerprint>` / `decline <fingerprint>`.
   - **from chat:** alerts to Slack carry **Approve/Decline** buttons; run `steadystate listen` and point your Slack app's interactivity URL at it — tap Approve from your phone and the same gated remediation runs.
+- `--autonomy auto` — apply every eligible remediation *now*, through the **same** guardrailed core a human approval uses (recorded as actor `auto`). This is the self-healing end state, and it's safe by construction: the apply gate is **deterministic** ([act/plan.py](src/steadystate/act/plan.py)), so the LLM is never in the decision, and a `REMOVED` drift is never eligible — auto reconciles *toward declared config*, it never destroys a live resource. It needs the state store for its audit trail, so `--stateless` is rejected.
 
 Acting is per-plugin: a source with an executor (terraform, ansible) can remediate; others are observe-only by declaration.
 
