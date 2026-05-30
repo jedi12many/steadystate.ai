@@ -11,9 +11,7 @@ permissions:
 
 jobs:
   release:
-    # GitHub-HOSTED, never self-hosted: this job handles release credentials and
-    # must not run on the shared myconaid-fleet box. (CI runs self-hosted; release
-    # does not.) setup-python is fine here because hosted runners ship it.
+    # GitHub-hosted, isolated per job -- the right place for release credentials.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6

@@ -10,25 +10,24 @@ on:
 permissions:
   contents: read
 
-# Per-branch concurrency (fleet pattern): a newer push to the same ref cancels
-# the older run, freeing the shared self-hosted runner on rapid pushes.
+# Per-branch concurrency: a newer push to the same ref cancels the older run,
+# so rapid pushes don't queue up redundant CI.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   check:
-    # Self-hosted runners on the shared myconaid-k3s box (labels are
-    # repo-scoped, so this only routes to steadystate.ai's runners).
-    runs-on: [self-hosted, linux, x64]
+    # GitHub-hosted + isolated per job, so fork PRs run safely (no shared box).
+    runs-on: ubuntu-latest
     timeout-minutes: 15
-    # Keep untrusted fork PR code off the shared self-hosted fleet runner: only
-    # run on pushes and on PRs from branches in this repo. When the repo goes
-    # public, add a separate fork path on ubuntu-latest (GitHub-hosted) so
-    # outside contributors still get CI without touching the fleet box.
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     steps:
       - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          # The supported floor (pyproject requires-python >=3.11); passing here
+          # means we don't lean on any 3.12+-only behavior.
+          python-version: "3.11"
       - name: Set up venv + install
         run: |
           python3 -m venv .venv
