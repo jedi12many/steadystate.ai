@@ -143,6 +143,7 @@ def test_emit_post_uses_urllib_with_configured_url(monkeypatch):
     def _fake_urlopen(request, timeout=None):
         seen["url"] = request.full_url
         seen["content_type"] = request.headers.get("Content-type")
+        seen["user_agent"] = request.headers.get("User-agent")
         seen["has_auth"] = request.has_header("Authorization")
         seen["data"] = request.data
         return _Resp()
@@ -151,6 +152,8 @@ def test_emit_post_uses_urllib_with_configured_url(monkeypatch):
     surface.emit(Report(items=[_case()]))
     assert seen["url"] == "https://discord.test/api/webhooks/abc"
     assert seen["content_type"] == "application/json"
+    # A real UA -- Discord's edge 403s urllib's default "Python-urllib/x".
+    assert seen["user_agent"] and "urllib" not in seen["user_agent"].lower()
     assert seen["has_auth"] is False  # the webhook URL is itself the secret
     assert isinstance(seen["data"], bytes) and seen["data"]
 
