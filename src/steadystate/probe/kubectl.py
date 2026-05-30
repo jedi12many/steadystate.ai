@@ -1,10 +1,9 @@
 """Kubernetes health probe -- originate Symptoms for declared workloads.
 
-The originating counterpart to the kubectl *enricher* (reason/enrich.py): the same detection
-(`unhealthy_pods`), but instead of escalating an existing drift it produces a first-class
-`Symptom` for any *declared* workload whose pods are failing -- so a malfunction surfaces even
-with no drift, and correlates with a drift when there is one. Reads via `kubectl`; any failure
-degrades to "no symptoms" (never invent a problem, never break a scan).
+For any *declared* workload whose pods are failing (`unhealthy_pods`), produces a first-class
+`Symptom` -- so a malfunction surfaces even with no drift, and correlates with a drift when there
+is one. Reads via `kubectl`; any failure degrades to "no symptoms" (never invent a problem, never
+break a scan).
 """
 
 from __future__ import annotations
@@ -12,13 +11,65 @@ from __future__ import annotations
 import json
 import logging
 import subprocess
+from dataclasses import dataclass
 
 from ..model import Provenance, Resource
 from ..reason.alert import Severity
-from ..reason.enrich import PodHealth, unhealthy_pods
 from .base import Symptom
 
 logger = logging.getLogger(__name__)
+
+# Container waiting-state reasons that mean it can't run at all.
+_UNHEALTHY_WAITING = frozenset(
+    {
+        "CrashLoopBackOff",
+        "ImagePullBackOff",
+        "ErrImagePull",
+        "CreateContainerConfigError",
+        "CreateContainerError",
+        "RunContainerError",
+    }
+)
+_RESTART_THRESHOLD = 5  # restarts above this read as unhealthy even if currently Running
+
+
+@dataclass(frozen=True)
+class PodHealth:
+    """One unhealthy pod of a workload: its name, why, and its restart count."""
+
+    name: str
+    reason: str  # a bad waiting reason, "Failed", or "N restarts"
+    restarts: int
+
+
+def unhealthy_pods(pods: dict, workload: str) -> list[PodHealth]:
+    """The unhealthy pods belonging to ``workload`` in a ``kubectl get pods -o json`` document.
+
+    A pod belongs to the workload if its name is the workload or starts with ``<workload>-``
+    (the Deployment/ReplicaSet/StatefulSet/Job naming). Unhealthy = a container stuck in a known
+    bad waiting state, a Failed phase, or a restart count over the threshold. Pure + testable."""
+    out: list[PodHealth] = []
+    for pod in pods.get("items") or []:
+        name = (pod.get("metadata") or {}).get("name") or ""
+        if name != workload and not name.startswith(f"{workload}-"):
+            continue
+        status = pod.get("status") or {}
+        container_statuses = status.get("containerStatuses") or []
+        restarts = sum(int(cs.get("restartCount") or 0) for cs in container_statuses)
+        reason = ""
+        for cs in container_statuses:
+            waiting = (cs.get("state") or {}).get("waiting") or {}
+            if waiting.get("reason") in _UNHEALTHY_WAITING:
+                reason = waiting["reason"]
+                break
+        if not reason and status.get("phase") == "Failed":
+            reason = "Failed"
+        if not reason and restarts > _RESTART_THRESHOLD:
+            reason = f"{restarts} restarts"
+        if reason:
+            out.append(PodHealth(name=name, reason=reason, restarts=restarts))
+    return out
+
 
 # Waiting reasons where the container can't run at all -> HIGH. A flapping-but-running pod
 # (over the restart threshold, reason "N restarts") is MEDIUM.

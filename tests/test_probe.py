@@ -7,9 +7,13 @@ import pytest
 from steadystate.model import Provenance, Resource
 from steadystate.probe import PROBES, auto_prober_for, build_prober
 from steadystate.probe.base import Symptom
-from steadystate.probe.kubectl import KubectlProbe, category_and_severity
+from steadystate.probe.kubectl import (
+    KubectlProbe,
+    PodHealth,
+    category_and_severity,
+    unhealthy_pods,
+)
 from steadystate.reason.alert import Severity
-from steadystate.reason.enrich import PodHealth
 
 
 def _symptom(category: str = "CrashLoopBackOff", identity: str = "apps/Deployment/prod/web"):
@@ -29,6 +33,10 @@ def _pod(name: str, *, waiting: str | None = None, phase: str = "Running", resta
     container = {"restartCount": restarts, "state": state}
     status = {"phase": phase, "containerStatuses": [container]}
     return {"metadata": {"name": name}, "status": status}
+
+
+def _pods(*items: dict) -> dict:
+    return {"items": list(items)}
 
 
 def _resource(identity: str = "apps/Deployment/prod/web", source: str = "kubernetes") -> Resource:
@@ -51,6 +59,52 @@ def test_fingerprint_stable_and_distinct_per_category():
 def test_summary_reads_category_kind_identity():
     symptom = _symptom("CrashLoopBackOff")
     assert symptom.summary() == f"CrashLoopBackOff Deployment {symptom.identity}"
+
+
+# -- unhealthy_pods (pure) ------------------------------------------------------
+
+
+def test_detects_crashloop():
+    pods = _pods(_pod("web-abc-123", waiting="CrashLoopBackOff", restarts=7))
+    [health] = unhealthy_pods(pods, "web")
+    assert (health.name, health.reason, health.restarts) == ("web-abc-123", "CrashLoopBackOff", 7)
+
+
+def test_detects_image_pull_and_failed_phase():
+    pods = _pods(_pod("web-1", waiting="ImagePullBackOff"), _pod("web-2", phase="Failed"))
+    assert {p.reason for p in unhealthy_pods(pods, "web")} == {"ImagePullBackOff", "Failed"}
+
+
+def test_detects_restart_threshold_even_when_running():
+    [pod] = unhealthy_pods(_pods(_pod("web-x", phase="Running", restarts=6)), "web")
+    assert pod.reason == "6 restarts"
+
+
+def test_healthy_pods_are_ignored():
+    assert unhealthy_pods(_pods(_pod("web-ok", phase="Running", restarts=0)), "web") == []
+
+
+def test_matches_only_workload_pods_by_prefix():
+    pods = _pods(
+        _pod("web-abc", waiting="CrashLoopBackOff"),  # belongs to web
+        _pod("api-abc", waiting="CrashLoopBackOff"),  # a different workload
+    )
+    assert [p.name for p in unhealthy_pods(pods, "web")] == ["web-abc"]
+
+
+def test_aggregates_restarts_across_containers():
+    pod = {
+        "metadata": {"name": "web-1"},
+        "status": {
+            "phase": "Running",
+            "containerStatuses": [
+                {"restartCount": 3, "state": {}},
+                {"restartCount": 4, "state": {}},
+            ],
+        },
+    }
+    [health] = unhealthy_pods(_pods(pod), "web")
+    assert health.restarts == 7 and health.reason == "7 restarts"
 
 
 # -- category + severity (pure) -------------------------------------------------
