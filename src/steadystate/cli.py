@@ -21,7 +21,7 @@ from .reason.report import Tuning
 from .reconcile_state import reconcile
 from .sources import CAPABILITIES, DRIFT_SOURCES, build_drift_source
 from .sources.base import StateSource
-from .state import StateStore
+from .state import APPROVED, DECLINED, PENDING, PendingAction, StateStore
 
 DEFAULT_STATE_PATH = ".steadystate/state.db"
 
@@ -88,6 +88,28 @@ def _open_store(state: Path) -> StateStore:
     return StateStore(state)
 
 
+def _record_suggestions(store: StateStore, source: str, path: Path, report, now: datetime) -> None:
+    """Under `--autonomy suggest`, offer an eligible remediation per drift for approval. An
+    observe-only source (no executor) has nothing to suggest."""
+    executor = build_executor(source, path)
+    if executor is None:
+        return
+    for alert in report.alerts:
+        for drift in alert.drifts:
+            plan = executor.plan_for(drift)
+            if plan.eligible:
+                store.record_pending(
+                    PendingAction(
+                        fingerprint=drift.fingerprint,
+                        source=source,
+                        path=str(path),
+                        drift_identity=drift.identity,
+                        command=" ".join(plan.command),
+                    ),
+                    now,
+                )
+
+
 @app.command()
 def scan(
     path: Path = typer.Argument(
@@ -143,8 +165,16 @@ def scan(
         help="Kill switch: make no LLM calls this scan (correlation degrades to "
         "deterministic, analysis to drift facts). Same as STEADYSTATE_LLM_ENABLED=false.",
     ),
+    autonomy: str = typer.Option(
+        "observe",
+        "--autonomy",
+        help="observe (alert only, default) | suggest (record an eligible remediation per "
+        "drift to approve/decline later). Acting is always behind the executor guardrails.",
+    ),
 ) -> None:
     """Scan declared state for drift and surface the Alerts."""
+    if autonomy not in ("observe", "suggest"):
+        raise typer.BadParameter("autonomy must be: observe | suggest")
     surfaces = _surfaces([name.strip() for name in to.split(",") if name.strip()])
     level = _tuning(tuning)
     # --no-llm forces the kill switch; otherwise the analyst reads STEADYSTATE_LLM_ENABLED.
@@ -180,6 +210,8 @@ def scan(
             with contextlib.suppress(Exception):
                 for call in analyst.calls:
                     store.record_llm_call(call, now)
+            if autonomy == "suggest":  # offer an eligible remediation per drift for approval
+                _record_suggestions(store, source, path, report, now)
     for surface in surfaces:
         surface.emit(report, resolved=resolved)
 
@@ -333,6 +365,64 @@ def commands(
                 typer.echo(f"    {cmd}")
         else:
             typer.echo("    (none -- observe-only plugin)")
+
+
+@app.command()
+def pending(state: Path = _STATE_OPTION) -> None:
+    """List remediations awaiting approval (recorded by `scan --autonomy suggest`)."""
+    with _open_store(state) as store:
+        rows = store.all_pending()
+    if not rows:
+        typer.echo("no pending remediations.")
+        return
+    for p in rows:
+        typer.echo(f"{p.fingerprint}  {p.source}  {p.drift_identity}")
+        typer.echo(f"    would run: {p.command}")
+
+
+@app.command()
+def approve(
+    fingerprint: str = typer.Argument(
+        ..., help="The drift fingerprint to remediate (from `pending`)."
+    ),
+    actor: str = typer.Option("cli", "--actor", help="Who approved it (recorded for audit)."),
+    state: Path = _STATE_OPTION,
+) -> None:
+    """Approve a pending remediation: rebuild its source + executor and run it, guardrailed."""
+    with _open_store(state) as store:
+        action = store.get_pending(fingerprint)
+        if action is None or action.status != PENDING:
+            typer.echo("no pending remediation for that fingerprint.")
+            raise typer.Exit(1)
+        executor = build_executor(action.source, Path(action.path))
+        if executor is None:
+            raise typer.BadParameter(f"source '{action.source}' is observe-only; cannot remediate.")
+        # Re-collect from the same input and match the drift by fingerprint, so the executor's
+        # snapshot/verify run against the live drift (which may have already cleared).
+        drifts = _drift_source(action.source, Path(action.path)).collect_drift()
+        drift = next((d for d in drifts if d.fingerprint == fingerprint), None)
+        if drift is None:
+            store.set_pending_status(fingerprint, APPROVED, actor)
+            typer.echo("drift no longer present; nothing to do.")
+            return
+        result = executor.remediate(drift, confirm=True)
+        store.set_pending_status(fingerprint, APPROVED, actor)
+    ConsoleSurface().emit_remediations([(result.plan, result)])
+
+
+@app.command()
+def decline(
+    fingerprint: str = typer.Argument(..., help="The drift fingerprint to decline."),
+    actor: str = typer.Option("cli", "--actor", help="Who declined it (recorded for audit)."),
+    state: Path = _STATE_OPTION,
+) -> None:
+    """Decline a pending remediation: it won't be re-offered until you approve it later."""
+    with _open_store(state) as store:
+        if store.get_pending(fingerprint) is None:
+            typer.echo("no pending remediation for that fingerprint.")
+            raise typer.Exit(1)
+        store.set_pending_status(fingerprint, DECLINED, actor)
+    typer.echo(f"declined {fingerprint}")
 
 
 def main() -> None:

@@ -64,6 +64,26 @@ CREATE TABLE IF NOT EXISTS llm_calls (
 )
 """
 
+# Remediations offered for approval under `--autonomy suggest`, keyed by drift fingerprint.
+# An operator drives them with the approve/decline verbs. status: pending | approved | declined.
+_PENDING_SCHEMA = """
+CREATE TABLE IF NOT EXISTS pending_actions (
+    fingerprint    TEXT PRIMARY KEY,
+    source         TEXT NOT NULL,
+    path           TEXT NOT NULL,
+    drift_identity TEXT NOT NULL,
+    command        TEXT NOT NULL,
+    status         TEXT NOT NULL,
+    created_at     TEXT NOT NULL,
+    actor          TEXT
+)
+"""
+
+# Pending-action lifecycle.
+PENDING = "pending"
+APPROVED = "approved"
+DECLINED = "declined"
+
 
 def _iso(now: datetime) -> str:
     """ISO-8601 string for a tz-aware UTC datetime (the store's only time format)."""
@@ -85,6 +105,20 @@ class Finding:
     actor: str | None = None
 
 
+@dataclass(frozen=True)
+class PendingAction:
+    """A remediation offered for approval -- the gated command an `approve` would run."""
+
+    fingerprint: str  # the drift's fingerprint -- the same key the findings table uses
+    source: str  # so approve can rebuild the source + executor
+    path: str  # the scan input (terraform dir, captured file, ...) approve re-reads
+    drift_identity: str
+    command: str  # display: the eligible remediation command
+    status: str = PENDING  # overwritten by the store on read; default eases construction
+    created_at: str = ""  # the store stamps this on record
+    actor: str | None = None
+
+
 class StateStore:
     """A SQLite-backed memory of findings, keyed by Drift fingerprint.
 
@@ -100,6 +134,7 @@ class StateStore:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute(_SCHEMA)
         self._conn.execute(_LLM_SCHEMA)
+        self._conn.execute(_PENDING_SCHEMA)
 
     def close(self) -> None:
         self._conn.close()
@@ -343,6 +378,51 @@ class StateStore:
             ).fetchall()
         return [_row_to_llm_call(r) for r in rows]
 
+    # -- pending remediations (autonomy: suggest) -------------------------------
+
+    def record_pending(self, action: PendingAction, now: datetime) -> None:
+        """Offer a remediation for approval, keyed by drift fingerprint. A drift the operator
+        already declined is not re-offered; otherwise upsert it as pending (a recurred drift is
+        offered again), preserving the original created_at."""
+        existing = self.get_pending(action.fingerprint)
+        if existing is not None and existing.status == DECLINED:
+            return
+        created = existing.created_at if existing is not None else _iso(now)
+        self._conn.execute(
+            "INSERT OR REPLACE INTO pending_actions (fingerprint, source, path, "
+            "drift_identity, command, status, created_at, actor) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                action.fingerprint,
+                action.source,
+                action.path,
+                action.drift_identity,
+                action.command,
+                PENDING,
+                created,
+                None,
+            ),
+        )
+
+    def get_pending(self, fingerprint: str) -> PendingAction | None:
+        row = self._conn.execute(
+            "SELECT * FROM pending_actions WHERE fingerprint = ?", (fingerprint,)
+        ).fetchone()
+        return _row_to_pending(row) if row is not None else None
+
+    def all_pending(self) -> list[PendingAction]:
+        """Every action still awaiting a decision, oldest first."""
+        rows = self._conn.execute(
+            "SELECT * FROM pending_actions WHERE status = ? ORDER BY created_at, fingerprint",
+            (PENDING,),
+        ).fetchall()
+        return [_row_to_pending(r) for r in rows]
+
+    def set_pending_status(self, fingerprint: str, status: str, actor: str | None = None) -> None:
+        self._conn.execute(
+            "UPDATE pending_actions SET status = ?, actor = ? WHERE fingerprint = ?",
+            (status, actor, fingerprint),
+        )
+
 
 def _row_to_finding(row: sqlite3.Row) -> Finding:
     return Finding(
@@ -368,4 +448,17 @@ def _row_to_llm_call(row: sqlite3.Row) -> LlmCall:
         cache_creation_tokens=row["cache_creation_tokens"],
         cache_read_tokens=row["cache_read_tokens"],
         succeeded=bool(row["succeeded"]),
+    )
+
+
+def _row_to_pending(row: sqlite3.Row) -> PendingAction:
+    return PendingAction(
+        fingerprint=row["fingerprint"],
+        source=row["source"],
+        path=row["path"],
+        drift_identity=row["drift_identity"],
+        command=row["command"],
+        status=row["status"],
+        created_at=row["created_at"],
+        actor=row["actor"],
     )
