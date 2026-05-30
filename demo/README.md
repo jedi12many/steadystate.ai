@@ -1,8 +1,8 @@
 # steadystate.ai — demo walkthrough
 
-Three self-contained demos that show the product finding real problems. Two run anywhere
-(captured snapshots — exactly how the ArgoCD / Kubernetes integrations run in CI); the third
-runs against your own cloud.
+Four self-contained demos that show the product finding real problems. Three run anywhere
+(captured snapshots — exactly how the ArgoCD / Kubernetes / Ansible integrations run in CI); the
+last runs against your own cloud.
 
 **For a sharper, plain-English narrative**, set an LLM key and drop `--no-llm`:
 
@@ -56,7 +56,35 @@ Honest framing: config-exposure → technique, **not** behavioral detection.
 
 ---
 
-## 3. Live cloud — security exposure + the guardrailed fix (your own GCP/Terraform)
+## 3. Config management — fleet drift from an Ansible check (`ansible-fleet-drift.json`)
+
+The same engine, a completely different declared-state source: a playbook, not cloud IaC. An
+Ansible playbook *declares* how a fleet should be configured; `ansible-playbook --check --diff`
+reports what it *would* change against the servers as they are right now — and that check **is**
+the reconcile. steadystate rides its JSON output and turns each would-change task into a drift.
+
+```sh
+steadystate scan demo/ansible-fleet-drift.json --source ansible --label web-fleet --no-llm
+```
+
+The capture is a `--check --diff` run of a hardening playbook over a three-host web fleet —
+exactly what you'd pipe in from `ANSIBLE_STDOUT_CALLBACK=json ansible-playbook --check --diff`.
+**Four drifts**, surfaced per host and per setting:
+
+- **`web-01` — root SSH re-enabled** *and* **password auth re-enabled** (two hand-edits to
+  `sshd_config` the playbook would revert).
+- **`web-02` — root SSH re-enabled** (the same regression, on a second box).
+- **`web-03` — the host firewall (`nftables`) was stopped** (the playbook wants it running).
+
+That's the fleet at a glance: *which servers fell out of policy, and on exactly what* — instead
+of a wall of Ansible `changed` lines. Each is MEDIUM (a config modification); Ansible host-config
+drift is honest config-management drift, **not** mapped to ATT&CK — the cloud-exposure → technique
+mapping is the security packs' job (demos 1 and 3), not the playbook's. With an LLM key (drop
+`--no-llm`) the prose sharpens and related host drifts group by root cause.
+
+---
+
+## 4. Live cloud — security exposure + the guardrailed fix (your own GCP/Terraform)
 
 Run from a Terraform working directory. This **changes real infrastructure**, so use a sandbox.
 It induces two exposures out of band, lets steadystate catch them, fixes one through the
@@ -93,6 +121,7 @@ Validated on the `ssai-sandbox` GCP project: both exposures detected, the bucket
 |---|---|
 | ArgoCD incident | drift **+** malfunction **+** the correlation no monitor makes |
 | k8s Pod Security | standing security/compliance posture (CIS + ATT&CK), not just drift |
+| Ansible fleet drift | the same engine over a *non-cloud* source — playbook-declared host config across a fleet |
 | Live GCP | it works on real cloud — detect → approve → **verified** remediation → audit |
 
 Run `steadystate catalog` to see every plugin and command this build offers.

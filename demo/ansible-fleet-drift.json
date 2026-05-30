@@ -1,0 +1,90 @@
+{
+  "custom_stats": {},
+  "global_custom_stats": {},
+  "plays": [
+    {
+      "play": { "id": "harden", "name": "Harden web fleet" },
+      "tasks": [
+        {
+          "task": { "id": "t1", "name": "Forbid root SSH login (sshd_config)" },
+          "hosts": {
+            "web-01": {
+              "action": "ansible.builtin.lineinfile",
+              "changed": true,
+              "diff": [{ "before": "PermitRootLogin yes\n", "after": "PermitRootLogin no\n" }],
+              "invocation": { "module_name": "lineinfile" }
+            },
+            "web-02": {
+              "action": "ansible.builtin.lineinfile",
+              "changed": true,
+              "diff": [{ "before": "PermitRootLogin yes\n", "after": "PermitRootLogin no\n" }],
+              "invocation": { "module_name": "lineinfile" }
+            },
+            "web-03": {
+              "action": "ansible.builtin.lineinfile",
+              "changed": false,
+              "invocation": { "module_name": "lineinfile" }
+            }
+          }
+        },
+        {
+          "task": { "id": "t2", "name": "Require key-only SSH (PasswordAuthentication no)" },
+          "hosts": {
+            "web-01": {
+              "action": "ansible.builtin.lineinfile",
+              "changed": true,
+              "diff": [
+                { "before": "PasswordAuthentication yes\n", "after": "PasswordAuthentication no\n" }
+              ],
+              "invocation": { "module_name": "lineinfile" }
+            },
+            "web-02": {
+              "action": "ansible.builtin.lineinfile",
+              "changed": false,
+              "invocation": { "module_name": "lineinfile" }
+            },
+            "web-03": {
+              "action": "ansible.builtin.lineinfile",
+              "changed": false,
+              "invocation": { "module_name": "lineinfile" }
+            }
+          }
+        },
+        {
+          "task": { "id": "t3", "name": "Ensure host firewall (nftables) is running" },
+          "hosts": {
+            "web-01": {
+              "action": "ansible.builtin.service",
+              "changed": false,
+              "invocation": { "module_name": "service" }
+            },
+            "web-02": {
+              "action": "ansible.builtin.service",
+              "changed": false,
+              "invocation": { "module_name": "service" }
+            },
+            "web-03": {
+              "action": "ansible.builtin.service",
+              "changed": true,
+              "diff": [{ "before": { "state": "stopped" }, "after": { "state": "started" } }],
+              "invocation": { "module_name": "service" }
+            }
+          }
+        },
+        {
+          "task": { "id": "t4", "name": "Ensure auditd is installed" },
+          "hosts": {
+            "web-01": { "action": "ansible.builtin.package", "changed": false },
+            "web-02": { "action": "ansible.builtin.package", "changed": false },
+            "web-03": { "action": "ansible.builtin.package", "changed": false }
+          }
+        }
+      ]
+    }
+  ],
+  "stats": {
+    "web-01": { "changed": 2, "failures": 0, "ok": 4, "skipped": 0, "unreachable": 0 },
+    "web-02": { "changed": 1, "failures": 0, "ok": 4, "skipped": 0, "unreachable": 0 },
+    "web-03": { "changed": 1, "failures": 0, "ok": 4, "skipped": 0, "unreachable": 0 }
+  }
+}
