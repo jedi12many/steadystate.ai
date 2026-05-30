@@ -41,6 +41,10 @@ _SEVERITY_COLOR = {
 }
 _DEFAULT_COLOR = 0x95A5A6  # grey
 
+# Discord's Cloudflare edge rejects the default "Python-urllib/x" User-Agent with a 403; any
+# real product UA passes. (Discord asks API clients to identify themselves this way.)
+_USER_AGENT = "steadystate (+https://github.com/jedi12many/steadystate.ai)"
+
 
 def format_discord_message(alert: Alert) -> dict:
     """Build the webhook payload for one Alert. Pure + testable (no network).
@@ -105,7 +109,12 @@ class DiscordSurface:
         request = urllib.request.Request(
             self.webhook_url,
             data=data,
-            headers={"Content-Type": "application/json"},  # URL is the secret; no auth header
+            headers={
+                "Content-Type": "application/json",  # URL is the secret; no auth header
+                # Discord's edge (Cloudflare) 403s urllib's default "Python-urllib/x" UA, so
+                # we send a real product User-Agent. Slack/Teams don't gate on this.
+                "User-Agent": _USER_AGENT,
+            },
             method="POST",
         )
         try:
