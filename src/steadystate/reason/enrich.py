@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import subprocess
 import urllib.error
 import urllib.parse
@@ -313,6 +314,147 @@ class KubectlHealthEnricher:
             return ""
 
 
+# --- docker health enricher ----------------------------------------------------
+
+_COMPOSE_SERVICE_LABEL = "com.docker.compose.service"
+_EXITED_CODE = re.compile(r"Exited \((\d+)\)")  # the exit code inside `docker ps` Status
+
+
+@dataclass(frozen=True)
+class ContainerHealth:
+    """One unhealthy container of a drifted compose service: its name and why."""
+
+    name: str
+    reason: str  # "restarting", "exited (N)", "unhealthy", or "dead"
+
+
+def _labels_to_dict(labels: object) -> dict[str, str]:
+    """`docker ps --format json` renders labels as a comma-joined ``k=v,k=v`` string; some
+    versions give a dict. Normalize both to a dict."""
+    if isinstance(labels, dict):
+        return {str(k): str(v) for k, v in labels.items()}
+    out: dict[str, str] = {}
+    for pair in str(labels or "").split(","):
+        if "=" in pair:
+            key, value = pair.split("=", 1)
+            out[key.strip()] = value.strip()
+    return out
+
+
+def _container_reason(state: str, status: str) -> str:
+    """Why a container is unhealthy, or "" if it's fine. ``state``/``status`` are `docker ps`'s
+    State + Status. An exit code of 0 is a clean stop (not flagged); non-zero, restarting, dead,
+    or a failing healthcheck (Status carries "(unhealthy)") are."""
+    state = state.lower()
+    if state == "restarting":
+        return "restarting"
+    if state == "dead":
+        return "dead"
+    if state == "exited":
+        match = _EXITED_CODE.search(status)
+        return f"exited ({match.group(1)})" if match and match.group(1) != "0" else ""
+    if state == "running" and "unhealthy" in status.lower():
+        return "unhealthy"
+    return ""
+
+
+def unhealthy_containers(entries: list[dict], service: str) -> list[ContainerHealth]:
+    """The unhealthy containers of compose ``service`` in `docker ps --format json` entries.
+
+    A container belongs to the service when its ``com.docker.compose.service`` label matches.
+    Unhealthy = restarting, dead, exited non-zero, or a failing healthcheck. Pure + testable."""
+    out: list[ContainerHealth] = []
+    for entry in entries:
+        if _labels_to_dict(entry.get("Labels")).get(_COMPOSE_SERVICE_LABEL) != service:
+            continue
+        reason = _container_reason(str(entry.get("State") or ""), str(entry.get("Status") or ""))
+        if reason:
+            out.append(
+                ContainerHealth(name=entry.get("Names") or entry.get("Name") or "?", reason=reason)
+            )
+    return out
+
+
+class DockerHealthEnricher:
+    """Escalate a drifted docker-compose service whose container is failing right now.
+
+    The compose drift identity *is* the service name. We find its container(s) via plain
+    ``docker ps`` filtered on the ``com.docker.compose.service`` label (the same engine access
+    the source has -- no compose working dir needed), and -- when any are restarting, exited
+    non-zero, dead, or failing a healthcheck -- attach a ``runtime_context`` (with the container's
+    last log line) and bump the Alert's severity, tying the failure to the config drift.
+
+    Any failure (no docker, no daemon) degrades to "healthy": never escalate on uncertainty."""
+
+    name = "docker"
+
+    def __init__(self, log_tail: int = 20, timeout: float = 10.0) -> None:
+        self.log_tail = log_tail
+        self.timeout = timeout
+
+    def enrich(self, report: Report) -> None:
+        for alert in report.alerts:
+            notes: list[str] = []
+            for drift in alert.drifts:
+                if drift.provenance.source != "docker-compose":
+                    continue  # this enricher only knows how to look up compose services
+                service = drift.identity  # the compose identity is the service name
+                sick = unhealthy_containers(self._ps(service), service)
+                if sick:
+                    notes.append(self._note(sick))
+            if notes:
+                alert.runtime_context = " · ".join(notes)
+                alert.severity = _bump(alert.severity)
+
+    def _note(self, sick: list[ContainerHealth]) -> str:
+        reasons = ", ".join(sorted({c.reason for c in sick}))
+        note = f"docker: {len(sick)} container(s) unhealthy ({reasons})"
+        tail = self._last_log_line(sick[0].name)
+        return f"{note}; last log: {tail}" if tail else note
+
+    def _ps(self, service: str) -> list[dict]:
+        text = self._run_text(
+            [
+                "docker",
+                "ps",
+                "-a",
+                "--filter",
+                f"label={_COMPOSE_SERVICE_LABEL}={service}",
+                "--format",
+                "json",
+            ]  # fmt: skip
+        )
+        entries: list[dict] = []
+        for line in (text or "").splitlines():  # `docker ps --format json` is newline-delimited
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                parsed = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(parsed, list):  # some versions emit a single JSON array
+                entries.extend(item for item in parsed if isinstance(item, dict))
+            elif isinstance(parsed, dict):
+                entries.append(parsed)
+        return entries
+
+    def _last_log_line(self, container: str) -> str:
+        text = self._run_text(["docker", "logs", "--tail", str(self.log_tail), container])
+        lines = [line for line in (text or "").splitlines() if line.strip()]
+        return lines[-1][:200] if lines else ""
+
+    def _run_text(self, argv: list[str]) -> str:
+        try:
+            result = subprocess.run(
+                argv, check=True, capture_output=True, text=True, timeout=self.timeout
+            )
+            return result.stdout
+        except (subprocess.SubprocessError, OSError) as exc:
+            logger.warning("docker enrichment (%s) failed: %s", " ".join(argv[:2]), exc)
+            return ""
+
+
 # The enricher plugin registry: name -> zero-arg factory -> Enricher. Mirrors CORRELATORS
 # in reason/pipeline.py (and the source/surface registries): a new enricher is one line
 # here. "none" is the default and means *no enrichment* -- it is resolved in
@@ -320,6 +462,7 @@ class KubectlHealthEnricher:
 ENRICHERS: dict[str, Callable[[], Enricher]] = {
     "prometheus": PrometheusEnricher,
     "kubectl": KubectlHealthEnricher,
+    "docker": DockerHealthEnricher,
 }
 
 
