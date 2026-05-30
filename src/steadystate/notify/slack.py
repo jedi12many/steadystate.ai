@@ -34,6 +34,17 @@ _SEVERITY_EMOJI = {
 }
 
 
+def _alert_fingerprint(alert: Alert) -> str | None:
+    """The fingerprint an Approve/Decline button carries -- the same key the suggest flow
+    recorded a pending remediation under. Drift alerts key on their first drift; policy alerts
+    on their first finding; an alert with neither gets no buttons."""
+    if alert.drifts:
+        return alert.drifts[0].fingerprint
+    if alert.findings:
+        return alert.findings[0].fingerprint
+    return None
+
+
 def format_slack_message(alert: Alert) -> dict:
     """Build the webhook payload for one Alert. Pure + testable (no network)."""
     emoji = _SEVERITY_EMOJI.get(alert.severity.value, ":white_circle:")
@@ -47,7 +58,35 @@ def format_slack_message(alert: Alert) -> dict:
         chips = " ".join(f"`{ref.framework} {ref.id}`" for ref in alert.references)
         lines.append(f"*References:* {chips}")
     text = "\n\n".join(lines)
-    return {"text": text}
+
+    payload: dict = {"text": text}  # text stays as the notification + non-Block-Kit fallback
+    fingerprint = _alert_fingerprint(alert)
+    if fingerprint:
+        # Approve/Decline buttons carry the fingerprint; `steadystate listen` validates the
+        # click against the pending store before acting (no pending -> a no-op reply).
+        payload["blocks"] = [
+            {"type": "section", "text": {"type": "mrkdwn", "text": text}},
+            {
+                "type": "actions",
+                "block_id": fingerprint,
+                "elements": [
+                    {
+                        "type": "button",
+                        "action_id": "steadystate_approve",
+                        "text": {"type": "plain_text", "text": "Approve fix"},
+                        "style": "primary",
+                        "value": fingerprint,
+                    },
+                    {
+                        "type": "button",
+                        "action_id": "steadystate_decline",
+                        "text": {"type": "plain_text", "text": "Decline"},
+                        "value": fingerprint,
+                    },
+                ],
+            },
+        ]
+    return payload
 
 
 class SlackSurface:
