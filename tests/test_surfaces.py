@@ -13,7 +13,7 @@ from steadystate.notify.base import Surface
 
 
 def test_known_surfaces_registered():
-    assert {"console", "slack", "teams", "prometheus", "grafana"} <= set(SURFACES)
+    assert {"console", "slack", "teams", "discord", "prometheus", "grafana"} <= set(SURFACES)
 
 
 def test_every_registered_surface_builds_and_conforms():

@@ -12,6 +12,7 @@ from collections.abc import Callable
 
 from .base import Surface
 from .console import ConsoleSurface
+from .discord import DiscordSurface
 from .grafana import GrafanaSurface
 from .prometheus import PrometheusSurface
 from .slack import SlackSurface
@@ -24,6 +25,7 @@ SURFACES: dict[str, Callable[[], Surface]] = {
     "console": ConsoleSurface,
     "slack": SlackSurface,
     "teams": TeamsSurface,
+    "discord": DiscordSurface,
     "prometheus": PrometheusSurface,
     "grafana": GrafanaSurface,
 }
