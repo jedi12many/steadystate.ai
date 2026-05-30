@@ -12,15 +12,20 @@ from collections.abc import Callable
 
 from .base import Surface
 from .console import ConsoleSurface
+from .grafana import GrafanaSurface
+from .prometheus import PrometheusSurface
 from .slack import SlackSurface
 from .teams import TeamsSurface
 
 # name -> zero-arg factory -> Surface. Indexed by the CLI's --to choice.
-# slack/teams read their webhook from the environment, so all are zero-arg.
+# slack/teams read their webhook, prometheus/grafana their URL+token, from the
+# environment, so all are zero-arg.
 SURFACES: dict[str, Callable[[], Surface]] = {
     "console": ConsoleSurface,
     "slack": SlackSurface,
     "teams": TeamsSurface,
+    "prometheus": PrometheusSurface,
+    "grafana": GrafanaSurface,
 }
 
 __all__ = ["SURFACES", "build_surfaces"]
