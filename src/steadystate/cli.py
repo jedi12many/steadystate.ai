@@ -179,7 +179,8 @@ def scan(
         "--enrich",
         help="Cross-reference each Alert against live health and escalate a drift on a "
         f"currently-failing resource: none (default) | {' | '.join(sorted(ENRICHERS))} "
-        "(needs PROMETHEUS_URL + STEADYSTATE_ENRICH_QUERY; honestly no-ops if unset).",
+        "(prometheus needs PROMETHEUS_URL + STEADYSTATE_ENRICH_QUERY; kubectl reads pod "
+        "health for k8s drifts. Honestly no-ops when unconfigured/unreachable).",
     ),
     state: Path = typer.Option(
         Path(DEFAULT_STATE_PATH),

@@ -45,7 +45,12 @@ No agent to install, no dashboard to learn. Point it at your IaC. Run `steadysta
 
 ## Enrichment — live health in
 
-`--enrich prometheus` cross-references each alert against a PromQL query you supply; a drift on a resource that's **failing right now** pages louder (severity bumped). A flaky Prometheus never breaks a scan.
+Cross-reference each alert against live operational state — a drift on a resource that's **failing right now** pages louder (severity bumped), correlating the symptom to the config change:
+
+- `--enrich prometheus` — a PromQL query you supply returns series only when the resource is unhealthy.
+- `--enrich kubectl` — for a Kubernetes drift, reads pod health (CrashLoopBackOff, restarts, the worst pod's last log line) so you see *"crashlooping since the image drifted,"* not just *"image drifted."* Same `kubectl` access the source uses.
+
+A flaky/absent backend degrades to a no-op — enrichment never breaks a scan.
 
 ## Autonomy — observe → suggest → auto
 
