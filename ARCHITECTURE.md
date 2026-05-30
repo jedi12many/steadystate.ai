@@ -136,5 +136,6 @@ No domain packs, no executor, no UI yet. Proves: ingest → reconcile → reason
 8. `--autonomy auto` — self-apply every eligible remediation through that same guardrailed core; the apply gate is deterministic (the LLM never decides), so a REMOVED drift is never eligible and auto reconciles toward declared config without destroying.
 9. Generalized **inbound seam** — the approval listener is a registry (`INBOUND`) of provider adapters over one stdlib HTTP shell; a new chat provider is an adapter, not a fork. Slack, Discord, and Teams ship.
 10. Alerts self-identify (*which* resource drifted, and `--label` for *which* environment); a remediation **audit log** (`history`) — the append-only accountability trail every approve/decline/auto-apply writes to, the floor under turning `--autonomy auto` on for real.
+11. Kubernetes security pack (`security-k8s`) — a standing Pod Security baseline (privileged, host namespaces, capabilities, hostPath) over declared manifests, mapped to CIS Kubernetes + ATT&CK; the same `evaluate`-the-baseline rail the Docker CIS pack rides.
 
-**Next:** a Kubernetes security pack · more sources (Pulumi, Helm) · third-party plugin discovery (importlib entry points).
+**Next:** more sources (Pulumi, Helm) · third-party plugin discovery (importlib entry points) · more domain packs (STIG, cost).

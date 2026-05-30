@@ -136,6 +136,39 @@ def test_three_input_shapes_normalize():
     assert len(as_list) == len(as_array) == len(as_single) == 1
 
 
+def _risky_pod(name: str = "web") -> dict:
+    return {
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {"namespace": "prod", "name": name},
+        "spec": {
+            "hostPID": True,
+            "containers": [
+                {"name": "c", "image": "app:1", "securityContext": {"privileged": True}}
+            ],
+        },
+    }
+
+
+def test_clean_manifest_has_no_security_key():
+    res = resources_from_manifests([_deployment("nginx:1.27")])[0]
+    assert "security" not in res.properties  # affirmative-only -> clean stays clean
+
+
+def test_security_posture_projected_for_a_risky_pod():
+    res = resources_from_manifests([_risky_pod()])[0]
+    assert res.properties["security"] == {"privileged": True, "host_pid": True}
+
+
+def test_security_projection_never_shows_as_drift():
+    # The same risky pod on both sides: posture is declared-only and stripped before reconcile,
+    # so presence + image match -> zero drift (the projection can't manufacture a MODIFIED).
+    declared = resources_from_manifests([_risky_pod()])
+    observed = observed_resources_from_kubectl([_risky_pod()])
+    assert "security" in declared[0].properties and "security" not in observed[0].properties
+    assert reconcile_k8s(declared, observed) == []
+
+
 def test_source_satisfies_protocols_and_collects_drift():
     source = KubernetesSource(
         declared=[_deployment("nginx:1.28")],
