@@ -1,78 +1,82 @@
 # steadystate.ai
 
-**Stateful monitoring for your infrastructure.**
+**Drift detection, reasoning, and guardrailed remediation for your infrastructure.**
 
-You already declared what your infrastructure *should* be — in Terraform, ArgoCD, Docker, Ansible. steadystate.ai watches the gap between that **declared state** and **observed reality**, reasons about the **drift**, and tells you — in Slack or Teams, in plain language — what actually matters and what to do about it. On your say-so, it can bring things back to steady state, safely and reversibly.
+You already declared what your infrastructure *should* be — in Terraform, Ansible, Kubernetes/Rancher, ArgoCD, or docker-compose. steadystate.ai watches the gap between that **declared state** and **observed reality**, reasons about the **drift** (security/compliance packs, root-cause correlation, live-health enrichment), surfaces only what matters (console, Slack/Teams, Prometheus/Grafana), and — at the autonomy level *you* choose — brings it back to steady state, guardrailed and approvable from your phone.
 
-It is **not** another dashboard to babysit. Steady state is silence; you only hear from it when something has drifted in a way worth your attention, and you answer it by chatting back.
+It is **not** another dashboard to babysit. Steady state is silence; you only hear from it when something has drifted in a way worth your attention.
 
-> Status: **early.** Building the drift core first (Terraform). Everything else — more sources, security/compliance checks, auto-remediation — is a plugin that comes after.
+> **Status:** the full loop works — **detect → reason → surface → suggest → approve → act** — across six sources and three clouds. Auto-apply and a Teams inbound adapter are the next increments.
 
 ## The idea
 
-- **Drift is the universal signal.** Security regressions, compliance violations, cost surprises, latent outages — they all show up first as a divergence from what you declared.
-- **The reasoning is the product.** Collection, storage, dashboards, and execution already exist and are better than we want to maintain — so we rent them. We build the part nobody else has: the engine that decides *which drift matters and why*, and the guardrails that let it act safely.
-- **Security & compliance are plugins** (CIS, STIG, …), not the core. The core just understands drift; domain packs teach it what drift *means*.
-- **You talk to it.** It pushes findings to Slack/Teams; you reply conversationally — "what changed?", "that was intentional", "fix it" — and a generative-AI operator handles the back-and-forth. That's why there's barely any UI.
+- **Drift is the universal signal.** Security regressions, compliance violations, latent outages — they all show up first as a divergence from what you declared.
+- **The reasoning is the product.** Collection, storage, dashboards, and execution already exist and are better than we'd maintain — so we rent them. We build what nobody else has: the engine that decides *which drift matters and why*, and the guardrails that let it act safely.
+- **Security & compliance are plugins** (the AWS/GCP/Azure security packs, Docker CIS), not the core. The core just understands drift; domain packs teach it what drift *means*.
+- **You stay in control.** Observe-only by default; raise to suggest/auto when *you* decide. Every action — from a terminal or a Slack button — passes the same deterministic guardrails.
 
-## How it'll work (v0)
+## The loop
 
 ```
-steadystate scan ./infra
-  → reads your Terraform's own plan (declared vs real cloud state)
-  → reconciles the drift into a canonical model
-  → reasons about it: signals → filter → events → analyze + correlate → Alerts
-  → surfaces the Alerts (console, Slack, or Teams)
+steadystate scan ./infra --source terraform --to slack --enrich prometheus --autonomy suggest
+  detect    each source rides its tool's own diff (terraform plan, ansible --check, kubectl get, Fleet status)
+  reason    domain packs score it · correlate by root cause · escalate if the resource is unhealthy now
+  surface   only what clears the bar -> console / Slack / Teams / Prometheus / Grafana
+  suggest   record a gated remediation per eligible drift
+  approve   `steadystate approve <fp>`  — or tap Approve on the Slack alert (`steadystate listen`)
+  act       reconcile to declared, guardrailed: eligibility -> snapshot -> apply -> verify
 ```
 
 No agent to install, no dashboard to learn. Point it at your IaC.
 
-## Enabling AI reasoning (optional)
+## Sources — declared state in (`--source`)
 
-The drift core runs with **no LLM** — detection, scoring, the security pack, and the guardrailed executor are all deterministic. An LLM only adds the plain-language *"why this matters"* narrative, and the analyst degrades honestly when none is configured.
+`terraform` · `ansible` · `kubernetes` · `rancher` (Fleet) · `argocd` · `docker-compose`. Each rides the tool's own machine-readable output (never raw-file parsing) and declares its read-only **observe** commands vs its **potentially destructive** ones — `steadystate commands` documents both. Adding a source is a one-line registry entry.
 
-Point it at whichever model you're allowed to use:
+## Domains — what drift *means* (plugins)
 
-- **Anthropic** — `pip install steadystate[llm]`, then set `ANTHROPIC_API_KEY`.
-- **Any OpenAI-compatible endpoint** (OpenAI, Azure OpenAI, GitHub Models, an internal gateway) — no extra install:
+- **Security packs (AWS · GCP · Azure):** raise severity only for *positively recognized* exposure-increasing drift, mapped to ATT&CK — open `0.0.0.0/0` ingress → **T1190**, public bucket / relaxed storage → **T1530**, broad IAM/role → **T1098**. Honest framing: config-exposure → technique, *not* behavioral detection.
+- **Docker CIS compliance:** a standing-policy baseline (privileged, host net/pid, capabilities, image pinning, …), not just drift-scoring.
 
-  ```sh
-  export STEADYSTATE_LLM_BASE_URL=...   # your /chat/completions endpoint
-  export STEADYSTATE_LLM_API_KEY=...    # your token
-  export STEADYSTATE_LLM_MODEL=...      # a model that endpoint serves
-  ```
+## Surfaces — out (`--to`)
 
-When both are set, Anthropic wins unless you set `STEADYSTATE_LLM_PROVIDER=openai`.
+`console` · `slack` · `teams` (alerts) · `prometheus` (Pushgateway metrics, incl. LLM cost) · `grafana` (annotations). An unconfigured surface says so once and skips — it never pretends it delivered.
 
-## Sending findings to Slack / Teams
+## Enrichment — live health in
 
-`scan` writes to the console by default. Use `--to` (comma-separated) to fan findings out to other surfaces — adding one is a one-line registry entry, so the list grows without touching the CLI:
+`--enrich prometheus` cross-references each alert against a PromQL query you supply; a drift on a resource that's **failing right now** pages louder (severity bumped). A flaky Prometheus never breaks a scan.
 
-```sh
-export TEAMS_WEBHOOK_URL=...                  # an incoming webhook from the Teams "Workflows" app
-steadystate scan ./infra --to console,teams   # print locally and post an Adaptive Card per Alert
-```
+## Autonomy — observe → suggest → (auto)
 
-Slack works the same way (`--to slack`, `SLACK_WEBHOOK_URL`). If a surface's webhook isn't configured it says so once and skips — it never pretends it delivered.
+A human-set level; the deterministic guardrails are the floor under *all* of it.
 
-## Tuning what surfaces
+- `--autonomy observe` (default) — alert only.
+- `--autonomy suggest` — record an eligible remediation per drift; approve/decline it later:
+  - **from the terminal:** `steadystate pending` → `steadystate approve <fingerprint>` / `decline <fingerprint>`.
+  - **from chat:** alerts to Slack carry **Approve/Decline** buttons; run `steadystate listen` and point your Slack app's interactivity URL at it — tap Approve from your phone and the same gated remediation runs.
 
-Every drift starts as a **Signal** (counted). Filtering records the ones worth keeping as **Events**; analysis + correlation raise those into **Alerts** — surfaced, with full narrative and (where we can act) a recommended action. One knob moves all the bars together:
+Acting is per-plugin: a source with an executor (terraform, ansible) can remediate; others are observe-only by declaration.
 
-```sh
-steadystate scan ./infra --tuning strict    # lower the bars: more becomes Events/Alerts
-steadystate scan ./infra --tuning lenient   # raise them: only the biggest drift surfaces
-```
+## LLM reasoning (optional)
 
-`default` is the drop-and-watch middle. The console prints the full breakdown; Slack/Teams page on **Alerts** only. The LLM is the correlator (Events → Alerts) — it groups signals from different sources that share one root cause; Signals never reach it.
+The drift core is **deterministic** — detection, scoring, the security/compliance packs, correlation degrade, and the executor all run with no model. An LLM only adds the plain-language *"why this matters"* and groups events by root cause.
+
+- **Anthropic** — `pip install steadystate[llm]`, set `ANTHROPIC_API_KEY`.
+- **Any OpenAI-compatible endpoint** (OpenAI, Azure OpenAI, GitHub Models, a gateway) — set `STEADYSTATE_LLM_BASE_URL` / `_API_KEY` / `_MODEL`. No extra install.
+
+Kill switch: `--no-llm` (or `STEADYSTATE_LLM_ENABLED=false`) makes zero model calls. Spend visibility: `steadystate cost` rolls up token spend by caller over all / 24h / 60m (priced at read time, cache-aware).
+
+## Deploying
+
+See **[DEPLOYMENT.md](./DEPLOYMENT.md)** — the model plus three worked examples (GitHub→Terraform→Azure with Vault; Rancher/K8s in-cluster; pet Linux servers + Ansible + Prometheus), with a container image and ready-to-adapt CI workflow + Kubernetes manifests under [`deploy/`](./deploy/).
 
 ## Design
 
-See **[ARCHITECTURE.md](./ARCHITECTURE.md)** for the full design: the canonical state model, the four plugin seams (StateSource / Domain / Surface / Executor), the ChatOps operator model, and the build-vs-rent decisions.
+See **[ARCHITECTURE.md](./ARCHITECTURE.md)** — the canonical state model, the five plugin seams (StateSource · Domain · Surface · Executor · Correlator) plus the Enricher, the guardrail model, and the build-vs-rent decisions.
 
 ## Built with
 
-Python. (No hot-path agent to write — the reasoning engine is I/O- and LLM-bound, and the maintainers speak Python.)
+Python, stdlib-only at the core (HTTP/LLM via `urllib`; `typer` + `rich` for the CLI). Ship via `pip` or the container image.
 
 ## License
 

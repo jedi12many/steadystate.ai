@@ -2,7 +2,7 @@
 
 > **Stateful monitoring.** You declared a desired steady state (in Terraform, ArgoCD, Docker, Ansible…). steadystate.ai reconciles that declared state against observed reality, reasons about the drift, surfaces only what's actionable — and, on your say-so, helps return you to steady state, safely.
 
-Status: **early / founding.** This doc is the north star; the code follows it.
+Status: **the loop is built.** Detection across six sources (terraform · ansible · kubernetes · rancher · argocd · docker-compose), security/compliance domain packs (AWS/GCP/Azure security · Docker CIS), five surfaces + Prometheus enrichment, and a guardrailed **observe → suggest → approve → act** loop (from the terminal or a Slack button) all ship today. This doc describes the design those seams realize; the roadmap (§11) tracks what's done vs next.
 
 ---
 
@@ -17,7 +17,7 @@ This is a deliberate, lean reframe of an earlier custom-everything system (own a
 ## 2. Principles
 
 1. **Build the reasoning + the guardrails. Rent everything else.** Collection, storage, dashboards, and execution already exist and are better than we want to maintain.
-2. **Modular from day one.** Four plugin seams (below). Security/compliance/cost are packs, not core.
+2. **Modular from day one.** Five plugin seams + an enricher (below). Security/compliance/cost are packs, not core.
 3. **Chat-first, thin UI.** Operators live in Slack/Teams. The tool comes to them and talks back. The web UI is config + a read-only view, nothing more.
 4. **Default-quiet.** Steady state = silence. We only surface drift that clears the bar. (Borrowed, hard-won, from the predecessor.)
 5. **The operator is authoritative.** If a human says "that drift is intentional," we believe them and stop nagging.
@@ -69,14 +69,17 @@ Conventions (learned the hard way): **stable/idempotent resource IDs** (re-inges
 | **Store** | rent / embed | SQLite when standalone; otherwise the host store. |
 | **Surface** | **rent** | Slack/Teams (primary), API, optional Grafana app. No custom dashboard. |
 
-## 6. Plugin model (four seams)
+## 6. Plugin model (five seams + an enricher)
 
-The core defines four interfaces; everything domain- or vendor-specific is a plugin.
+The core defines the interfaces; everything domain- or vendor-specific is a plugin, registered in a one-line registry so adding one never edits the core or the CLI.
 
-1. **StateSource** — declared state in (terraform, argocd, …). `discover()` + `collect() -> [Resource]`.
-2. **Domain** — what drift *means* (security, compliance/CIS/STIG, cost, reliability). Contributes the resources/properties it cares about, the rules, scoring inputs, and optional remediation recipes. **This is how security & compliance enter — as packs, not core.**
-3. **Surface** — push Alerts out + (bidirectionally) take operator input back (Slack, Teams, API).
-4. **Executor** — perform a guardrailed remediation (run the terraform/ansible/kubectl).
+1. **StateSource** — declared state in: `terraform · ansible · kubernetes · rancher · argocd · docker-compose` (`DRIFT_SOURCES`). Each rides its tool's own machine-readable diff and declares its **observe** (read-only, pre-approved) vs **destructive** (needs approval) commands — the per-plugin permission manifest (`steadystate commands`).
+2. **Domain** — what drift *means* (`DEFAULT_DOMAINS`): the AWS/GCP/Azure security packs map exposure-increasing drift to ATT&CK techniques; the Docker CIS pack evaluates a standing-policy baseline. A pack `score`s a drift and/or `evaluate`s the declared inventory, and attaches framework `references`. **This is how security & compliance enter — as packs, not core.**
+3. **Surface** — push Alerts out, and (Slack) take operator input back: `console · slack · teams · prometheus · grafana` (`SURFACES`). The Slack surface carries Approve/Decline buttons; the inbound half is a signed HTTP listener (`steadystate listen`).
+4. **Executor** — perform a guardrailed remediation, keyed by source (`EXECUTORS`): `terraform`, `ansible`. A source with no executor is observe-only by declaration.
+5. **Correlator** — group Events into Alerts (`CORRELATORS`): `llm` (root cause) or `deterministic` (shared attribute); `auto` chooses by whether a provider is configured.
+
+Plus an **Enricher** (`ENRICHERS`): an optional step that cross-references an Alert against live observability (`prometheus`) and escalates a drift whose resource is failing right now.
 
 The engine itself is **not** a plugin inside someone else's product (it's a stateful service + an embeddable library). The *integrations* are the plugins.
 
@@ -122,9 +125,13 @@ No domain packs, no executor, no UI yet. Proves: ingest → reconcile → reason
 
 ## 11. Roadmap
 
-1. **Drift v0** — Terraform → Alerts on the console (§9).
-2. **Slack ChatOps** — push Alerts + bidirectional ack/ask/snooze.
-3. **First domain pack** — prove the `Domain` seam (likely a small CIS or security rule set).
-4. **Guardrailed executor** — "fix it from chat," reversibly.
-5. **More sources** — ArgoCD (rides its own diff), docker-compose, ansible.
-6. **More packs** — STIG, cost, reliability.
+**Done:**
+1. Drift v0 — Terraform → Alerts (console / Slack / Teams).
+2. Three-tier scoring + Brain Tuning; LLM **and** deterministic correlation (a registered seam).
+3. Domain packs — AWS/GCP/Azure security (+ ATT&CK references) and Docker CIS compliance.
+4. Memoryful scan — SQLite store: new/recurring/resolved, mute/snooze.
+5. More sources — ArgoCD, docker-compose, Kubernetes, Rancher (Fleet), Ansible.
+6. Observability — Prometheus/Grafana surfaces + Prometheus enrichment; LLM spend visibility + kill switch.
+7. Guardrailed executor, per-plugin (terraform + ansible) and the **observe → suggest → approve → act** loop, approvable from the terminal or a Slack button.
+
+**Next:** `--autonomy auto` (self-apply, opt-in) · a Teams inbound adapter (onto the same approval core) · a remediation audit log · a Kubernetes security pack · more sources (Pulumi, Helm).
