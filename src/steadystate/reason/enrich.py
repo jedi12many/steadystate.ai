@@ -23,11 +23,13 @@ from __future__ import annotations
 import json
 import logging
 import os
+import subprocess
 import urllib.error
 import urllib.parse
 import urllib.request
 from collections import defaultdict
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 from ..model import Drift
@@ -181,12 +183,143 @@ class PrometheusEnricher:
         return result if isinstance(result, list) else []
 
 
+# Container waiting-state reasons that mean it can't run (kubectl health enricher).
+_UNHEALTHY_WAITING = frozenset(
+    {
+        "CrashLoopBackOff",
+        "ImagePullBackOff",
+        "ErrImagePull",
+        "CreateContainerConfigError",
+        "CreateContainerError",
+        "RunContainerError",
+    }
+)
+_RESTART_THRESHOLD = 5  # restarts above this read as unhealthy even if currently Running
+
+
+@dataclass(frozen=True)
+class PodHealth:
+    """One unhealthy pod of a drifted workload: its name, why, and its restart count."""
+
+    name: str
+    reason: str  # a bad waiting reason, "Failed", or "N restarts"
+    restarts: int
+
+
+def unhealthy_pods(pods: dict, workload: str) -> list[PodHealth]:
+    """The unhealthy pods belonging to ``workload`` in a ``kubectl get pods -o json`` document.
+
+    A pod belongs to the workload if its name is the workload or starts with ``<workload>-``
+    (the Deployment/ReplicaSet/StatefulSet/Job naming). Unhealthy = a container stuck in a known
+    bad waiting state, a Failed phase, or a restart count over the threshold. Pure + testable."""
+    out: list[PodHealth] = []
+    for pod in pods.get("items") or []:
+        name = (pod.get("metadata") or {}).get("name") or ""
+        if name != workload and not name.startswith(f"{workload}-"):
+            continue
+        status = pod.get("status") or {}
+        container_statuses = status.get("containerStatuses") or []
+        restarts = sum(int(cs.get("restartCount") or 0) for cs in container_statuses)
+        reason = ""
+        for cs in container_statuses:
+            waiting = (cs.get("state") or {}).get("waiting") or {}
+            if waiting.get("reason") in _UNHEALTHY_WAITING:
+                reason = waiting["reason"]
+                break
+        if not reason and status.get("phase") == "Failed":
+            reason = "Failed"
+        if not reason and restarts > _RESTART_THRESHOLD:
+            reason = f"{restarts} restarts"
+        if reason:
+            out.append(PodHealth(name=name, reason=reason, restarts=restarts))
+    return out
+
+
+class KubectlHealthEnricher:
+    """Escalate a drifted Kubernetes resource whose pods are failing in the cluster right now.
+
+    For each Alert's kubernetes drifts, list the pods in the drift's namespace, find the ones
+    belonging to the drifted workload, and -- when any are unhealthy (CrashLoopBackOff, a failed
+    phase, or restarts over the threshold) -- attach a one-line ``runtime_context`` (with the last
+    log line from the worst pod, the crash's own evidence) and bump the Alert's severity. This is
+    the differentiated bit: it *correlates the live failure to the drift* ("crashlooping since the
+    image drifted"), rather than scanning all logs for errors (that's a metrics/log system's job).
+
+    Reads via ``kubectl`` -- the same access the kubernetes source uses. Any failure (no cluster,
+    no kubectl, RBAC) degrades to "healthy": never escalate on uncertainty, never break a scan."""
+
+    name = "kubectl"
+
+    def __init__(self, log_tail: int = 20, timeout: float = 10.0) -> None:
+        self.log_tail = log_tail
+        self.timeout = timeout
+
+    def enrich(self, report: Report) -> None:
+        for alert in report.alerts:
+            notes: list[str] = []
+            for drift in alert.drifts:
+                if drift.provenance.source != "kubernetes":
+                    continue  # this enricher only knows how to look up kubernetes resources
+                namespace = _namespace(drift.identity) or "default"
+                workload = _name(drift.identity)
+                sick = unhealthy_pods(self._get_pods(namespace), workload)
+                if sick:
+                    notes.append(self._note(namespace, sick))
+            if notes:
+                alert.runtime_context = " · ".join(notes)
+                alert.severity = _bump(alert.severity)
+
+    def _note(self, namespace: str, sick: list[PodHealth]) -> str:
+        reasons = ", ".join(sorted({pod.reason for pod in sick}))
+        note = f"kubectl: {len(sick)} pod(s) unhealthy ({reasons})"
+        worst = max(sick, key=lambda pod: pod.restarts)
+        tail = self._last_log_line(namespace, worst.name)
+        return f"{note}; last log: {tail}" if tail else note
+
+    def _get_pods(self, namespace: str) -> dict:
+        document = self._run_json(["kubectl", "get", "pods", "-n", namespace, "-o", "json"])
+        return document or {}
+
+    def _last_log_line(self, namespace: str, pod: str) -> str:
+        """The last non-empty log line for ``pod`` -- the previous container (where a crash's
+        final message lives), falling back to the current one. Best-effort: "" on any failure."""
+        tail = str(self.log_tail)
+        text = self._run_text(
+            ["kubectl", "logs", pod, "-n", namespace, "--tail", tail, "--previous"]
+        )
+        if not text:
+            text = self._run_text(["kubectl", "logs", pod, "-n", namespace, "--tail", tail])
+        lines = [line for line in (text or "").splitlines() if line.strip()]
+        return lines[-1][:200] if lines else ""
+
+    def _run_json(self, argv: list[str]) -> dict | None:
+        text = self._run_text(argv)
+        if not text:
+            return None
+        try:
+            parsed = json.loads(text)
+        except ValueError:
+            return None
+        return parsed if isinstance(parsed, dict) else None
+
+    def _run_text(self, argv: list[str]) -> str:
+        try:
+            result = subprocess.run(
+                argv, check=True, capture_output=True, text=True, timeout=self.timeout
+            )
+            return result.stdout
+        except (subprocess.SubprocessError, OSError) as exc:
+            logger.warning("kubectl enrichment (%s) failed: %s", " ".join(argv[:3]), exc)
+            return ""
+
+
 # The enricher plugin registry: name -> zero-arg factory -> Enricher. Mirrors CORRELATORS
 # in reason/pipeline.py (and the source/surface registries): a new enricher is one line
 # here. "none" is the default and means *no enrichment* -- it is resolved in
 # build_enricher to None, not registered as a name.
 ENRICHERS: dict[str, Callable[[], Enricher]] = {
     "prometheus": PrometheusEnricher,
+    "kubectl": KubectlHealthEnricher,
 }
 
 
