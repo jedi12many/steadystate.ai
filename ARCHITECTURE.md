@@ -133,5 +133,6 @@ No domain packs, no executor, no UI yet. Proves: ingest → reconcile → reason
 5. More sources — ArgoCD, docker-compose, Kubernetes, Rancher (Fleet), Ansible.
 6. Observability — Prometheus/Grafana surfaces + Prometheus enrichment; LLM spend visibility + kill switch.
 7. Guardrailed executor, per-plugin (terraform + ansible) and the **observe → suggest → approve → act** loop, approvable from the terminal or a Slack button.
+8. `--autonomy auto` — self-apply every eligible remediation through that same guardrailed core; the apply gate is deterministic (the LLM never decides), so a REMOVED drift is never eligible and auto reconciles toward declared config without destroying.
 
-**Next:** `--autonomy auto` (self-apply, opt-in) · a Teams inbound adapter (onto the same approval core) · a remediation audit log · a Kubernetes security pack · more sources (Pulumi, Helm).
+**Next:** a generalized **inbound seam** (so Teams/email approval is a plugin, not a fork of the Slack listener — onto the same approval core) · a remediation **audit log** · a Kubernetes security pack · more sources (Pulumi, Helm) · third-party plugin discovery (importlib entry points).
