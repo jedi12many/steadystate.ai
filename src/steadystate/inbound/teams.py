@@ -7,9 +7,10 @@ dependency (unlike Discord's Ed25519) and a much lighter setup (no app, public k
 registration).
 
 The flow: an operator @mentions the webhook with a command -- ``@steadystate approve <fp>``
-(or ``decline``) -- which Teams delivers as a message Activity. We verify the HMAC, pull the
-decision + fingerprint out of the text, run the shared approval core, and reply with a message
-the operator sees in the channel.
+(or ``decline``), or just ``@steadystate help`` / ``pending`` to discover what's available --
+which Teams delivers as a message Activity. We verify the HMAC, parse the verb (+ fingerprint)
+out of the text, run the shared command core, and reply with a message the operator sees in the
+channel.
 
 Setup: in the team, Manage team -> Apps -> Create an Outgoing Webhook, point its callback URL
 at ``listen --from teams``, and put the security token in STEADYSTATE_TEAMS_SECURITY_TOKEN.
@@ -26,7 +27,7 @@ import os
 import re
 from collections.abc import Mapping
 
-from .base import APPROVE, DECLINE, Interaction
+from .base import Command, command_from_text
 
 # Teams wraps an @mention as <at>name</at> in the activity text; strip it before scanning.
 _MENTION = re.compile(r"<at>.*?</at>", re.IGNORECASE | re.DOTALL)
@@ -50,20 +51,15 @@ def verify_teams_signature(token: str, body: str, authorization: str) -> bool:
     return hmac.compare_digest(expected, provided)
 
 
-def interaction_from_activity(activity: dict) -> Interaction | None:
-    """An Interaction from a Teams message Activity, or None if the text isn't an approve/
-    decline of ours. The operator types ``@steadystate approve <fingerprint>``; we strip the
-    ``<at>..</at>`` mention and scan for the decision keyword followed by a fingerprint token."""
+def command_from_activity(activity: dict) -> Command | None:
+    """A Command from a Teams message Activity, or None if the text isn't one of ours. The
+    operator types ``@steadystate <verb> [arg]`` -- e.g. ``approve <fingerprint>``, or just
+    ``help`` / ``pending``; we strip the ``<at>..</at>`` mention and parse the shared grammar."""
     text = activity.get("text")
     if not isinstance(text, str):
         return None
-    tokens = _MENTION.sub(" ", text).split()
-    for index, token in enumerate(tokens[:-1]):  # [:-1] -> a keyword needs a token after it
-        decision = token.lower()
-        if decision in (APPROVE, DECLINE):
-            actor = (activity.get("from") or {}).get("name") or "teams"
-            return Interaction(decision, tokens[index + 1], actor)
-    return None
+    actor = (activity.get("from") or {}).get("name") or "teams"
+    return command_from_text(_MENTION.sub(" ", text), actor)
 
 
 class TeamsInbound:
@@ -86,12 +82,12 @@ class TeamsInbound:
     def handshake(self, body: str) -> bytes | None:
         return None  # Teams outgoing webhooks have no PING handshake
 
-    def parse(self, body: str) -> Interaction | None:
+    def parse(self, body: str) -> Command | None:
         try:
             activity = json.loads(body)
         except ValueError:
             return None
-        return interaction_from_activity(activity) if isinstance(activity, dict) else None
+        return command_from_activity(activity) if isinstance(activity, dict) else None
 
     def respond(self, message: str) -> bytes:
         return json.dumps({"type": "message", "text": message}).encode()

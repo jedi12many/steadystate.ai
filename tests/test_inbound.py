@@ -1,4 +1,4 @@
-"""The inbound seam: signature verification, payload->Interaction, dispatch, and the registry."""
+"""The inbound seam: signature verification, payload->Command, dispatch, and the registry."""
 
 from __future__ import annotations
 
@@ -11,11 +11,19 @@ from datetime import UTC, datetime
 import pytest
 
 from steadystate.inbound import INBOUND, build_inbound
-from steadystate.inbound.base import APPROVE, DECLINE, Interaction
-from steadystate.inbound.server import dispatch, run_interaction
+from steadystate.inbound.base import (
+    APPROVE,
+    DECLINE,
+    HELP,
+    PENDING,
+    Command,
+    command_from_text,
+    render_help,
+)
+from steadystate.inbound.server import dispatch, run_command
 from steadystate.inbound.slack import (
     SlackInbound,
-    interaction_from_payload,
+    command_from_payload,
     verify_slack_signature,
 )
 from steadystate.model import ChangeType, Drift, Provenance
@@ -32,9 +40,13 @@ def _sign(ts: str, body: str) -> str:
     return "v0=" + hmac.new(_SECRET.encode(), base, hashlib.sha256).hexdigest()
 
 
-def _slack_body(action_id: str, fp: str, actor: str = "bob") -> str:
+def _slack_button(action_id: str, fp: str, actor: str = "bob") -> str:
     payload = {"actions": [{"action_id": action_id, "value": fp}], "user": {"username": actor}}
     return urllib.parse.urlencode({"payload": json.dumps(payload)})
+
+
+def _slack_slash(text: str, actor: str = "carol") -> str:
+    return urllib.parse.urlencode({"command": "/steadystate", "text": text, "user_name": actor})
 
 
 # -- signature verification (the security boundary) -----------------------------
@@ -65,34 +77,68 @@ def test_adapter_verify_reads_the_slack_headers():
     assert not SlackInbound(_SECRET).verify({"X-Slack-Signature": "v0=bad"}, body, now=_NOW)
 
 
-# -- payload parsing ------------------------------------------------------------
+# -- the shared text grammar (Teams @mention, Slack slash) ----------------------
 
 
-def test_parse_approve_and_decline():
-    assert interaction_from_payload(
+def test_text_grammar_parses_act_and_readonly_verbs():
+    assert command_from_text("approve fp7", "amy") == Command(APPROVE, "amy", "fp7")
+    assert command_from_text("decline fp7", "amy") == Command(DECLINE, "amy", "fp7")
+    assert command_from_text("help", "amy") == Command(HELP, "amy")
+    assert command_from_text("pending", "amy") == Command(PENDING, "amy")
+
+
+def test_text_grammar_is_case_insensitive_and_skips_leading_noise():
+    assert command_from_text("hey  PENDING please", "amy") == Command(PENDING, "amy")
+
+
+def test_text_grammar_needs_a_fingerprint_for_act_verbs_and_ignores_unknowns():
+    assert command_from_text("approve", "amy") is None  # no fingerprint -> not actionable
+    assert command_from_text("", "amy") is None
+    assert command_from_text("status now", "amy") is None  # unknown verb
+
+
+def test_render_help_lists_every_command():
+    text = render_help()
+    for verb in (HELP, PENDING, APPROVE, DECLINE):
+        assert verb in text
+
+
+# -- Slack payload parsing (buttons + slash) ------------------------------------
+
+
+def test_parse_approve_and_decline_buttons():
+    assert command_from_payload(
         {
             "actions": [{"action_id": "steadystate_approve", "value": "fp1"}],
             "user": {"username": "amy"},
         }
-    ) == Interaction(APPROVE, "fp1", "amy")
-    assert interaction_from_payload(
+    ) == Command(APPROVE, "amy", "fp1")
+    assert command_from_payload(
         {"actions": [{"action_id": "steadystate_decline", "value": "fp1"}]}
-    ) == Interaction(DECLINE, "fp1", "slack")  # actor defaults when absent
+    ) == Command(DECLINE, "slack", "fp1")  # actor defaults when absent
 
 
 def test_parse_rejects_unknown_action_missing_fp_and_empty():
-    assert interaction_from_payload({"actions": [{"action_id": "other", "value": "fp"}]}) is None
-    assert interaction_from_payload({"actions": [{"action_id": "steadystate_approve"}]}) is None
-    assert interaction_from_payload({}) is None
+    assert command_from_payload({"actions": [{"action_id": "other", "value": "fp"}]}) is None
+    assert command_from_payload({"actions": [{"action_id": "steadystate_approve"}]}) is None
+    assert command_from_payload({}) is None
 
 
-def test_slack_adapter_parse_decodes_the_form_body():
-    got = SlackInbound(_SECRET).parse(_slack_body("steadystate_approve", "fp7", "carol"))
-    assert got == Interaction(APPROVE, "fp7", "carol")
+def test_slack_adapter_parse_decodes_a_button_body():
+    got = SlackInbound(_SECRET).parse(_slack_button("steadystate_approve", "fp7", "carol"))
+    assert got == Command(APPROVE, "carol", "fp7")
     assert SlackInbound(_SECRET).parse("not-form-data") is None
 
 
-# -- the approval core dispatch -------------------------------------------------
+def test_slack_adapter_parse_handles_a_slash_command():
+    assert SlackInbound(_SECRET).parse(_slack_slash("help")) == Command(HELP, "carol")
+    assert SlackInbound(_SECRET).parse(_slack_slash("pending", "dora")) == Command(PENDING, "dora")
+    assert SlackInbound(_SECRET).parse(_slack_slash("approve fp3")) == Command(
+        APPROVE, "carol", "fp3"
+    )
+
+
+# -- the command core dispatch --------------------------------------------------
 
 
 def _pending(fp: str = "fp1") -> PendingAction:
@@ -101,17 +147,17 @@ def _pending(fp: str = "fp1") -> PendingAction:
     )
 
 
-def test_run_interaction_decline_marks_declined(tmp_path):
+def test_run_command_decline_marks_declined(tmp_path):
     db = str(tmp_path / "s.db")
     with StateStore(db) as store:
         store.record_pending(_pending(), datetime(2026, 1, 1, tzinfo=UTC))
-    msg = run_interaction(Interaction(DECLINE, "fp1", "bob"), db)
+    msg = run_command(Command(DECLINE, "bob", "fp1"), db)
     assert "declined" in msg
     with StateStore(db) as store:
         assert store.get_pending("fp1").status == "declined"
 
 
-def test_run_interaction_approve_routes_to_core(monkeypatch, tmp_path):
+def test_run_command_approve_routes_to_core(monkeypatch, tmp_path):
     seen: dict = {}
 
     def fake_apply(store, fingerprint, actor):
@@ -119,8 +165,28 @@ def test_run_interaction_approve_routes_to_core(monkeypatch, tmp_path):
         return "applied!", None
 
     monkeypatch.setattr("steadystate.inbound.server.apply_pending", fake_apply)
-    msg = run_interaction(Interaction(APPROVE, "fp9", "amy"), str(tmp_path / "s.db"))
+    msg = run_command(Command(APPROVE, "amy", "fp9"), str(tmp_path / "s.db"))
     assert msg == "applied!" and seen == {"fp": "fp9", "actor": "amy"}
+
+
+def test_run_command_help_lists_commands_without_touching_state():
+    # No state path is read: help is pure self-documentation.
+    msg = run_command(Command(HELP, "amy"), "/nonexistent/never-opened.db")
+    assert HELP in msg and PENDING in msg and APPROVE in msg
+
+
+def test_run_command_pending_lists_open_remediations(tmp_path):
+    db = str(tmp_path / "s.db")
+    with StateStore(db) as store:
+        store.record_pending(_pending("fpA"), datetime(2026, 1, 1, tzinfo=UTC))
+        store.record_pending(_pending("fpB"), datetime(2026, 1, 1, tzinfo=UTC))
+    msg = run_command(Command(PENDING, "amy"), db)
+    assert "fpA" in msg and "fpB" in msg and "2 remediation" in msg
+
+
+def test_run_command_pending_says_so_when_empty(tmp_path):
+    msg = run_command(Command(PENDING, "amy"), str(tmp_path / "s.db"))
+    assert "No remediations" in msg
 
 
 # -- the generic dispatch shell (verify -> handshake -> parse -> run) ------------
@@ -132,8 +198,8 @@ class _FakeAdapter:
     name = "fake"
     content_type = "application/json"
 
-    def __init__(self, ok=True, handshake_reply=None, interaction=None):
-        self._ok, self._handshake, self._interaction = ok, handshake_reply, interaction
+    def __init__(self, ok=True, handshake_reply=None, command=None):
+        self._ok, self._handshake, self._command = ok, handshake_reply, command
 
     def ready(self):
         return None
@@ -145,7 +211,7 @@ class _FakeAdapter:
         return self._handshake
 
     def parse(self, body):
-        return self._interaction
+        return self._command
 
     def respond(self, message):
         return message.encode()
@@ -157,22 +223,20 @@ def test_dispatch_401s_a_forged_request_before_parsing():
 
 
 def test_dispatch_answers_a_handshake_without_touching_the_core():
-    # Discord's PING -> PONG: a verified non-interaction reply, returned as-is.
+    # Discord's PING -> PONG: a verified non-command reply, returned as-is.
     status, body = dispatch(_FakeAdapter(handshake_reply=b'{"type":1}'), {}, "ping", ":memory:")
     assert status == 200 and body == b'{"type":1}'
 
 
-def test_dispatch_runs_a_parsed_interaction(monkeypatch):
-    monkeypatch.setattr(
-        "steadystate.inbound.server.run_interaction", lambda interaction, path: "done"
-    )
-    adapter = _FakeAdapter(interaction=Interaction(APPROVE, "fp1", "x"))
+def test_dispatch_runs_a_parsed_command(monkeypatch):
+    monkeypatch.setattr("steadystate.inbound.server.run_command", lambda command, path: "done")
+    adapter = _FakeAdapter(command=Command(APPROVE, "x", "fp1"))
     status, body = dispatch(adapter, {}, "body", ":memory:")
     assert status == 200 and body == b"done"
 
 
 def test_dispatch_noops_an_unrecognized_payload():
-    status, body = dispatch(_FakeAdapter(interaction=None), {}, "body", ":memory:")
+    status, body = dispatch(_FakeAdapter(command=None), {}, "body", ":memory:")
     assert status == 200 and body == b"Nothing to do."
 
 

@@ -1,9 +1,16 @@
 """Slack inbound adapter -- the first implementation of the inbound seam.
 
-Slack POSTs an application/x-www-form-urlencoded body (``payload=<json>``) when an operator
-clicks an Approve/Decline button, signed with an HMAC-SHA256 over the signing secret. We
-verify the signature (with replay protection), parse the action + drift fingerprint, and hand
-back an Interaction. Stdlib only -- hmac + hashlib + json + urllib.
+Slack reaches the listener two ways, both an application/x-www-form-urlencoded POST signed with
+the same HMAC-SHA256 over the signing secret:
+
+  * an Approve/Decline **button** click on an alert -> ``payload=<json>`` (block_actions); the
+    fingerprint rides in the button's ``value``. This is how you act on a specific alert.
+  * a ``/steadystate <verb>`` **slash command** -> ``command=/steadystate&text=<verb ...>``; this
+    is how an operator discovers + drives the listener by text (``help``, ``pending``, or
+    ``approve <fp>``) without a button to click.
+
+We verify the signature (with replay protection) once, then route on the body shape to a
+provider-agnostic Command. Stdlib only -- hmac + hashlib + json + urllib.
 """
 
 from __future__ import annotations
@@ -16,7 +23,7 @@ import time
 import urllib.parse
 from collections.abc import Mapping
 
-from .base import APPROVE, DECLINE, Interaction
+from .base import APPROVE, DECLINE, Command, command_from_text
 
 _APPROVE_ACTION = "steadystate_approve"
 _DECLINE_ACTION = "steadystate_decline"
@@ -38,8 +45,8 @@ def verify_slack_signature(
     return hmac.compare_digest(expected, signature or "")
 
 
-def interaction_from_payload(payload: dict) -> Interaction | None:
-    """An Interaction from a Slack button payload, or None if it's not one of ours.
+def command_from_payload(payload: dict) -> Command | None:
+    """A Command from a Slack button payload, or None if it's not one of ours.
 
     Slack sends ``{"actions": [{"action_id": "steadystate_approve", "value": "<fp>"}], ...}``;
     the fingerprint rides in the button's ``value`` and the clicker in ``user.username``."""
@@ -52,9 +59,9 @@ def interaction_from_payload(payload: dict) -> Interaction | None:
         return None
     actor = (payload.get("user") or {}).get("username") or "slack"
     if action_id == _APPROVE_ACTION:
-        return Interaction(APPROVE, fingerprint, actor)
+        return Command(APPROVE, actor, fingerprint)
     if action_id == _DECLINE_ACTION:
-        return Interaction(DECLINE, fingerprint, actor)
+        return Command(DECLINE, actor, fingerprint)
     return None
 
 
@@ -80,14 +87,19 @@ class SlackInbound:
     def handshake(self, body: str) -> bytes | None:
         return None  # Slack interactivity has no PING/PONG handshake
 
-    def parse(self, body: str) -> Interaction | None:
-        # Slack posts application/x-www-form-urlencoded with payload=<json>.
+    def parse(self, body: str) -> Command | None:
+        # Slack posts application/x-www-form-urlencoded; route on which shape it is.
         form = urllib.parse.parse_qs(body)
-        try:
-            payload = json.loads(form.get("payload", ["{}"])[0])
-        except ValueError:
-            return None
-        return interaction_from_payload(payload)
+        if "payload" in form:  # a button click (block_actions): payload=<json>
+            try:
+                payload = json.loads(form["payload"][0])
+            except ValueError:
+                return None
+            return command_from_payload(payload)
+        if form.get("command"):  # a slash command: command=/steadystate&text=<verb ...>
+            actor = form.get("user_name", ["slack"])[0]
+            return command_from_text(form.get("text", [""])[0], actor)
+        return None
 
     def respond(self, message: str) -> bytes:
         # replace_original=False -> post the outcome as a follow-up, keep the alert visible.

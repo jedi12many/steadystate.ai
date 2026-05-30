@@ -11,10 +11,10 @@ import json
 import pytest
 
 from steadystate.inbound import build_inbound
-from steadystate.inbound.base import APPROVE, DECLINE, Interaction
+from steadystate.inbound.base import APPROVE, DECLINE, HELP, PENDING, Command
 from steadystate.inbound.discord import (
     DiscordInbound,
-    interaction_from_payload,
+    command_from_payload,
     verify_ed25519,
 )
 from steadystate.inbound.server import dispatch
@@ -37,33 +37,45 @@ def _command(decision: str, fingerprint: str, actor: str = "jeff") -> dict:
     }
 
 
+def _readonly_command(verb: str, actor: str = "jeff") -> dict:
+    # help / pending are arg-less subcommands -- no options under the subcommand.
+    return {
+        "type": 2,
+        "data": {"name": "steadystate", "options": [{"name": verb, "type": 1}]},
+        "member": {"user": {"username": actor}},
+    }
+
+
 # -- slash-command parsing (pure) -----------------------------------------------
 
 
 def test_parse_approve_and_decline():
-    assert interaction_from_payload(_command("approve", "fp1")) == Interaction(
-        APPROVE, "fp1", "jeff"
+    assert command_from_payload(_command("approve", "fp1")) == Command(APPROVE, "jeff", "fp1")
+    assert command_from_payload(_command("decline", "fp2", actor="amy")) == Command(
+        DECLINE, "amy", "fp2"
     )
-    assert interaction_from_payload(_command("decline", "fp2", actor="amy")) == Interaction(
-        DECLINE, "fp2", "amy"
-    )
+
+
+def test_parse_readonly_help_and_pending_take_no_argument():
+    assert command_from_payload(_readonly_command("help")) == Command(HELP, "jeff")
+    assert command_from_payload(_readonly_command("pending", "amy")) == Command(PENDING, "amy")
 
 
 def test_parse_actor_falls_back_to_top_level_user_then_default():
     payload = _command("approve", "fp1")
     del payload["member"]
     payload["user"] = {"username": "dm-user"}  # a DM interaction
-    assert interaction_from_payload(payload).actor == "dm-user"
+    assert command_from_payload(payload).actor == "dm-user"
     del payload["user"]
-    assert interaction_from_payload(payload).actor == "discord"
+    assert command_from_payload(payload).actor == "discord"
 
 
 def test_parse_rejects_non_command_unknown_sub_and_missing_fingerprint():
-    assert interaction_from_payload({"type": 1}) is None  # a PING is not a command
-    assert interaction_from_payload(_command("nuke", "fp1")) is None  # unknown subcommand
+    assert command_from_payload({"type": 1}) is None  # a PING is not a command
+    assert command_from_payload(_command("nuke", "fp1")) is None  # unknown subcommand
     bad = _command("approve", "fp1")
     bad["data"]["options"][0]["options"] = []  # no fingerprint option
-    assert interaction_from_payload(bad) is None
+    assert command_from_payload(bad) is None
 
 
 # -- handshake + respond (pure) -------------------------------------------------
@@ -87,7 +99,7 @@ def test_respond_is_a_type4_channel_message():
 
 def test_parse_decodes_the_json_body():
     got = DiscordInbound("deadbeef").parse(json.dumps(_command("approve", "fp9")))
-    assert got == Interaction(APPROVE, "fp9", "jeff")
+    assert got == Command(APPROVE, "jeff", "fp9")
     assert DiscordInbound("deadbeef").parse("not json") is None
 
 

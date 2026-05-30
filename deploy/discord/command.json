@@ -1,7 +1,17 @@
 {
   "name": "steadystate",
-  "description": "Approve or decline a pending steadystate remediation",
+  "description": "Approve, decline, or inspect pending steadystate remediations",
   "options": [
+    {
+      "type": 1,
+      "name": "help",
+      "description": "List the commands this listener accepts"
+    },
+    {
+      "type": 1,
+      "name": "pending",
+      "description": "Show remediations awaiting approval, with their fingerprints"
+    },
     {
       "type": 1,
       "name": "approve",

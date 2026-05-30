@@ -53,3 +53,8 @@ Then:
 The listener verifies the Ed25519 signature, runs the **same** guardrailed remediation the CLI and
 Slack paths use (actor recorded as the Discord username), and replies in-channel with the outcome.
 `/steadystate decline fingerprint:<fp>` declines it.
+
+**Don't know the fingerprint (or what's available)?** The same command registers two read-only
+subcommands for discovery — `/steadystate help` lists what the listener accepts, and
+`/steadystate pending` shows the remediations awaiting approval with their fingerprints. Re-run
+`register.py` after upgrading to pick them up (the four subcommands ship in `command.json`).

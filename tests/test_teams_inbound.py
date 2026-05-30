@@ -9,11 +9,11 @@ import hmac
 import json
 
 from steadystate.inbound import build_inbound
-from steadystate.inbound.base import APPROVE, DECLINE, Interaction
+from steadystate.inbound.base import APPROVE, DECLINE, HELP, PENDING, Command
 from steadystate.inbound.server import dispatch
 from steadystate.inbound.teams import (
     TeamsInbound,
-    interaction_from_activity,
+    command_from_activity,
     verify_teams_signature,
 )
 
@@ -54,22 +54,27 @@ def test_malformed_token_is_false_not_an_error():
 
 
 def test_parse_approve_decline_and_strips_the_mention():
-    assert interaction_from_activity(_activity("<at>steadystate</at> approve fp1")) == Interaction(
-        APPROVE, "fp1", "Jeff"
+    assert command_from_activity(_activity("<at>steadystate</at> approve fp1")) == Command(
+        APPROVE, "Jeff", "fp1"
     )
-    assert interaction_from_activity(_activity("decline fp2", name="Amy")) == Interaction(
-        DECLINE, "fp2", "Amy"
+    assert command_from_activity(_activity("decline fp2", name="Amy")) == Command(
+        DECLINE, "Amy", "fp2"
     )
+
+
+def test_parse_readonly_help_and_pending():
+    assert command_from_activity(_activity("<at>steadystate</at> help")) == Command(HELP, "Jeff")
+    assert command_from_activity(_activity("pending", name="Amy")) == Command(PENDING, "Amy")
 
 
 def test_parse_actor_defaults_when_absent():
-    assert interaction_from_activity({"type": "message", "text": "approve fp1"}).actor == "teams"
+    assert command_from_activity({"type": "message", "text": "approve fp1"}).actor == "teams"
 
 
 def test_parse_rejects_no_command_keyword_without_fp_and_no_text():
-    assert interaction_from_activity(_activity("<at>steadystate</at> hello there")) is None
-    assert interaction_from_activity(_activity("approve")) is None  # keyword, no fp after it
-    assert interaction_from_activity({"type": "message"}) is None  # no text
+    assert command_from_activity(_activity("<at>steadystate</at> hello there")) is None
+    assert command_from_activity(_activity("approve")) is None  # keyword, no fp after it
+    assert command_from_activity({"type": "message"}) is None  # no text
 
 
 # -- the adapter ----------------------------------------------------------------
@@ -86,8 +91,8 @@ def test_handshake_is_none():
 
 
 def test_parse_decodes_the_json_body():
-    assert TeamsInbound(_TOKEN).parse(json.dumps(_activity("approve fp9"))) == Interaction(
-        APPROVE, "fp9", "Jeff"
+    assert TeamsInbound(_TOKEN).parse(json.dumps(_activity("approve fp9"))) == Command(
+        APPROVE, "Jeff", "fp9"
     )
     assert TeamsInbound(_TOKEN).parse("not json") is None
 
@@ -112,7 +117,7 @@ def test_registered_in_the_inbound_registry():
 def test_dispatch_runs_a_verified_command_and_rejects_a_forged_one(monkeypatch):
     adapter = TeamsInbound(_TOKEN)
     body = json.dumps(_activity("approve fp1"))
-    monkeypatch.setattr("steadystate.inbound.server.run_interaction", lambda i, p: "approved!")
+    monkeypatch.setattr("steadystate.inbound.server.run_command", lambda c, p: "approved!")
     status, reply = dispatch(adapter, {"Authorization": _sign(_TOKEN, body)}, body, ":memory:")
     assert status == 200 and json.loads(reply) == {"type": "message", "text": "approved!"}
     status, _ = dispatch(adapter, {"Authorization": "HMAC forged"}, body, ":memory:")

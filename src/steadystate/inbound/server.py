@@ -14,18 +14,35 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from ..act.approve import apply_pending, decline_pending
 from ..state import StateStore
-from .base import APPROVE, DECLINE, InboundAdapter, Interaction
+from .base import APPROVE, DECLINE, HELP, PENDING, Command, InboundAdapter, render_help
 
 
-def run_interaction(interaction: Interaction, state_path: str) -> str:
-    """Drive a parsed decision through the SAME approval core the CLI verbs use; return a
-    human-readable outcome for the provider to echo back to the operator."""
+def _render_pending(state_path: str) -> str:
+    """The chat view of `steadystate pending`: the open remediations and their fingerprints, so
+    an operator can discover what's awaiting them (and what to approve) without leaving chat."""
     with StateStore(state_path) as store:
-        if interaction.decision == APPROVE:
-            message, _result = apply_pending(store, interaction.fingerprint, interaction.actor)
+        rows = store.all_pending()
+    if not rows:
+        return "No remediations awaiting approval."
+    lines = [f"{len(rows)} remediation(s) awaiting approval:"]
+    lines += [f"  {p.fingerprint}  {p.source}  {p.drift_identity}" for p in rows]
+    lines.append("Approve with:  approve <fingerprint>")
+    return "\n".join(lines)
+
+
+def run_command(command: Command, state_path: str) -> str:
+    """Drive a parsed Command to an outcome string the provider echoes back. The read-only verbs
+    (help, pending) answer directly; approve/decline run the SAME guardrailed core the CLI uses."""
+    if command.verb == HELP:
+        return render_help()
+    if command.verb == PENDING:
+        return _render_pending(state_path)
+    with StateStore(state_path) as store:
+        if command.verb == APPROVE:
+            message, _result = apply_pending(store, command.argument, command.actor)
             return message
-        if interaction.decision == DECLINE:
-            return decline_pending(store, interaction.fingerprint, interaction.actor)
+        if command.verb == DECLINE:
+            return decline_pending(store, command.argument, command.actor)
     return "Nothing to do."
 
 
@@ -34,14 +51,14 @@ def dispatch(
 ) -> tuple[int, bytes]:
     """One inbound POST -> (HTTP status, reply body). The order is the security order:
     verify FIRST (a forged request is 401 before anything else looks at it), then answer a
-    protocol handshake, then parse + run the operator's decision."""
+    protocol handshake, then parse + run the operator's command."""
     if not adapter.verify(headers, body):
         return 401, b""
     reply = adapter.handshake(body)
     if reply is not None:
         return 200, reply
-    interaction = adapter.parse(body)
-    message = "Nothing to do." if interaction is None else run_interaction(interaction, state_path)
+    command = adapter.parse(body)
+    message = "Nothing to do." if command is None else run_command(command, state_path)
     return 200, adapter.respond(message)
 
 
