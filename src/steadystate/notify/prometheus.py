@@ -23,6 +23,7 @@ import urllib.request
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
+from .._http import safe_urlopen
 from ..reason.cost import cost_usd, roll_up
 from ..reason.report import Report
 
@@ -143,7 +144,7 @@ class PrometheusSurface:
             method="PUT",  # PUT replaces the job group -- a clean snapshot per scan
         )
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+            with safe_urlopen(request, timeout=self.timeout) as response:
                 response.read()
         except (urllib.error.URLError, OSError) as exc:
             logger.warning("Prometheus delivery failed: %s", exc)

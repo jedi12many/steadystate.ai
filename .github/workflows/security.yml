@@ -1,10 +1,11 @@
 name: security
 
-# Software-composition analysis (SCA): audit the dependencies we actually ship -- the
-# runtime deps plus the optional [llm] and [discord] extras -- against the PyPA/OSV
-# advisory database. The weekly schedule matters: a CVE can be disclosed against a pinned
-# dependency long after the last commit, so this surfaces it even with no code change.
-# Dependabot (.github/dependabot.yml) then opens the bump PR that turns this gate green.
+# Two security gates that don't fit the main CI lint/type/test flow:
+#   audit  -- SCA: pip-audit the deps we actually ship (runtime + [llm]/[discord] extras)
+#             against the PyPA/OSV advisory DB. The weekly schedule matters: a CVE can be
+#             disclosed against a pinned dep long after the last commit. Dependabot
+#             (.github/dependabot.yml) then opens the bump PR that turns this green.
+#   bandit -- SAST: scan our own source for insecure patterns (reviewed skips in pyproject).
 
 on:
   push:
@@ -39,3 +40,17 @@ jobs:
       # would (wrongly) treat as a failure. Plain pip-audit exits non-zero only on a real CVE.
       - name: Audit installed packages for known CVEs
         run: pip-audit --desc
+
+  bandit:
+    name: static analysis (bandit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - run: python -m pip install "bandit[toml]"
+      # Reads [tool.bandit] from pyproject -- the reviewed skips + the rationale for each.
+      - name: Scan source for insecure patterns
+        run: bandit -r src -c pyproject.toml

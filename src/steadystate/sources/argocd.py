@@ -14,6 +14,7 @@ import json
 import os
 import urllib.request
 
+from .._http import safe_urlopen
 from ..model import ChangeType, Drift, Provenance
 from .base import Capabilities
 
@@ -74,5 +75,5 @@ class ArgoCDSource:
         req = urllib.request.Request(url)
         if self.token:
             req.add_header("Authorization", f"Bearer {self.token}")
-        with urllib.request.urlopen(req) as resp:
+        with safe_urlopen(req) as resp:
             return json.loads(resp.read())

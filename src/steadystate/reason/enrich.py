@@ -30,6 +30,7 @@ from collections import defaultdict
 from collections.abc import Callable
 from typing import Protocol, runtime_checkable
 
+from .._http import safe_urlopen
 from ..model import Drift
 from .alert import Severity
 from .report import Report
@@ -170,7 +171,7 @@ class PrometheusEnricher:
         query_string = urllib.parse.urlencode({"query": promql})
         url = f"{self.base_url.rstrip('/')}/api/v1/query?{query_string}"
         try:
-            with urllib.request.urlopen(url, timeout=self.timeout) as response:
+            with safe_urlopen(url, timeout=self.timeout) as response:
                 payload = json.loads(response.read())
         except (urllib.error.URLError, OSError, ValueError) as exc:
             logger.warning("Prometheus enrichment query failed: %s", exc)

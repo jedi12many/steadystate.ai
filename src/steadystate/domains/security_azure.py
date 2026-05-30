@@ -57,7 +57,7 @@ _T1098 = Reference(
 # Azure spells "open to the Internet" several ways across CIDR and the named tag.
 _OPEN_SOURCES = {"*", "0.0.0.0/0", "internet"}
 # A SQL/MSSQL firewall rule spanning the whole IPv4 space is "allow all".
-_ALL_IPS_START = "0.0.0.0"
+_ALL_IPS_START = "0.0.0.0"  # nosec B104 -- a detection literal we match against, never a bind
 _ALL_IPS_END = "255.255.255.255"
 # Public container access levels (private is the safe default).
 _PUBLIC_CONTAINER_ACCESS = {"blob", "container"}
