@@ -73,11 +73,13 @@ def _cidrs(props: dict) -> set[str]:
     return out
 
 
-def _opened_to_world(declared: dict, observed: dict) -> bool:
-    gained = _cidrs(declared) & _OPEN_CIDRS
-    if not gained:
-        return False
-    return bool(gained - (_cidrs(observed) & _OPEN_CIDRS))
+def _opened_to_world(observed: dict) -> bool:
+    # Key off the OBSERVED (reality) side, not a declared/observed set-difference. A resource
+    # only reaches a domain because it already drifted, and terraform encodes a TypeSet
+    # attribute's planned `after` (which we map to `declared`) as the UNION of live + config,
+    # so a declared-vs-observed diff on CIDRs silently misses a real open-to-world rule (see
+    # issue #26). Reality carrying an open CIDR on a drifted rule is itself the finding.
+    return bool(_cidrs(observed) & _OPEN_CIDRS)
 
 
 def _is_pab_kind(kind: str) -> bool:
@@ -159,7 +161,7 @@ class SecurityDomain:
             return Severity.CRITICAL
         if _acl_went_public(declared, observed):
             return Severity.CRITICAL
-        if _opened_to_world(declared, observed):
+        if _opened_to_world(observed):
             return Severity.HIGH
         if _policy_widened(declared, observed):
             return Severity.HIGH
@@ -183,7 +185,7 @@ class SecurityDomain:
             out.extend((_T1562, _T1530))
         if _acl_went_public(declared, observed):
             out.append(_T1530)
-        if _opened_to_world(declared, observed):
+        if _opened_to_world(observed):
             out.append(_T1190)
         if _policy_widened(declared, observed):
             out.append(_T1098)

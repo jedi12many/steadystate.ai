@@ -75,13 +75,16 @@ def test_firewall_safe_direction_is_not_flagged():
     assert GCPSecurityDomain().references(drift) == []
 
 
-def test_firewall_already_open_both_sides_is_not_flagged():
+def test_firewall_open_in_reality_flagged_even_when_declared_also_open():
+    # The union-encoding case (issue #26): terraform encodes a TypeSet's planned `after` as
+    # the union of live + config, so `declared` carries 0.0.0.0/0 too. Keyed off observed,
+    # reality being open is still the finding (a declared/observed diff would have missed it).
     drift = _drift(
         "google_compute_firewall",
-        declared={"source_ranges": ["0.0.0.0/0"]},
+        declared={"source_ranges": ["0.0.0.0/0", "35.235.240.0/20"]},
         observed={"source_ranges": ["0.0.0.0/0"]},
     )
-    assert GCPSecurityDomain().score(drift) is None
+    assert GCPSecurityDomain().score(drift) is Severity.HIGH
 
 
 def test_firewall_egress_open_is_ignored():
@@ -176,13 +179,15 @@ def test_bucket_iam_binding_allauthenticated_is_critical():
     assert _ids(GCPSecurityDomain().references(drift)) == ["T1530"]
 
 
-def test_bucket_iam_already_public_is_not_reflagged():
+def test_bucket_iam_public_in_reality_flagged_even_when_declared_also_public():
+    # Union-encoding case for member lists (issue #26): keyed off observed, allUsers in
+    # reality is the finding even when declared also shows it.
     drift = _drift(
         "google_storage_bucket_iam_member",
         declared={"member": "allUsers"},
         observed={"member": "allUsers"},
     )
-    assert GCPSecurityDomain().score(drift) is None
+    assert GCPSecurityDomain().score(drift) is Severity.CRITICAL
 
 
 def test_bucket_iam_private_member_is_not_flagged():
