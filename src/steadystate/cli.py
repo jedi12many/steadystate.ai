@@ -18,7 +18,7 @@ from .inbound.server import serve
 from .notify import SURFACES, build_surfaces
 from .notify.base import Surface
 from .notify.console import ConsoleSurface
-from .probe import PROBES, Prober, build_prober
+from .probe import PROBES, Prober, auto_prober_for, build_prober
 from .reason.correlate import Correlator
 from .reason.cost import roll_up
 from .reason.enrich import ENRICHERS, Enricher, build_enricher
@@ -86,11 +86,15 @@ def _enricher(value: str) -> Enricher | None:
         raise typer.BadParameter(str(exc)) from None
 
 
-def _prober(value: str) -> Prober | None:
-    """Resolve --probe to a Prober (or None) via the registry in probe/__init__.py.
-    Adding a probe is a one-line registry entry -- this dispatcher never changes."""
+def _prober(value: str, source: str, path: Path) -> Prober | None:
+    """Resolve --probe to a Prober (or None). ``auto`` picks the probe matching the source (None
+    when none makes sense, e.g. terraform/ansible); a name builds that probe. The dispatcher
+    never changes -- adding a probe is a one-line registry entry."""
+    if value == "auto":
+        name = auto_prober_for(source)
+        return None if name is None else _prober(name, source, path)
     try:
-        return build_prober(value)
+        return build_prober(value, path)
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from None
 
@@ -198,8 +202,8 @@ def scan(
         "--probe",
         help=f"Go deeper than drift: probe the live *health* of declared resources, surfacing "
         f"operational malfunction (Symptoms) even with no drift -- and diagnosing one against a "
-        f"co-located drift: none (default) | {' | '.join(sorted(PROBES))} (reads pod health via "
-        "kubectl; no-ops with no cluster).",
+        f"co-located drift: none (default) | auto (the probe matching --source) | "
+        f"{' | '.join(sorted(PROBES))}. Degrades to no symptoms when the backend is unreachable.",
     ),
     state: Path = typer.Option(
         Path(DEFAULT_STATE_PATH),
@@ -247,7 +251,7 @@ def scan(
     analyst = LLMAnalyst(enabled=False if no_llm else None)
     grouping = _correlator(correlator, analyst)
     enricher = _enricher(enrich)
-    prober = _prober(probe)
+    prober = _prober(probe, source, path)
     src = _drift_source(source, path)
     drifts = src.collect_drift()
     # The declared inventory feeds the standing-policy pass (CIS/STIG) AND the observe pass.

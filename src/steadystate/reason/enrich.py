@@ -316,7 +316,7 @@ class KubectlHealthEnricher:
 
 # --- docker health enricher ----------------------------------------------------
 
-_COMPOSE_SERVICE_LABEL = "com.docker.compose.service"
+COMPOSE_SERVICE_LABEL = "com.docker.compose.service"
 _EXITED_CODE = re.compile(r"Exited \((\d+)\)")  # the exit code inside `docker ps` Status
 
 
@@ -365,7 +365,7 @@ def unhealthy_containers(entries: list[dict], service: str) -> list[ContainerHea
     Unhealthy = restarting, dead, exited non-zero, or a failing healthcheck. Pure + testable."""
     out: list[ContainerHealth] = []
     for entry in entries:
-        if _labels_to_dict(entry.get("Labels")).get(_COMPOSE_SERVICE_LABEL) != service:
+        if _labels_to_dict(entry.get("Labels")).get(COMPOSE_SERVICE_LABEL) != service:
             continue
         reason = _container_reason(str(entry.get("State") or ""), str(entry.get("Status") or ""))
         if reason:
@@ -419,7 +419,7 @@ class DockerHealthEnricher:
                 "ps",
                 "-a",
                 "--filter",
-                f"label={_COMPOSE_SERVICE_LABEL}={service}",
+                f"label={COMPOSE_SERVICE_LABEL}={service}",
                 "--format",
                 "json",
             ]  # fmt: skip
