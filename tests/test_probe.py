@@ -1,13 +1,13 @@
-"""The observe seam: the Symptom value type, the KubectlObserver, and the registry."""
+"""The probe seam: the Symptom value type, the KubectlProbe, and the registry."""
 
 from __future__ import annotations
 
 import pytest
 
 from steadystate.model import Provenance, Resource
-from steadystate.observe import OBSERVERS, build_observer
-from steadystate.observe.base import Symptom
-from steadystate.observe.kubectl import KubectlObserver, category_and_severity
+from steadystate.probe import PROBES, build_prober
+from steadystate.probe.base import Symptom
+from steadystate.probe.kubectl import KubectlProbe, category_and_severity
 from steadystate.reason.alert import Severity
 from steadystate.reason.enrich import PodHealth
 
@@ -75,52 +75,52 @@ def test_a_single_cannot_run_pod_makes_the_whole_symptom_high():
     assert severity is Severity.HIGH and category == "CrashLoopBackOff"
 
 
-# -- the observer ---------------------------------------------------------------
+# -- the probe ------------------------------------------------------------------
 
 
-def _observer(monkeypatch, pods: dict, log: str = "fatal: missing DB_URL"):
-    observer = KubectlObserver()
-    monkeypatch.setattr(observer, "_get_pods", lambda namespace: pods)
-    monkeypatch.setattr(observer, "_last_log_line", lambda namespace, pod: log)
-    return observer
+def _probe(monkeypatch, pods: dict, log: str = "fatal: missing DB_URL"):
+    prober = KubectlProbe()
+    monkeypatch.setattr(prober, "_get_pods", lambda namespace: pods)
+    monkeypatch.setattr(prober, "_last_log_line", lambda namespace, pod: log)
+    return prober
 
 
-def test_observe_produces_a_symptom_for_an_unhealthy_declared_workload(monkeypatch):
+def test_probe_produces_a_symptom_for_an_unhealthy_declared_workload(monkeypatch):
     pods = {"items": [_pod("web-abc", waiting="CrashLoopBackOff", restarts=9)]}
-    observer = _observer(monkeypatch, pods)
-    [symptom] = observer.observe([_resource()])
+    prober = _probe(monkeypatch, pods)
+    [symptom] = prober.probe([_resource()])
     assert symptom.identity == "apps/Deployment/prod/web"
     assert symptom.category == "CrashLoopBackOff" and symptom.severity is Severity.HIGH
     assert "missing DB_URL" in symptom.detail  # the failing pod's last log line
 
 
-def test_observe_is_silent_on_a_healthy_workload(monkeypatch):
-    observer = _observer(monkeypatch, {"items": [_pod("web-ok", phase="Running")]})
-    assert observer.observe([_resource()]) == []
+def test_probe_is_silent_on_a_healthy_workload(monkeypatch):
+    prober = _probe(monkeypatch, {"items": [_pod("web-ok", phase="Running")]})
+    assert prober.probe([_resource()]) == []
 
 
-def test_observe_ignores_non_kubernetes_resources(monkeypatch):
+def test_probe_ignores_non_kubernetes_resources(monkeypatch):
     looked_up: list[str] = []
-    observer = KubectlObserver()
-    monkeypatch.setattr(observer, "_get_pods", lambda ns: looked_up.append(ns) or {"items": []})
-    assert observer.observe([_resource(identity="aws_s3_bucket.logs", source="terraform")]) == []
+    prober = KubectlProbe()
+    monkeypatch.setattr(prober, "_get_pods", lambda ns: looked_up.append(ns) or {"items": []})
+    assert prober.probe([_resource(identity="aws_s3_bucket.logs", source="terraform")]) == []
     assert looked_up == []  # never even ran kubectl
 
 
-def test_observe_degrades_when_kubectl_unavailable(monkeypatch):
+def test_probe_degrades_when_kubectl_unavailable(monkeypatch):
     def boom(*args, **kwargs):
         raise FileNotFoundError("kubectl not found")
 
-    monkeypatch.setattr("steadystate.observe.kubectl.subprocess.run", boom)
-    assert KubectlObserver().observe([_resource()]) == []  # no cluster -> no symptoms, no raise
+    monkeypatch.setattr("steadystate.probe.kubectl.subprocess.run", boom)
+    assert KubectlProbe().probe([_resource()]) == []  # no cluster -> no symptoms, no raise
 
 
 # -- the registry ---------------------------------------------------------------
 
 
 def test_registry_builds_kubectl_and_rejects_unknown():
-    assert isinstance(build_observer("kubectl"), KubectlObserver)
-    assert build_observer("none") is None  # the default: no observe step
-    assert "kubectl" in OBSERVERS
-    with pytest.raises(ValueError, match="unknown observer"):
-        build_observer("nope")
+    assert isinstance(build_prober("kubectl"), KubectlProbe)
+    assert build_prober("none") is None  # the default: no probe step
+    assert "kubectl" in PROBES
+    with pytest.raises(ValueError, match="unknown prober"):
+        build_prober("nope")

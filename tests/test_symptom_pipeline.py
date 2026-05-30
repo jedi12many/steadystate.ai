@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from steadystate.model import ChangeType, Drift, Provenance
-from steadystate.observe.base import Symptom
+from steadystate.probe.base import Symptom
 from steadystate.reason.alert import Severity
 from steadystate.reason.llm import LLMAnalyst
 from steadystate.reason.pipeline import Pipeline

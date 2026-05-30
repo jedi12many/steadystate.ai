@@ -55,7 +55,7 @@ class Alert:
     # PolicyFinding(s) a Domain.evaluate generated. Carries the data the surfaces render
     # and the fingerprint reconciliation keys memory on. Empty for ordinary drift Alerts.
     findings: list[PolicyFinding] = field(default_factory=list)
-    # The operational origin of a malfunction Alert: the Symptom(s) an observer produced (the
+    # The operational origin of a malfunction Alert: the Symptom(s) a prober produced (the
     # resource is failing now). On a *diagnosis* Alert these ride alongside `drifts` -- a Symptom
     # correlated with the Drift that is its likely root cause. Empty for ordinary drift Alerts.
     symptoms: list[Symptom] = field(default_factory=list)

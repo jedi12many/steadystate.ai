@@ -53,12 +53,12 @@ Cross-reference each alert against live operational state — a drift on a resou
 
 A flaky/absent backend degrades to a no-op — enrichment never breaks a scan.
 
-## Observe — malfunction, not just drift (`--observe`)
+## Probe — malfunction, not just drift (`--probe`)
 
-Steady state means your system is running **as declared *and* healthy**. So a resource can leave it two ways: by **drifting** (config diverged) or by **malfunctioning** (config is fine, but it's failing). `--observe` surfaces the second kind — a first-class **Symptom**, even with *no drift*:
+Steady state means your system is running **as declared *and* healthy**. So a resource can leave it two ways: by **drifting** (config diverged) or by **malfunctioning** (config is fine, but it's failing). `--probe` surfaces the second kind — a first-class **Symptom**, even with *no drift*:
 
 ```
-scan ./manifests --source k8s --observe kubectl --label prod-k8s
+scan ./manifests --source k8s --probe kubectl --label prod-k8s
 ```
 
 - A declared workload whose pods are `CrashLoopBackOff` / restarting / failing → a HIGH Symptom, even if its config never drifted.

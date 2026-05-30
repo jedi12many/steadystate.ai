@@ -1,4 +1,4 @@
-"""Kubernetes health observer -- originate Symptoms for declared workloads.
+"""Kubernetes health probe -- originate Symptoms for declared workloads.
 
 The originating counterpart to the kubectl *enricher* (reason/enrich.py): the same detection
 (`unhealthy_pods`), but instead of escalating an existing drift it produces a first-class
@@ -56,7 +56,7 @@ def category_and_severity(sick: list[PodHealth]) -> tuple[str, Severity]:
     return worst.reason, severity
 
 
-class KubectlObserver:
+class KubectlProbe:
     """Produces a Symptom per declared kubernetes workload whose pods are unhealthy now."""
 
     name = "kubectl"
@@ -65,7 +65,7 @@ class KubectlObserver:
         self.log_tail = log_tail
         self.timeout = timeout
 
-    def observe(self, resources: list[Resource]) -> list[Symptom]:
+    def probe(self, resources: list[Resource]) -> list[Symptom]:
         symptoms: list[Symptom] = []
         pods_by_namespace: dict[str, dict] = {}  # one `kubectl get pods` per namespace, cached
         for resource in resources:
@@ -121,5 +121,5 @@ class KubectlObserver:
             )
             return result.stdout
         except (subprocess.SubprocessError, OSError) as exc:
-            logger.warning("kubectl observe (%s) failed: %s", " ".join(argv[:3]), exc)
+            logger.warning("kubectl probe (%s) failed: %s", " ".join(argv[:3]), exc)
             return ""
