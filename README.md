@@ -49,6 +49,7 @@ Cross-reference each alert against live operational state — a drift on a resou
 
 - `--enrich prometheus` — a PromQL query you supply returns series only when the resource is unhealthy.
 - `--enrich kubectl` — for a Kubernetes drift, reads pod health (CrashLoopBackOff, restarts, the worst pod's last log line) so you see *"crashlooping since the image drifted,"* not just *"image drifted."* Same `kubectl` access the source uses.
+- `--enrich docker` — for a docker-compose drift, reads container health (restarting / exited non-zero / failing healthcheck + the last log line) via `docker ps` on the compose-service label.
 
 A flaky/absent backend degrades to a no-op — enrichment never breaks a scan.
 

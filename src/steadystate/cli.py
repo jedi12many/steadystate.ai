@@ -180,7 +180,8 @@ def scan(
         help="Cross-reference each Alert against live health and escalate a drift on a "
         f"currently-failing resource: none (default) | {' | '.join(sorted(ENRICHERS))} "
         "(prometheus needs PROMETHEUS_URL + STEADYSTATE_ENRICH_QUERY; kubectl reads pod "
-        "health for k8s drifts. Honestly no-ops when unconfigured/unreachable).",
+        "health for k8s drifts; docker reads container health for compose-service drifts. "
+        "Honestly no-ops when unconfigured/unreachable).",
     ),
     state: Path = typer.Option(
         Path(DEFAULT_STATE_PATH),
