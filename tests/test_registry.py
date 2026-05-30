@@ -89,11 +89,11 @@ def test_build_executor_acts_for_terraform_and_is_none_for_observe_only(tmp_path
 
 
 def test_fix_rejects_an_observe_only_source(tmp_path):
-    # `fix --source ansible` is a clean CLI error, not a crash -- there's no executor.
+    # `fix --source rancher` is a clean CLI error, not a crash -- rancher has no executor.
     from steadystate.cli import app
 
     runner = pytest.importorskip("typer.testing").CliRunner()
-    sample = tmp_path / "a.json"
-    sample.write_text(json.dumps({"plays": []}))
-    result = runner.invoke(app, ["fix", str(sample), "--source", "ansible"])
+    sample = tmp_path / "gitrepo.json"
+    sample.write_text(json.dumps({"status": {"resources": []}}))
+    result = runner.invoke(app, ["fix", str(sample), "--source", "rancher"])
     assert result.exit_code != 0
