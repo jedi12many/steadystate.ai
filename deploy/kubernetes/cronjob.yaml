@@ -1,0 +1,54 @@
+# Example 2 -- steadystate as an in-cluster CronJob, observing via the pod's read-only
+# ServiceAccount (no kubeconfig file to mount). Apply rbac.yaml first.
+#
+# This default rides Rancher/Fleet: it reads a Fleet GitRepo's sync status, so there are NO
+# declared manifests to render in-cluster -- kubectl fetches the GitRepo and the `rancher`
+# source turns its non-Ready resources into drift.
+#
+# For a non-Fleet cluster, use the `k8s` source instead: observe with
+# `kubectl get ... -o json`, and supply the *declared* manifests from a git-sync sidecar
+# (e.g. kustomize build -> JSON on a shared volume), then `--source k8s`.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: steadystate
+  namespace: steadystate
+spec:
+  schedule: "*/30 * * * *"
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: steadystate
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+          containers:
+            - name: steadystate
+              image: ghcr.io/jedi12many/steadystate:latest
+              env:
+                - name: GITREPO # your Fleet GitRepo name
+                  value: my-cluster-config
+                - name: FLEET_NS
+                  value: fleet-default
+                - name: SLACK_WEBHOOK_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: steadystate
+                      key: slack-webhook-url
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -e
+                  kubectl get gitrepo -n "$FLEET_NS" "$GITREPO" -o json > /data/gitrepo.json
+                  steadystate scan /data/gitrepo.json --source rancher \
+                    --to console,slack --state /data/state.db
+              volumeMounts:
+                - name: state
+                  mountPath: /data
+          volumes:
+            - name: state
+              persistentVolumeClaim:
+                claimName: steadystate-state

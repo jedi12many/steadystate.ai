@@ -167,8 +167,7 @@ steadystate scan drift.json --source ansible \
 | terraform source + Azure security pack | 1 | ✅ shipped |
 | k8s + rancher sources | 2 | ✅ shipped |
 | Prometheus enrichment + Grafana/Prometheus surfaces | 3 | ✅ shipped |
-| Packaging: a published wheel + a container image (`ghcr.io/.../steadystate`) | all | 🔨 to do |
-| Example CI workflow (Ex 1) + in-cluster CronJob/RBAC (Ex 2) as real files under `deploy/` | 1, 2 | 🔨 to do |
+| Container image (`Dockerfile`) + example CI workflow + in-cluster CronJob/RBAC under [`deploy/`](deploy/) | 1, 2 | ✅ shipped (push the image to your registry in CI) |
 | **Ansible source + executor** (`--check --diff` → Drift; `ansible-playbook` → act) | 3 | 🔨 to do — the headline build |
 | Per-plugin executor + autonomy gate + inbound approval (observe/suggest/auto) | act on all three | 🔨 designed, not built |
 | K8s security domain pack (privileged/hostNetwork/…) | 2 | 🔨 follow-up |
