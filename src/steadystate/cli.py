@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import contextlib
-import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -11,6 +10,8 @@ import typer
 
 from .act import EXECUTORS, build_executor
 from .act.approve import apply_pending, decline_pending
+from .inbound import INBOUND, build_inbound
+from .inbound.server import serve
 from .notify import SURFACES, build_surfaces
 from .notify.base import Surface
 from .notify.console import ConsoleSurface
@@ -21,7 +22,6 @@ from .reason.llm import LLMAnalyst
 from .reason.pipeline import CORRELATORS, Pipeline, build_correlator
 from .reason.report import Tuning
 from .reconcile_state import reconcile
-from .serve import serve_slack
 from .sources import CAPABILITIES, DRIFT_SOURCES, build_drift_source
 from .sources.base import StateSource
 from .state import PendingAction, StateStore
@@ -448,18 +448,27 @@ def decline(
 
 @app.command()
 def listen(
-    port: int = typer.Option(8723, "--port", help="Port for the Slack interactivity endpoint."),
+    channel: str = typer.Option(
+        "slack",
+        "--from",
+        help=f"Chat channel to accept approvals from: {' | '.join(sorted(INBOUND))}.",
+    ),
+    port: int = typer.Option(8723, "--port", help="Port for the interactivity endpoint."),
     state: Path = _STATE_OPTION,
 ) -> None:
-    """Run the Slack approval listener: clicking Approve/Decline on a posted alert runs the
-    gated remediation. Needs STEADYSTATE_SLACK_SIGNING_SECRET; point your Slack app's
-    Interactivity Request URL at http://<host>:<port>/."""
-    secret = os.environ.get("STEADYSTATE_SLACK_SIGNING_SECRET")
-    if not secret:
-        raise typer.BadParameter("set STEADYSTATE_SLACK_SIGNING_SECRET to run the listener.")
+    """Run the approval listener: clicking Approve/Decline on a posted alert runs the gated
+    remediation. Each channel needs its signing secret / public key in the environment; point
+    your chat app's interactivity Request URL at http://<host>:<port>/."""
+    try:
+        adapter = build_inbound(channel)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from None
+    problem = adapter.ready()
+    if problem:
+        raise typer.BadParameter(problem)
     state.parent.mkdir(parents=True, exist_ok=True)
-    typer.echo(f"steadystate: listening for Slack approvals on :{port}")
-    serve_slack(port, secret, str(state))
+    typer.echo(f"steadystate: listening for {adapter.name} approvals on :{port}")
+    serve(adapter, port, str(state))
 
 
 def main() -> None:
