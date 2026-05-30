@@ -27,7 +27,7 @@ steadystate scan ./infra --source terraform --to slack --enrich prometheus --aut
   act       reconcile to declared, guardrailed: eligibility -> snapshot -> apply -> verify
 ```
 
-No agent to install, no dashboard to learn. Point it at your IaC.
+No agent to install, no dashboard to learn. Point it at your IaC. Run `steadystate catalog` for a live overview of every plugin and command this build offers (`catalog --html` writes a browsable page).
 
 ## Sources — declared state in (`--source`)
 

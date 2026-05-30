@@ -12,6 +12,7 @@ from rich.table import Table
 
 from .act import EXECUTORS, build_executor
 from .act.approve import apply_pending, decline_pending
+from .catalog import gather_catalog, render_console, render_html
 from .inbound import INBOUND, build_inbound
 from .inbound.server import serve
 from .notify import SURFACES, build_surfaces
@@ -415,6 +416,25 @@ def commands(
                 typer.echo(f"    {cmd}")
         else:
             typer.echo("    (none -- observe-only plugin)")
+
+
+@app.command()
+def catalog(
+    html: bool = typer.Option(
+        False,
+        "--html",
+        help="Emit a self-contained HTML page instead (redirect to a file and open it).",
+    ),
+) -> None:
+    """Show everything this build offers: every plugin (all seams) and every command + option.
+
+    Read live from the registries, so it always matches what's installed. `--html` writes a
+    standalone page: `steadystate catalog --html > catalog.html`."""
+    cat = gather_catalog(typer.main.get_command(app))
+    if html:
+        typer.echo(render_html(cat))
+    else:
+        render_console(cat, Console())
 
 
 @app.command()
