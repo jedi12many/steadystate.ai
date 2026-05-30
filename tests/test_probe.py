@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from steadystate.model import Provenance, Resource
-from steadystate.probe import PROBES, build_prober
+from steadystate.probe import PROBES, auto_prober_for, build_prober
 from steadystate.probe.base import Symptom
 from steadystate.probe.kubectl import KubectlProbe, category_and_severity
 from steadystate.reason.alert import Severity
@@ -118,9 +118,17 @@ def test_probe_degrades_when_kubectl_unavailable(monkeypatch):
 # -- the registry ---------------------------------------------------------------
 
 
-def test_registry_builds_kubectl_and_rejects_unknown():
-    assert isinstance(build_prober("kubectl"), KubectlProbe)
-    assert build_prober("none") is None  # the default: no probe step
-    assert "kubectl" in PROBES
+def test_registry_builds_probes_and_rejects_unknown(tmp_path):
+    assert isinstance(build_prober("kubectl", tmp_path), KubectlProbe)
+    assert build_prober("none", tmp_path) is None  # the default: no probe step
+    assert {"kubectl", "docker", "argocd"} <= set(PROBES)
     with pytest.raises(ValueError, match="unknown prober"):
-        build_prober("nope")
+        build_prober("nope", tmp_path)
+
+
+def test_auto_maps_each_source_with_a_health_signal():
+    assert auto_prober_for("kubernetes") == "kubectl"
+    assert auto_prober_for("docker-compose") == "docker"
+    assert auto_prober_for("argocd") == "argocd"
+    assert auto_prober_for("terraform") is None  # no health probe makes sense for terraform
+    assert auto_prober_for("ansible") is None

@@ -58,13 +58,19 @@ A flaky/absent backend degrades to a no-op — enrichment never breaks a scan.
 Steady state means your system is running **as declared *and* healthy**. So a resource can leave it two ways: by **drifting** (config diverged) or by **malfunctioning** (config is fine, but it's failing). `--probe` surfaces the second kind — a first-class **Symptom**, even with *no drift*:
 
 ```
-scan ./manifests --source k8s --probe kubectl --label prod-k8s
+scan ./manifests --source k8s --probe auto --label prod-k8s
 ```
 
-- A declared workload whose pods are `CrashLoopBackOff` / restarting / failing → a HIGH Symptom, even if its config never drifted.
-- **The headline — diagnosis:** if that resource *also* drifted, the Symptom and the Drift fold into **one** root-caused alert — *"web is failing — likely root cause: image drift,"* recommending the drift's fix. The correlation no log monitor makes.
+`--probe auto` picks the probe matching your source; there's one wherever health is a real signal distinct from drift:
 
-It stays true to the thesis, not a monitor: Symptoms are scoped to **your declared resources**, and detection is **rented** (it reads the verdict `kubectl` already computes — no metrics stored, no logs scraped). Degrades to a no-op with no cluster.
+- **`kubectl`** — k8s pod health (`CrashLoopBackOff` / restarts / failed phase).
+- **`docker`** — compose container health (restarting / exited non-zero / dead / failing healthcheck).
+- **`argocd`** — ArgoCD's *own* per-resource `health.status` (`Degraded` / `Missing`), read from the same Application snapshot the source rides for sync. *(terraform/ansible have none — cloud health is `--enrich prometheus`'s job; Ansible has no runtime.)*
+
+- A declared resource that's failing → a Symptom, even if its config never drifted.
+- **The headline — diagnosis:** if that resource *also* drifted, the Symptom and the Drift fold into **one** root-caused alert — *"web is failing — likely root cause: drift,"* recommending the drift's fix. (With ArgoCD: `OutOfSync` *and* `Degraded` → one alert.) The correlation no log monitor makes.
+
+It stays true to the thesis, not a monitor: Symptoms are scoped to **your declared resources**, and detection is **rented** (it reads the verdict kubectl/docker/ArgoCD already computes — no metrics stored, no logs scraped). Degrades to a no-op when the backend is unreachable.
 
 ## Autonomy — observe → suggest → auto
 
