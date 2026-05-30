@@ -1,0 +1,14 @@
+{
+  "declared": {"kind": "List", "items": [
+    {"apiVersion": "apps/v1", "kind": "Deployment", "metadata": {"namespace": "prod", "name": "billing"},
+     "spec": {"replicas": 2, "template": {"spec": {
+       "hostNetwork": true,
+       "volumes": [{"name": "host", "hostPath": {"path": "/"}}],
+       "containers": [{"name": "app", "image": "billing:1.4",
+         "securityContext": {"privileged": true, "capabilities": {"add": ["SYS_ADMIN"]}}}]}}}}
+  ]},
+  "observed": {"kind": "List", "items": [
+    {"apiVersion": "apps/v1", "kind": "Deployment", "metadata": {"namespace": "prod", "name": "billing"},
+     "spec": {"replicas": 2, "template": {"spec": {"containers": [{"name": "app", "image": "billing:1.4"}]}}}}
+  ]}
+}

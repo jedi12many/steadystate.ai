@@ -1,0 +1,19 @@
+{
+  "metadata": {"name": "storefront"},
+  "status": {
+    "sync": {"status": "OutOfSync"},
+    "resources": [
+      {"group": "apps", "kind": "Deployment", "namespace": "prod", "name": "payments",
+       "status": "OutOfSync",
+       "health": {"status": "Degraded", "message": "ReplicaSet \"payments-7c9\" has timed out progressing"}},
+      {"group": "apps", "kind": "Deployment", "namespace": "prod", "name": "web",
+       "status": "Synced",
+       "health": {"status": "Degraded", "message": "0/3 pods are available (readiness probe failed)"}},
+      {"group": "apps", "kind": "Deployment", "namespace": "prod", "name": "cache",
+       "status": "OutOfSync",
+       "health": {"status": "Healthy"}},
+      {"kind": "Service", "namespace": "prod", "name": "web",
+       "status": "Synced", "health": {"status": "Healthy"}}
+    ]
+  }
+}
