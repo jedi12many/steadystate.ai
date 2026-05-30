@@ -94,6 +94,11 @@ class ConsoleSurface:
                 where.append(f"[bold]env:[/bold] {alert.environment}")
             if alert.resources:  # *which* resource(s) drifted -- the identity to triage on
                 where.append(f"[bold]resource:[/bold] {alert.resource_label()}")
+            if alert.symptoms:  # operational malfunction (the second departure type)
+                where.append(
+                    "[bold]symptom:[/bold] "
+                    + ", ".join(sorted({s.category for s in alert.symptoms}))
+                )
             if where:
                 body += "\n\n" + "   ".join(where)
             if alert.recommended_action:

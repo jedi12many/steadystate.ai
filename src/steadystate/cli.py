@@ -18,6 +18,7 @@ from .inbound.server import serve
 from .notify import SURFACES, build_surfaces
 from .notify.base import Surface
 from .notify.console import ConsoleSurface
+from .observe import OBSERVERS, Observer, build_observer
 from .reason.correlate import Correlator
 from .reason.cost import roll_up
 from .reason.enrich import ENRICHERS, Enricher, build_enricher
@@ -81,6 +82,15 @@ def _enricher(value: str) -> Enricher | None:
     Adding an enricher is a one-line registry entry -- this dispatcher never changes."""
     try:
         return build_enricher(value)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from None
+
+
+def _observer(value: str) -> Observer | None:
+    """Resolve --observe to an Observer (or None) via the registry in observe/__init__.py.
+    Adding an observer is a one-line registry entry -- this dispatcher never changes."""
+    try:
+        return build_observer(value)
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from None
 
@@ -183,6 +193,14 @@ def scan(
         "health for k8s drifts; docker reads container health for compose-service drifts. "
         "Honestly no-ops when unconfigured/unreachable).",
     ),
+    observe: str = typer.Option(
+        "none",
+        "--observe",
+        help=f"Also observe the live *health* of declared resources, surfacing operational "
+        f"malfunction (Symptoms) even with no drift -- and diagnosing one against a co-located "
+        f"drift: none (default) | {' | '.join(sorted(OBSERVERS))} (reads pod health via kubectl; "
+        "no-ops with no cluster).",
+    ),
     state: Path = typer.Option(
         Path(DEFAULT_STATE_PATH),
         "--state",
@@ -229,13 +247,19 @@ def scan(
     analyst = LLMAnalyst(enabled=False if no_llm else None)
     grouping = _correlator(correlator, analyst)
     enricher = _enricher(enrich)
+    observer = _observer(observe)
     src = _drift_source(source, path)
     drifts = src.collect_drift()
-    # The declared inventory feeds the standing-policy pass (CIS/STIG). Only sources that
-    # enumerate declared state implement StateSource; native drift sources (Terraform,
-    # ArgoCD) don't, so they contribute no baseline findings -- guard rather than assume.
+    # The declared inventory feeds the standing-policy pass (CIS/STIG) AND the observe pass.
+    # Only sources that enumerate declared state implement StateSource; native drift sources
+    # (Terraform, ArgoCD) don't, so they contribute no baseline -- guard rather than assume.
     resources = src.collect_declared() if isinstance(src, StateSource) else []
-    report = Pipeline(analyst=analyst, tuning=level, correlator=grouping).run(drifts, resources)
+    # The observer reads the live health of those declared resources into Symptoms (the second
+    # departure type). None (--observe none, the default) -> no symptoms, the path is unchanged.
+    symptoms = observer.observe(resources) if observer is not None else []
+    report = Pipeline(analyst=analyst, tuning=level, correlator=grouping).run(
+        drifts, resources, symptoms
+    )
     report.llm_calls = analyst.calls  # this scan's LLM spend, for the prometheus surface
     if label:  # stamp the environment on every item so each surfaced alert self-identifies
         for item in report.items:

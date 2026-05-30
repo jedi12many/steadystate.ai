@@ -35,6 +35,7 @@ def test_seams_cover_the_live_registries():
     assert "teams" in seams["Inbound (approvals)"]
     assert "terraform" in seams["Executors"]
     assert "auto" in seams["Correlators"]  # the non-registered default mode is listed too
+    assert "kubectl" in seams["Observers"]
 
 
 def test_source_items_carry_observe_act_counts():
