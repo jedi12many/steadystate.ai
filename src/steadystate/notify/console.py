@@ -94,6 +94,8 @@ class ConsoleSurface:
             chips = _reference_chips(alert)
             if chips:  # only when references exist; absent references render nothing
                 body += f"\n\n[dim]{chips}[/dim]"
+            if alert.runtime_context:  # live-health note from enrichment; absent -> nothing
+                body += f"\n[dim]{alert.runtime_context}[/dim]"
             self._console.print(Panel(body, title=title, title_align="left"))
 
         if resolved:

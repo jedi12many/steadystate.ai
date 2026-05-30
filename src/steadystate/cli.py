@@ -13,6 +13,7 @@ from .notify import SURFACES, build_surfaces
 from .notify.base import Surface
 from .notify.console import ConsoleSurface
 from .reason.correlate import Correlator
+from .reason.enrich import ENRICHERS, Enricher, build_enricher
 from .reason.llm import LLMAnalyst
 from .reason.pipeline import CORRELATORS, Pipeline, build_correlator
 from .reason.report import Tuning
@@ -69,6 +70,15 @@ def _correlator(value: str, analyst: LLMAnalyst) -> Correlator:
         raise typer.BadParameter(str(exc)) from None
 
 
+def _enricher(value: str) -> Enricher | None:
+    """Resolve --enrich to an Enricher (or None) via the registry in reason/enrich.py.
+    Adding an enricher is a one-line registry entry -- this dispatcher never changes."""
+    try:
+        return build_enricher(value)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from None
+
+
 def _open_store(state: Path) -> StateStore:
     """Open (auto-creating its parent dir) the SQLite state store at ``state``.
 
@@ -108,6 +118,13 @@ def scan(
         f"else deterministic) | {' | '.join(sorted(CORRELATORS))} (force one; the LLM "
         "correlator degrades on failure, deterministic never calls a model).",
     ),
+    enrich: str = typer.Option(
+        "none",
+        "--enrich",
+        help="Cross-reference each Alert against live health and escalate a drift on a "
+        f"currently-failing resource: none (default) | {' | '.join(sorted(ENRICHERS))} "
+        "(needs PROMETHEUS_URL + STEADYSTATE_ENRICH_QUERY; honestly no-ops if unset).",
+    ),
     state: Path = typer.Option(
         Path(DEFAULT_STATE_PATH),
         "--state",
@@ -126,6 +143,7 @@ def scan(
     level = _tuning(tuning)
     analyst = LLMAnalyst()
     grouping = _correlator(correlator, analyst)
+    enricher = _enricher(enrich)
     src = _drift_source(source, path)
     drifts = src.collect_drift()
     # The declared inventory feeds the standing-policy pass (CIS/STIG). Only sources that
@@ -133,6 +151,12 @@ def scan(
     # ArgoCD) don't, so they contribute no baseline findings -- guard rather than assume.
     resources = src.collect_declared() if isinstance(src, StateSource) else []
     report = Pipeline(analyst=analyst, tuning=level, correlator=grouping).run(drifts, resources)
+    # Observability enrichment runs between run() and the state reconcile + emit, so a
+    # severity bumped by a currently-failing resource flows into BOTH the state store and
+    # the surfaces. None (--enrich none, the default) skips it; the enricher honestly
+    # no-ops when unconfigured, so the un-enriched path is unchanged.
+    if enricher is not None:
+        enricher.enrich(report)
     # The Pipeline is pure; memory is applied here, between run() and emit(). Stateless
     # scans skip the store entirely and surface exactly as before (Alerts un-annotated).
     # One `now` for the whole scan so the store's timestamps and the console's NEW-vs-age
