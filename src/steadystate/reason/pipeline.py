@@ -249,7 +249,7 @@ class Pipeline:
         symptoms: list[Symptom] | None = None,
     ) -> Report:
         """Reason about ``drifts``; the declared ``resources`` posture (standing-policy pass); and
-        any operational ``symptoms`` an observer found. Both extra inputs default to None so the
+        any operational ``symptoms`` a prober found. Both extra inputs default to None so the
         stateless drift path is byte-for-byte unchanged. A Symptom co-located with a Drift folds
         into one diagnosis Alert (`_diagnose`); the rest stand alone -- the same Signal/Event/Alert
         machinery for all three departure types."""
@@ -275,7 +275,7 @@ class Pipeline:
                 alert = self._alert_from_finding(finding, domain.name, layer)
                 (signals if below_bar else policy_alerts).append(alert)
 
-        # Operational pass: an observer's Symptoms sort by the same bar. A surfaced symptom on a
+        # Operational pass: a prober's Symptoms sort by the same bar. A surfaced symptom on a
         # drifted resource diagnoses into that drift's Alert; the rest stand alone.
         symptom_alerts: list[Alert] = []
         for symptom in symptoms or []:

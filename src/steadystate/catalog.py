@@ -17,7 +17,7 @@ from .act import EXECUTORS
 from .domains import DEFAULT_DOMAINS
 from .inbound import INBOUND
 from .notify import SURFACES
-from .observe import OBSERVERS
+from .probe import PROBES
 from .reason.enrich import ENRICHERS
 from .reason.pipeline import CORRELATORS
 from .sources import CAPABILITIES, DRIFT_SOURCES
@@ -81,7 +81,7 @@ def _seams() -> list[Seam]:
         Seam("Executors", "fix --source", _names(EXECUTORS)),
         Seam("Correlators", "--correlator", [PluginItem("auto"), *_names(CORRELATORS)]),
         Seam("Enrichers", "--enrich", _names(ENRICHERS)),
-        Seam("Observers", "--observe", _names(OBSERVERS)),
+        Seam("Probes", "--probe", _names(PROBES)),
     ]
 
 
