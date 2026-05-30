@@ -51,6 +51,7 @@ change between releases until 1.0.0. Releases are published as GitHub Releases.
 
 ### Changed
 
+- Remediation verify (terraform): the post-apply re-check now counts only *actionable* residual drift and retries briefly. After a clean apply, a full `terraform plan` often lists the resource under refresh-only `resource_drift` (server-set fields / cloud read-after-write lag) while it is a no-op in `resource_changes` -- terraform has nothing left to apply. The verify previously read that as "applied, but not verified"; it now correctly reports **verified** (validated end-to-end against live GCP), while a genuinely unreconciled drift (e.g. a provider that merged a `TypeSet`) still honestly reports not-verified.
 - Security exposure checks for set-typed attributes (CIDR ranges, IAM member lists) key off the observed/reality side rather than a declared-vs-observed diff, so terraform's union-encoding of a `TypeSet`'s planned value can't hide a real open-to-world rule.
 
 - Version is single-sourced from `__version__` in `src/steadystate/__init__.py` via `[tool.hatch.version]`.
