@@ -134,6 +134,7 @@ No domain packs, no executor, no UI yet. Proves: ingest → reconcile → reason
 6. Observability — Prometheus/Grafana surfaces + Prometheus enrichment; LLM spend visibility + kill switch.
 7. Guardrailed executor, per-plugin (terraform + ansible) and the **observe → suggest → approve → act** loop, approvable from the terminal or a Slack button.
 8. `--autonomy auto` — self-apply every eligible remediation through that same guardrailed core; the apply gate is deterministic (the LLM never decides), so a REMOVED drift is never eligible and auto reconciles toward declared config without destroying.
-9. Generalized **inbound seam** — the approval listener is a registry (`INBOUND`) of provider adapters over one stdlib HTTP shell; a new chat provider is an adapter, not a fork. Slack is the first adapter.
+9. Generalized **inbound seam** — the approval listener is a registry (`INBOUND`) of provider adapters over one stdlib HTTP shell; a new chat provider is an adapter, not a fork. Slack + Discord ship.
+10. Alerts self-identify (*which* resource drifted, and `--label` for *which* environment); a remediation **audit log** (`history`) — the append-only accountability trail every approve/decline/auto-apply writes to, the floor under turning `--autonomy auto` on for real.
 
-**Next:** a Teams inbound adapter on the seam (Slack + Discord ship) · a remediation **audit log** · a Kubernetes security pack · more sources (Pulumi, Helm) · third-party plugin discovery (importlib entry points).
+**Next:** a Teams inbound adapter on the seam · a Kubernetes security pack · more sources (Pulumi, Helm) · third-party plugin discovery (importlib entry points).

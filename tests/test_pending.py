@@ -183,3 +183,62 @@ def test_auto_rejects_stateless(tmp_path):
     )
     assert result.exit_code != 0
     assert "stateless" in result.stdout.lower() or "stateless" in str(result.output).lower()
+
+
+# -- the remediation audit log (approve/decline -> append-only history) ----------
+
+
+def test_approve_writes_an_audit_entry(tmp_path):
+    db = _suggest_scan(tmp_path)
+    with StateStore(db) as store:
+        fp = store.all_pending()[0].fingerprint
+    _runner().invoke(app, ["approve", fp, "--actor", "jeff", "--state", str(db)])
+    with StateStore(db) as store:
+        rows = store.audit_log()
+    assert len(rows) == 1
+    assert rows[0].actor == "jeff" and rows[0].decision == APPROVED
+    assert rows[0].drift_identity == "aws_s3_bucket.logs"
+
+
+def test_decline_writes_an_audit_entry(tmp_path):
+    db = _suggest_scan(tmp_path)
+    with StateStore(db) as store:
+        fp = store.all_pending()[0].fingerprint
+    _runner().invoke(app, ["decline", fp, "--actor", "amy", "--state", str(db)])
+    with StateStore(db) as store:
+        rows = store.audit_log()
+    assert len(rows) == 1
+    assert rows[0].decision == DECLINED and rows[0].actor == "amy"
+
+
+def test_scan_label_threads_environment_into_pending_then_audit(tmp_path):
+    plan = tmp_path / "plan.json"
+    plan.write_text(json.dumps(_PLAN))
+    db = tmp_path / "state.db"
+    base = ["scan", str(plan), "--source", "terraform", "--autonomy", "suggest",
+            "--state", str(db), "--to", "console", "--label", "prod-aws"]  # fmt: skip
+    assert _runner().invoke(app, base).exit_code == 0
+    with StateStore(db) as store:
+        fp = store.all_pending()[0].fingerprint
+        assert store.get_pending(fp).environment == "prod-aws"
+    _runner().invoke(app, ["approve", fp, "--state", str(db)])
+    with StateStore(db) as store:
+        assert store.audit_log()[0].environment == "prod-aws"
+        assert store.audit_log(environment="prod-aws")  # the --label filter finds it
+
+
+def test_history_command_renders_an_entry(tmp_path):
+    db = _suggest_scan(tmp_path)
+    with StateStore(db) as store:
+        fp = store.all_pending()[0].fingerprint
+    _runner().invoke(app, ["approve", fp, "--actor", "jeff", "--state", str(db)])
+    result = _runner().invoke(app, ["history", "--state", str(db)])
+    assert result.exit_code == 0
+    assert "jeff" in result.stdout and "aws_s3_bucket.logs" in result.stdout
+
+
+def test_history_empty_is_clean(tmp_path):
+    db = tmp_path / "empty.db"
+    result = _runner().invoke(app, ["history", "--state", str(db)])
+    assert result.exit_code == 0
+    assert "no remediation history" in result.stdout

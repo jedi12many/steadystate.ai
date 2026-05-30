@@ -7,6 +7,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import typer
+from rich.console import Console
+from rich.table import Table
 
 from .act import EXECUTORS, build_executor
 from .act.approve import apply_pending, decline_pending
@@ -92,7 +94,7 @@ def _open_store(state: Path) -> StateStore:
 
 
 def _record_suggestions(
-    store: StateStore, source: str, path: Path, report, now: datetime
+    store: StateStore, source: str, path: Path, report, now: datetime, environment: str | None
 ) -> list[str]:
     """Under `--autonomy suggest`/`auto`, offer an eligible remediation per drift. Returns the
     fingerprints recorded (what `auto` then applies). An observe-only source (no executor) has
@@ -113,6 +115,7 @@ def _record_suggestions(
                         path=str(path),
                         drift_identity=drift.identity,
                         command=" ".join(plan.command),
+                        environment=environment,
                     ),
                     now,
                 )
@@ -256,7 +259,7 @@ def scan(
                 for call in analyst.calls:
                     store.record_llm_call(call, now)
             if autonomy in ("suggest", "auto"):  # offer an eligible remediation per drift
-                recorded = _record_suggestions(store, source, path, report, now)
+                recorded = _record_suggestions(store, source, path, report, now, label or None)
                 if autonomy == "auto":  # ...and, on auto, apply them through the same guardrails
                     _auto_apply(store, recorded)
     for surface in surfaces:
@@ -425,6 +428,35 @@ def pending(state: Path = _STATE_OPTION) -> None:
     for p in rows:
         typer.echo(f"{p.fingerprint}  {p.source}  {p.drift_identity}")
         typer.echo(f"    would run: {p.command}")
+
+
+@app.command()
+def history(
+    label: str = typer.Option(
+        "", "--label", help="Filter to one environment label (from scan --label)."
+    ),
+    limit: int = typer.Option(20, "--limit", help="Show the most recent N entries."),
+    state: Path = _STATE_OPTION,
+) -> None:
+    """Show the remediation audit log: every approve/decline, newest first (append-only)."""
+    with _open_store(state) as store:
+        rows = store.audit_log(limit=limit, environment=label or None)
+    if not rows:
+        typer.echo("no remediation history.")
+        return
+    table = Table(box=None, pad_edge=False)
+    for column in ("when", "actor", "decision", "outcome", "environment", "resource"):
+        table.add_column(column)
+    for entry in rows:
+        table.add_row(
+            entry.at.replace("T", " ")[:19],  # ISO -> "YYYY-MM-DD HH:MM:SS"
+            entry.actor,
+            entry.decision,
+            entry.outcome,
+            entry.environment or "-",
+            entry.drift_identity,
+        )
+    Console().print(table)
 
 
 @app.command()
