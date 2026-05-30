@@ -15,6 +15,7 @@ import subprocess
 from pathlib import Path
 
 from ..model import ChangeType, Drift, Provenance
+from .base import Capabilities
 
 # terraform plan action lists -> our ChangeType
 _ACTION_MAP = {
@@ -74,6 +75,10 @@ class TerraformSource:
     working dir to run terraform live."""
 
     name = "terraform"
+    commands = Capabilities(
+        observe=("terraform plan", "terraform show -json", "terraform output"),
+        destructive=("terraform apply", "terraform destroy"),
+    )
 
     def __init__(
         self,

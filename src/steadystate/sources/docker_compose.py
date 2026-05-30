@@ -22,6 +22,7 @@ from pathlib import Path
 
 from ..model import Drift, Provenance, Resource
 from ..reconcile import reconcile
+from .base import Capabilities
 
 
 def resources_from_compose_config(config: dict) -> list[Resource]:
@@ -99,6 +100,10 @@ class DockerComposeSource:
     parsed `config`/`ps` (testing / CI) or a working dir to run Compose live."""
 
     name = "docker-compose"
+    commands = Capabilities(
+        observe=("docker compose config --format json", "docker compose ps --format json"),
+        destructive=("docker compose up -d", "docker compose down", "docker compose restart"),
+    )
 
     def __init__(
         self,

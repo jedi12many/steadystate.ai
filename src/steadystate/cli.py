@@ -20,7 +20,7 @@ from .reason.llm import LLMAnalyst
 from .reason.pipeline import CORRELATORS, Pipeline, build_correlator
 from .reason.report import Tuning
 from .reconcile_state import reconcile
-from .sources import DRIFT_SOURCES, build_drift_source
+from .sources import CAPABILITIES, DRIFT_SOURCES, build_drift_source
 from .sources.base import StateSource
 from .sources.terraform import TerraformSource
 from .state import StateStore
@@ -306,6 +306,29 @@ def cost(
             f"  {r.caller:<12} ~${r.cost_usd:.4f}  {r.calls} call(s){fail}  "
             f"in={r.input_tokens} out={r.output_tokens} cache_read={r.cache_read_tokens}"
         )
+
+
+@app.command()
+def commands(
+    source: str = typer.Option("", "--source", help="Show one source; default shows all."),
+) -> None:
+    """Document each plugin's commands by permission category: observe (pre-approved,
+    read-only) vs potentially destructive (require approval before they run)."""
+    if source and source not in CAPABILITIES:
+        known = ", ".join(sorted(CAPABILITIES))
+        raise typer.BadParameter(f"unknown source '{source}' (known: {known})")
+    for name in [source] if source else sorted(CAPABILITIES):
+        caps = CAPABILITIES[name]
+        typer.echo(name)
+        typer.echo("  observe (pre-approved):")
+        for cmd in caps.observe:
+            typer.echo(f"    {cmd}")
+        typer.echo("  potentially destructive (needs approval):")
+        if caps.destructive:
+            for cmd in caps.destructive:
+                typer.echo(f"    {cmd}")
+        else:
+            typer.echo("    (none -- observe-only plugin)")
 
 
 def main() -> None:

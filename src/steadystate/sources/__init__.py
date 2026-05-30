@@ -15,7 +15,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from .argocd import ArgoCDSource
-from .base import DriftSource
+from .base import Capabilities, DriftSource
 from .docker_compose import DockerComposeSource
 from .k8s import KubernetesSource
 from .rancher import RancherSource
@@ -65,7 +65,17 @@ DRIFT_SOURCES: dict[str, Callable[[Path], DriftSource]] = {
     "rancher": _rancher,
 }
 
-__all__ = ["DRIFT_SOURCES", "build_drift_source"]
+# Per-plugin command manifests: observe (pre-approved, read-only) vs destructive (needs
+# approval). Keyed like DRIFT_SOURCES -- adding a source means declaring its commands too.
+CAPABILITIES: dict[str, Capabilities] = {
+    "terraform": TerraformSource.commands,
+    "argocd": ArgoCDSource.commands,
+    "docker-compose": DockerComposeSource.commands,
+    "k8s": KubernetesSource.commands,
+    "rancher": RancherSource.commands,
+}
+
+__all__ = ["CAPABILITIES", "DRIFT_SOURCES", "Capabilities", "build_drift_source"]
 
 
 def build_drift_source(source: str, path: Path) -> DriftSource:
