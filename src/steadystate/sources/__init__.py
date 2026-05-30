@@ -17,6 +17,8 @@ from pathlib import Path
 from .argocd import ArgoCDSource
 from .base import DriftSource
 from .docker_compose import DockerComposeSource
+from .k8s import KubernetesSource
+from .rancher import RancherSource
 from .terraform import TerraformSource
 
 
@@ -30,6 +32,11 @@ def _argocd(path: Path) -> DriftSource:
     return ArgoCDSource(app=json.loads(path.read_text()))
 
 
+def _rancher(path: Path) -> DriftSource:
+    # A FILE = a captured Fleet GitRepo JSON.
+    return RancherSource(gitrepo=json.loads(path.read_text()))
+
+
 def _docker_compose(path: Path) -> DriftSource:
     # A directory = a live Compose project (run `docker compose config` + `ps`).
     # A file = a captured {"config": {...}, "ps": [...]} snapshot (testing / offline).
@@ -39,6 +46,14 @@ def _docker_compose(path: Path) -> DriftSource:
     return DockerComposeSource(working_dir=path)
 
 
+def _k8s(path: Path) -> DriftSource:
+    # A file = a captured {"declared": <doc>, "observed": <doc>} snapshot. Both docs
+    # are JSON (a K8s List, a bare array, or a single object) -- the project is
+    # stdlib-only, so manifests are rendered to JSON first (e.g. `kubectl ... -o json`).
+    snap = json.loads(path.read_text())
+    return KubernetesSource(declared=snap.get("declared"), observed=snap.get("observed"))
+
+
 # name -> factory(path) -> DriftSource. Indexed by the CLI's --source choice.
 # docker-compose has no native plan diff, so it reconciles declared services
 # (`docker compose config`) against running containers (`docker compose ps`).
@@ -46,6 +61,8 @@ DRIFT_SOURCES: dict[str, Callable[[Path], DriftSource]] = {
     "terraform": _terraform,
     "argocd": _argocd,
     "docker-compose": _docker_compose,
+    "k8s": _k8s,
+    "rancher": _rancher,
 }
 
 __all__ = ["DRIFT_SOURCES", "build_drift_source"]
