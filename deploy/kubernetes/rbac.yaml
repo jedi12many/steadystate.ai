@@ -1,0 +1,51 @@
+# Example 2 -- read-only access for steadystate to observe the cluster (and Fleet GitRepos,
+# for the rancher source). Only get/list verbs: observe-only by construction, so the pod's
+# ServiceAccount can never mutate the cluster regardless of what the scan decides.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: steadystate
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: steadystate
+  namespace: steadystate
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: steadystate-readonly
+rules:
+  - apiGroups: ["", "apps", "batch", "networking.k8s.io"]
+    resources: ["*"]
+    verbs: ["get", "list"]
+  - apiGroups: ["fleet.cattle.io"] # for the rancher / Fleet source
+    resources: ["gitrepos", "bundles"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: steadystate-readonly
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: steadystate-readonly
+subjects:
+  - kind: ServiceAccount
+    name: steadystate
+    namespace: steadystate
+---
+# Persists the SQLite memory across runs (new/recurring/resolved, mute/snooze). Adjust the
+# storageClassName to your cluster (or drop this + the volume to run stateless).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: steadystate-state
+  namespace: steadystate
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi

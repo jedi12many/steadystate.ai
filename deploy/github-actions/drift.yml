@@ -1,0 +1,53 @@
+# Example 1 -- GitHub -> Terraform -> Azure, secrets in HashiCorp Vault.
+#
+# Copy to `.github/workflows/drift.yml` in your IaC repo and adjust the Vault paths +
+# the `--to` surfaces. The plan is produced in CI, so steadystate just reads plan.json --
+# Vault -> Azure auth is the workflow's job; steadystate never sees a credential.
+
+name: steadystate-drift
+on:
+  schedule:
+    - cron: "0 * * * *" # hourly drift sweep
+  pull_request: # and a pre-merge review of what would change
+  workflow_dispatch:
+
+permissions:
+  id-token: write # OIDC -> Vault
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch short-lived Azure creds from Vault
+        uses: hashicorp/vault-action@v3
+        with:
+          url: ${{ secrets.VAULT_ADDR }}
+          method: jwt
+          role: steadystate
+          secrets: |
+            azure/creds/terraform  client_id      | ARM_CLIENT_ID ;
+            azure/creds/terraform  client_secret  | ARM_CLIENT_SECRET ;
+            secret/data/azure      subscription_id | ARM_SUBSCRIPTION_ID ;
+            secret/data/azure      tenant_id       | ARM_TENANT_ID
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - name: Plan (refresh against Azure)
+        run: |
+          terraform init -input=false
+          terraform plan -refresh=true -out tfplan
+          terraform show -json tfplan > plan.json
+
+      - name: Install steadystate
+        # Until published to PyPI:
+        #   pip install "git+https://github.com/jedi12many/steadystate.ai"
+        run: pip install steadystate
+
+      - name: Scan for drift
+        env:
+          TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
+        # observe-first: alert only. Raise to remediation later by gating `fix` behind approval.
+        run: steadystate scan plan.json --source terraform --to console,teams
