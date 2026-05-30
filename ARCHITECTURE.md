@@ -1,8 +1,8 @@
 # steadystate.ai — Architecture
 
-> **Stateful monitoring.** You declared a desired steady state (in Terraform, ArgoCD, Docker, Ansible…). steadystate.ai reconciles that declared state against observed reality, reasons about the drift, surfaces only what's actionable — and, on your say-so, helps return you to steady state, safely.
+> **Steady-state reasoning.** You declared a desired steady state (in Terraform, ArgoCD, Docker, Ansible…). steadystate.ai reasons about any departure from it — **drift** (config diverged) and **malfunction** (it's failing) — surfaces only what's actionable, correlates a malfunction to the drift that caused it, and on your say-so helps return you to steady state, safely.
 
-Status: **the loop is built.** Detection across six sources (terraform · ansible · kubernetes · rancher · argocd · docker-compose), security/compliance domain packs (AWS/GCP/Azure security · Docker CIS), five surfaces + Prometheus enrichment, and a guardrailed **observe → suggest → approve → act** loop (from the terminal or a Slack button) all ship today. This doc describes the design those seams realize; the roadmap (§11) tracks what's done vs next.
+Status: **the loop is built.** Across six sources (terraform · ansible · kubernetes · rancher · argocd · docker-compose): drift detection + **health probing** (`--probe`: kubectl · docker · argocd → Symptoms, diagnosed against drift), security/compliance domain packs (AWS/GCP/Azure security · Docker CIS · k8s Pod Security), six surfaces + live-health enrichment, and a guardrailed **observe → suggest → approve → act** loop approvable from chat (Slack · Discord · Teams) with an append-only audit log — all ship today. This doc describes the design those seams realize; the roadmap (§11) tracks what's done vs next.
 
 ---
 
@@ -22,7 +22,7 @@ This is a deliberate, lean reframe of an earlier custom-everything system (own a
 ## 2. Principles
 
 1. **Build the reasoning + the guardrails. Rent everything else.** Collection, storage, dashboards, and execution already exist and are better than we want to maintain.
-2. **Modular from day one.** Five plugin seams + an enricher (below). Security/compliance/cost are packs, not core.
+2. **Modular from day one.** Five plugin seams + an enricher + a probe (below). Security/compliance/cost are packs, not core.
 3. **Chat-first, thin UI.** Operators live in Slack/Teams. The tool comes to them and talks back. The web UI is config + a read-only view, nothing more.
 4. **Default-quiet.** Steady state = silence. We only surface *departures* (drift, policy violations, malfunction) that clear the bar. (Borrowed, hard-won, from the predecessor.)
 5. **The operator is authoritative.** If a human says "that drift is intentional," we believe them and stop nagging.
@@ -84,7 +84,7 @@ Conventions (learned the hard way): **stable/idempotent resource IDs** (re-inges
 | **Store** | rent / embed | SQLite when standalone; otherwise the host store. |
 | **Surface** | **rent** | Slack/Teams (primary), API, optional Grafana app. No custom dashboard. |
 
-## 6. Plugin model (five seams + an enricher)
+## 6. Plugin model (five seams + an enricher + a probe)
 
 The core defines the interfaces; everything domain- or vendor-specific is a plugin, registered in a one-line registry so adding one never edits the core or the CLI.
 
