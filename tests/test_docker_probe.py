@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 from steadystate.model import Provenance, Resource
-from steadystate.probe.docker import DockerProbe, category_and_severity
+from steadystate.probe.docker import (
+    ContainerHealth,
+    DockerProbe,
+    category_and_severity,
+    unhealthy_containers,
+)
 from steadystate.reason.alert import Severity
-from steadystate.reason.enrich import ContainerHealth
 
 
 def _container(name: str, *, state: str = "running", status: str = "Up 2 hours", service="web"):
@@ -23,6 +27,51 @@ def _resource(identity: str = "web", source: str = "docker-compose") -> Resource
         identity=identity,
         provenance=Provenance(source=source, address=identity),
     )
+
+
+# -- unhealthy_containers (pure) ------------------------------------------------
+
+
+def test_restarting_is_unhealthy():
+    [health] = unhealthy_containers([_container("app-web-1", state="restarting")], "web")
+    assert health.reason == "restarting" and health.name == "app-web-1"
+
+
+def test_exited_nonzero_flagged_but_clean_exit_is_not():
+    bad = _container("w1", state="exited", status="Exited (137) 1 minute ago")
+    clean = _container("w2", state="exited", status="Exited (0) 1 minute ago")
+    assert {h.reason for h in unhealthy_containers([bad, clean], "web")} == {"exited (137)"}
+
+
+def test_failing_healthcheck_is_unhealthy():
+    container = _container("w", state="running", status="Up 3 hours (unhealthy)")
+    assert unhealthy_containers([container], "web")[0].reason == "unhealthy"
+
+
+def test_dead_is_unhealthy():
+    [health] = unhealthy_containers([_container("w", state="dead", status="Dead")], "web")
+    assert health.reason == "dead"
+
+
+def test_healthy_running_is_ignored():
+    healthy = [_container("w", state="running", status="Up 2 hours")]
+    assert unhealthy_containers(healthy, "web") == []
+
+
+def test_only_the_named_service_matches():
+    web = _container("web1", state="restarting", service="web")
+    api = _container("api1", state="restarting", service="api")
+    assert [h.name for h in unhealthy_containers([web, api], "web")] == ["web1"]
+
+
+def test_labels_as_a_dict_also_match():
+    container = {
+        "Names": "w",
+        "State": "dead",
+        "Status": "Dead",
+        "Labels": {"com.docker.compose.service": "web"},
+    }
+    assert unhealthy_containers([container], "web")[0].reason == "dead"
 
 
 # -- category + severity (pure) -------------------------------------------------

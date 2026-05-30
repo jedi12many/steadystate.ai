@@ -191,11 +191,10 @@ def scan(
     enrich: str = typer.Option(
         "none",
         "--enrich",
-        help="Cross-reference each Alert against live health and escalate a drift on a "
-        f"currently-failing resource: none (default) | {' | '.join(sorted(ENRICHERS))} "
-        "(prometheus needs PROMETHEUS_URL + STEADYSTATE_ENRICH_QUERY; kubectl reads pod "
-        "health for k8s drifts; docker reads container health for compose-service drifts. "
-        "Honestly no-ops when unconfigured/unreachable).",
+        help="Cross-reference each Alert against a live metric and escalate a drift on a "
+        f"currently-breaching resource: none (default) | {' | '.join(sorted(ENRICHERS))} "
+        "(prometheus needs PROMETHEUS_URL + STEADYSTATE_ENRICH_QUERY; honestly no-ops when "
+        "unconfigured/unreachable). For pod/container health use --probe instead.",
     ),
     probe: str = typer.Option(
         "none",

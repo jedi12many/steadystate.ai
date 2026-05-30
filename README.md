@@ -48,7 +48,7 @@ No agent to install, no dashboard to learn. Point it at your IaC. Run `steadysta
 
 `--enrich prometheus` cross-references each alert against a PromQL query you supply — a drift on a resource that's **failing right now** pages louder (severity bumped). A flaky/absent Prometheus degrades to a no-op; enrichment never breaks a scan.
 
-> For pod/container health, prefer **`--probe`** (below). An enricher only *escalates an existing drift*; a probe *originates* the malfunction as a first-class Symptom even with no drift — and the diagnosis correlation does the escalation for you. `--enrich kubectl` / `--enrich docker` remain for now but are superseded by `--probe kubectl` / `--probe docker`.
+> For pod/container health, use **`--probe`** (below). An enricher only *escalates an existing drift*; a probe *originates* the malfunction as a first-class Symptom even with no drift — and the diagnosis correlation does the escalation for you. The old `--enrich kubectl` / `--enrich docker` are **retired** in favor of `--probe kubectl` / `--probe docker`. The metric-threshold `--enrich prometheus` stays — it's a distinct signal (a PromQL bar, not a health verdict).
 
 ## Probe — malfunction, not just drift (`--probe`)
 

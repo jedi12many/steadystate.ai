@@ -3,22 +3,81 @@
 The originating counterpart to the kubectl probe, for docker-compose: for each declared service
 it finds the live container via `docker ps` on the `com.docker.compose.service` label (the same
 engine access the source has) and -- when it's restarting, exited non-zero, dead, or failing a
-healthcheck -- emits a `Symptom`, even with no drift. Reuses the docker enricher's pure
-classification (`unhealthy_containers`). Any docker failure degrades to "no symptoms".
+healthcheck -- emits a `Symptom`, even with no drift. Classification (`unhealthy_containers`) is
+pure + testable. Any docker failure degrades to "no symptoms".
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import re
 import subprocess
+from dataclasses import dataclass
 
 from ..model import Provenance, Resource
 from ..reason.alert import Severity
-from ..reason.enrich import COMPOSE_SERVICE_LABEL, ContainerHealth, unhealthy_containers
 from .base import Symptom
 
 logger = logging.getLogger(__name__)
+
+COMPOSE_SERVICE_LABEL = "com.docker.compose.service"
+_EXITED_CODE = re.compile(r"Exited \((\d+)\)")  # the exit code inside `docker ps` Status
+
+
+@dataclass(frozen=True)
+class ContainerHealth:
+    """One unhealthy container of a compose service: its name and why."""
+
+    name: str
+    reason: str  # "restarting", "exited (N)", "unhealthy", or "dead"
+
+
+def _labels_to_dict(labels: object) -> dict[str, str]:
+    """`docker ps --format json` renders labels as a comma-joined ``k=v,k=v`` string; some
+    versions give a dict. Normalize both to a dict."""
+    if isinstance(labels, dict):
+        return {str(k): str(v) for k, v in labels.items()}
+    out: dict[str, str] = {}
+    for pair in str(labels or "").split(","):
+        if "=" in pair:
+            key, value = pair.split("=", 1)
+            out[key.strip()] = value.strip()
+    return out
+
+
+def _container_reason(state: str, status: str) -> str:
+    """Why a container is unhealthy, or "" if it's fine. ``state``/``status`` are `docker ps`'s
+    State + Status. An exit code of 0 is a clean stop (not flagged); non-zero, restarting, dead,
+    or a failing healthcheck (Status carries "(unhealthy)") are."""
+    state = state.lower()
+    if state == "restarting":
+        return "restarting"
+    if state == "dead":
+        return "dead"
+    if state == "exited":
+        match = _EXITED_CODE.search(status)
+        return f"exited ({match.group(1)})" if match and match.group(1) != "0" else ""
+    if state == "running" and "unhealthy" in status.lower():
+        return "unhealthy"
+    return ""
+
+
+def unhealthy_containers(entries: list[dict], service: str) -> list[ContainerHealth]:
+    """The unhealthy containers of compose ``service`` in `docker ps --format json` entries.
+
+    A container belongs to the service when its ``com.docker.compose.service`` label matches.
+    Unhealthy = restarting, dead, exited non-zero, or a failing healthcheck. Pure + testable."""
+    out: list[ContainerHealth] = []
+    for entry in entries:
+        if _labels_to_dict(entry.get("Labels")).get(COMPOSE_SERVICE_LABEL) != service:
+            continue
+        reason = _container_reason(str(entry.get("State") or ""), str(entry.get("Status") or ""))
+        if reason:
+            out.append(
+                ContainerHealth(name=entry.get("Names") or entry.get("Name") or "?", reason=reason)
+            )
+    return out
 
 
 def category_and_severity(sick: list[ContainerHealth]) -> tuple[str, Severity]:
