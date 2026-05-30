@@ -9,9 +9,10 @@ missing dependency is reported by ``ready()``, never an import crash.
 The flow Discord requires:
   * a PING (type 1) -- answered with a PONG (type 1) via ``handshake`` (this is how Discord
     verifies the endpoint when you save the Interactions URL, and a periodic health check);
-  * an APPLICATION_COMMAND (type 2) -- the operator's ``/steadystate approve|decline
-    fingerprint:<fp>`` slash command, parsed into an Interaction and run through the shared
-    approval core; we reply with a type-4 message the operator sees in-channel.
+  * an APPLICATION_COMMAND (type 2) -- the operator's ``/steadystate <verb>`` slash command
+    (``approve``/``decline fingerprint:<fp>`` to act, or ``help``/``pending`` to discover what's
+    available), parsed into a Command and run through the shared command core; we reply with a
+    type-4 message the operator sees in-channel.
 
 The channel webhook surface (notify/discord.py) posts the alerts (with the fingerprint); this
 adapter takes the reply back. Register the slash command once against your application -- see
@@ -24,7 +25,7 @@ import json
 import os
 from collections.abc import Mapping
 
-from .base import APPROVE, DECLINE, Interaction
+from .base import APPROVE, DECLINE, HELP, PENDING, Command
 
 try:  # the optional [discord] extra; absence is handled by ready(), never an import crash
     from nacl.exceptions import BadSignatureError
@@ -61,26 +62,28 @@ def _actor(payload: dict) -> str:
     return user.get("username") or "discord"
 
 
-def interaction_from_payload(payload: dict) -> Interaction | None:
-    """An Interaction from a Discord APPLICATION_COMMAND payload, or None if it isn't one of
-    ours. The command is ``/steadystate <approve|decline> fingerprint:<fp>`` -- a subcommand
-    whose name is the decision, carrying a ``fingerprint`` string option."""
+def command_from_payload(payload: dict) -> Command | None:
+    """A Command from a Discord APPLICATION_COMMAND payload, or None if it isn't one of ours.
+    The command is ``/steadystate <verb> [fingerprint:<fp>]`` -- a subcommand whose name is the
+    verb; approve/decline carry a ``fingerprint`` string option, help/pending carry none."""
     if payload.get("type") != _APPLICATION_COMMAND:
         return None
     subcommands = (payload.get("data") or {}).get("options") or []
     if not subcommands or not isinstance(subcommands[0], dict):
         return None
-    decision = subcommands[0].get("name")
-    if decision not in (APPROVE, DECLINE):
-        return None
-    options = subcommands[0].get("options") or []
-    fingerprint = next(
-        (o.get("value") for o in options if isinstance(o, dict) and o.get("name") == "fingerprint"),
-        None,
-    )
-    if not isinstance(fingerprint, str) or not fingerprint:
-        return None
-    return Interaction(decision, fingerprint, _actor(payload))
+    verb = subcommands[0].get("name")
+    actor = _actor(payload)
+    if verb in (HELP, PENDING):
+        return Command(verb, actor)
+    if verb in (APPROVE, DECLINE):
+        options = subcommands[0].get("options") or []
+        fingerprint = next(
+            (o["value"] for o in options if isinstance(o, dict) and o.get("name") == "fingerprint"),
+            None,
+        )
+        if isinstance(fingerprint, str) and fingerprint:
+            return Command(verb, actor, fingerprint)
+    return None
 
 
 class DiscordInbound:
@@ -115,12 +118,12 @@ class DiscordInbound:
             return json.dumps(_PONG).encode()
         return None
 
-    def parse(self, body: str) -> Interaction | None:
+    def parse(self, body: str) -> Command | None:
         try:
             payload = json.loads(body)
         except ValueError:
             return None
-        return interaction_from_payload(payload) if isinstance(payload, dict) else None
+        return command_from_payload(payload) if isinstance(payload, dict) else None
 
     def respond(self, message: str) -> bytes:
         return json.dumps({"type": _CHANNEL_MESSAGE, "data": {"content": message}}).encode()

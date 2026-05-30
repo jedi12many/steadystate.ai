@@ -40,3 +40,8 @@ the webhook with the decision and fingerprint:
 The listener verifies the HMAC signature, runs the **same** guardrailed remediation the CLI, Slack,
 and Discord paths use (actor recorded as the Teams sender's name), and replies in-channel with the
 outcome. `@steadystate decline <fingerprint>` declines it.
+
+**Discovery, no fingerprint needed:** `@steadystate help` lists the commands the listener accepts,
+and `@steadystate pending` shows the remediations awaiting approval with their fingerprints — handy
+for an operator who didn't set up the deployment. (Teams needs no command registration; these work
+as soon as you upgrade.)

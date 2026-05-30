@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Register the /steadystate approve|decline slash command on your Discord application.
+"""Register the /steadystate slash command (help · pending · approve · decline) on your app.
 
-One-time setup so an operator can approve a pending remediation from Discord. Stdlib only
-(urllib) -- no install needed. Reads the command shape from command.json next to this file.
+One-time setup so an operator can discover and drive pending remediations from Discord. Stdlib
+only (urllib) -- no install needed. Reads the command shape from command.json next to this file.
 
 Environment:
   DISCORD_APP_ID     your application's ID (Developer Portal -> General Information)
