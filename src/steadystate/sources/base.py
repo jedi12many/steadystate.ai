@@ -7,9 +7,29 @@ Drift directly -- those implement DriftSource.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 from ..model import Drift, Resource
+
+
+@dataclass(frozen=True)
+class Capabilities:
+    """A plugin's command manifest, split into two permission categories.
+
+    - ``observe``: read-only commands the plugin runs to *collect* state. Pre-approved --
+      steadystate may run these freely (they cannot change a deployment).
+    - ``destructive``: potentially state-changing commands the plugin runs to *act*
+      (remediate). These ALWAYS require permission before they run -- the approval gate.
+
+    A plugin with no ``destructive`` commands is observe-only by declaration. Documenting
+    both per plugin is the permission contract: an operator sees exactly what a plugin will
+    run and which side of the approval line each command sits on -- and a hand-written plugin
+    declares its own, so the boundary is the plugin's to define, not a central policy's.
+    """
+
+    observe: tuple[str, ...] = ()
+    destructive: tuple[str, ...] = ()
 
 
 @runtime_checkable

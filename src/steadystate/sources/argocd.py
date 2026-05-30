@@ -15,6 +15,7 @@ import os
 import urllib.request
 
 from ..model import ChangeType, Drift, Provenance
+from .base import Capabilities
 
 
 def _identity(res: dict) -> str:
@@ -47,6 +48,8 @@ class ArgoCDSource:
     a server base_url + bearer token to fetch one live."""
 
     name = "argocd"
+    # Observe-only: steadystate reads an Application's sync status; ArgoCD owns the syncing.
+    commands = Capabilities(observe=("GET /api/v1/applications/{app}",))
 
     def __init__(
         self,

@@ -28,6 +28,7 @@ import subprocess
 
 from ..model import Drift, Provenance, Resource
 from ..reconcile import reconcile
+from .base import Capabilities
 
 # Workload kinds whose containers live under spec.template.spec; a bare Pod keeps
 # them under spec directly.
@@ -143,6 +144,10 @@ class KubernetesSource:
     parsed `declared`/`observed` docs (testing / CI) or args to run `kubectl get` live."""
 
     name = "kubernetes"
+    commands = Capabilities(
+        observe=("kubectl get -o json",),
+        destructive=("kubectl apply -f", "kubectl delete", "kubectl rollout restart"),
+    )
 
     def __init__(
         self,

@@ -17,6 +17,7 @@ import os
 import urllib.request
 
 from ..model import ChangeType, Drift, Provenance
+from .base import Capabilities
 
 # state -> ChangeType. Anything absent from these sets is treated as MODIFIED.
 _ADDED_STATES = {"Missing", "NotFound"}  # declared, not in reality yet
@@ -68,6 +69,8 @@ class RancherSource:
     Rancher server base_url + bearer token to fetch one live."""
 
     name = "rancher"
+    # Observe-only: steadystate reads a Fleet GitRepo's status; Fleet owns the syncing.
+    commands = Capabilities(observe=("GET /apis/fleet.cattle.io/v1alpha1/.../gitrepos/{name}",))
 
     def __init__(
         self,
