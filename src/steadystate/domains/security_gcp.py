@@ -4,16 +4,17 @@ Like the AWS pack, this only raises severity when it can *positively* recognize 
 drift makes a resource more reachable than it should be. Anything it does not recognize
 returns None -- the core keeps its baseline and we never fabricate a security angle.
 
-EXPOSURE DIRECTION (deliberately the OPPOSITE of the AWS pack)
--------------------------------------------------------------
-The AWS pack is a *plan-review* tool: it treats ``declared`` as the planned ``after`` and
-flags when the *declared* config introduces exposure. This GCP pack is a *drift-monitoring*
-tool over real infrastructure: after steadystate's terraform dedup a drifted resource carries
-``declared = {the config}`` and ``observed = {reality}``. We therefore flag the OTHER
-direction -- when ``observed`` (real state) is more exposed than ``declared`` (config says):
-reality drifted open even though config does not allow it. Concretely: flag when ``observed``
-is open-to-world but ``declared`` is not. (We do not "fix" the AWS pack; it is correct for its
-own plan-review framing.)
+EXPOSURE DIRECTION
+------------------
+A drifted resource carries ``declared = {config}`` and ``observed = {reality}``. Set-typed
+exposure attributes (firewall ``source_ranges``, IAM member lists) key off the OBSERVED
+(reality) side ALONE: terraform encodes a TypeSet's planned ``after`` (which we map to
+``declared``) as the UNION of live + config, so a declared-vs-observed diff silently misses a
+real open-to-world rule (issue #26). A resource only reaches us because it drifted, so "reality
+is exposed to the world" is itself the finding. Scalar attributes (bucket
+public_access_prevention / uniform access, IAM role) keep the declared-vs-observed comparison,
+which detects a *relaxation* without false-flagging a posture that was always loose. The AWS
+pack uses the same split.
 
 Honest framing: this is *config-exposure -> ATT&CK technique mapping, NOT behavioral
 detection*. We map a recognized exposure-increasing drift to the technique it *enables*;
@@ -97,14 +98,16 @@ def _source_ranges(props: dict) -> set[str]:
     return out
 
 
-def _firewall_opened_to_world(declared: dict, observed: dict) -> bool:
+def _firewall_opened_to_world(observed: dict) -> bool:
     # Egress firewalls don't grant inbound reachability; ignore them.
     if not _is_ingress(observed):
         return False
-    gained = _source_ranges(observed) & _OPEN_CIDRS
-    if not gained:
-        return False
-    return bool(gained - (_source_ranges(declared) & _OPEN_CIDRS))
+    # Key off the OBSERVED (reality) side only -- NOT an observed-minus-declared diff. The
+    # resource only reaches us because it drifted, and terraform encodes a TypeSet's planned
+    # `after` (-> declared) as the UNION of live + config, so declared also carries the open
+    # CIDR and the diff comes back empty (issue #26). Reality having 0.0.0.0/0 on a drifted
+    # ingress rule is the finding.
+    return bool(_source_ranges(observed) & _OPEN_CIDRS)
 
 
 # --- storage bucket guardrails ----------------------------------------------
@@ -141,11 +144,11 @@ def _members(props: dict) -> set[str]:
     return out
 
 
-def _gained_public_members(declared: dict, observed: dict) -> bool:
-    gained = _members(observed) & _PUBLIC_MEMBERS
-    if not gained:
-        return False
-    return bool(gained - (_members(declared) & _PUBLIC_MEMBERS))
+def _gained_public_members(observed: dict) -> bool:
+    # Observed-keyed for the same reason as firewalls: member lists are a TypeSet, so a
+    # declared/observed diff is defeated by terraform's union encoding (issue #26). A drifted
+    # IAM resource whose reality grants allUsers/allAuthenticatedUsers is the finding.
+    return bool(_members(observed) & _PUBLIC_MEMBERS)
 
 
 def _role(props: dict) -> str:
@@ -182,14 +185,14 @@ class GCPSecurityDomain:
         observed = _as_dict(drift.observed)
         kind = drift.kind.lower()
 
-        if kind == _FIREWALL_KIND and _firewall_opened_to_world(declared, observed):
+        if kind == _FIREWALL_KIND and _firewall_opened_to_world(observed):
             return Severity.HIGH
         if kind == _BUCKET_KIND and _bucket_guardrail_relaxed(declared, observed):
             return Severity.HIGH
-        if kind in _BUCKET_IAM_KINDS and _gained_public_members(declared, observed):
+        if kind in _BUCKET_IAM_KINDS and _gained_public_members(observed):
             return Severity.CRITICAL
         if kind in _PROJECT_IAM_KINDS and (
-            _role_broadened(declared, observed) or _gained_public_members(declared, observed)
+            _role_broadened(declared, observed) or _gained_public_members(observed)
         ):
             return Severity.HIGH
         return None
@@ -206,16 +209,16 @@ class GCPSecurityDomain:
         kind = drift.kind.lower()
 
         out: list[Reference] = []
-        if kind == _FIREWALL_KIND and _firewall_opened_to_world(declared, observed):
+        if kind == _FIREWALL_KIND and _firewall_opened_to_world(observed):
             out.append(_T1190)
         if kind == _BUCKET_KIND and _bucket_guardrail_relaxed(declared, observed):
             # Relaxing the bucket guardrail both impairs a defense (T1562) and exposes
             # the bucket's data (T1530); surface both.
             out.extend((_T1530, _T1562))
-        if kind in _BUCKET_IAM_KINDS and _gained_public_members(declared, observed):
+        if kind in _BUCKET_IAM_KINDS and _gained_public_members(observed):
             out.append(_T1530)
         if kind in _PROJECT_IAM_KINDS and (
-            _role_broadened(declared, observed) or _gained_public_members(declared, observed)
+            _role_broadened(declared, observed) or _gained_public_members(observed)
         ):
             out.append(_T1098)
         return out

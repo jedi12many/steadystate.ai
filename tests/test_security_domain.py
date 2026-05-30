@@ -39,28 +39,32 @@ def test_public_access_block_still_blocking_is_ignored():
 
 
 def test_ingress_opening_world_is_high():
+    # Keyed off observed (reality): the drifted rule is open to the world in reality.
     drift = _drift(
         "aws_security_group_rule",
-        declared={"cidr_blocks": ["10.0.0.0/8", "0.0.0.0/0"]},
-        observed={"cidr_blocks": ["10.0.0.0/8"]},
+        declared={"cidr_blocks": ["10.0.0.0/8"]},
+        observed={"cidr_blocks": ["10.0.0.0/8", "0.0.0.0/0"]},
     )
     assert SecurityDomain().score(drift) is Severity.HIGH
 
 
-def test_ingress_already_open_is_not_flagged_again():
+def test_ingress_open_in_reality_flagged_even_when_declared_also_open():
+    # The union-encoding case (issue #26): terraform encodes a TypeSet's planned `after` as
+    # the union of live + config, so `declared` carries 0.0.0.0/0 too. Keyed off observed,
+    # reality being open is still the finding (a declared/observed diff would have missed it).
     drift = _drift(
         "aws_security_group_rule",
-        declared={"cidr_blocks": ["0.0.0.0/0"]},
+        declared={"cidr_blocks": ["0.0.0.0/0", "10.0.0.0/8"]},
         observed={"cidr_blocks": ["0.0.0.0/0"]},
     )
-    assert SecurityDomain().score(drift) is None
+    assert SecurityDomain().score(drift) is Severity.HIGH
 
 
 def test_ipv6_world_open_is_high():
     drift = _drift(
         "aws_security_group_rule",
-        declared={"ipv6_cidr_blocks": ["::/0"]},
-        observed={"ipv6_cidr_blocks": []},
+        declared={"ipv6_cidr_blocks": []},
+        observed={"ipv6_cidr_blocks": ["::/0"]},
     )
     assert SecurityDomain().score(drift) is Severity.HIGH
 
@@ -139,8 +143,8 @@ def test_pipeline_raises_severity_via_security_domain(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     drift = _drift(
         "aws_security_group_rule",
-        declared={"cidr_blocks": ["0.0.0.0/0"]},
-        observed={"cidr_blocks": ["10.0.0.0/8"]},
+        declared={"cidr_blocks": ["10.0.0.0/8"]},
+        observed={"cidr_blocks": ["0.0.0.0/0"]},
     )
     case = Pipeline().run([drift]).alerts[0]
     assert case.severity is Severity.HIGH  # baseline MODIFIED=medium, raised to high
@@ -218,8 +222,8 @@ def test_public_access_block_relaxed_references_t1562_and_t1530():
 def test_ingress_opened_to_world_references_t1190():
     drift = _drift(
         "aws_security_group_rule",
-        declared={"cidr_blocks": ["0.0.0.0/0"]},
-        observed={"cidr_blocks": ["10.0.0.0/8"]},
+        declared={"cidr_blocks": ["10.0.0.0/8"]},
+        observed={"cidr_blocks": ["0.0.0.0/0"]},
     )
     assert _ids(SecurityDomain().references(drift)) == ["T1190"]
 
@@ -235,12 +239,13 @@ def test_wildcard_iam_policy_references_t1098():
     assert _ids(SecurityDomain().references(drift)) == ["T1098"]
 
 
-def test_recognized_but_unchanged_yields_no_references():
-    # Already-open ingress: score() returns None, so references() returns none either.
+def test_observed_not_open_yields_no_references():
+    # Reality is NOT open (only a private range), even though declared shows 0.0.0.0/0:
+    # keyed off observed, there is nothing exposed to flag, so no references either.
     drift = _drift(
         "aws_security_group_rule",
         declared={"cidr_blocks": ["0.0.0.0/0"]},
-        observed={"cidr_blocks": ["0.0.0.0/0"]},
+        observed={"cidr_blocks": ["10.0.0.0/8"]},
     )
     assert SecurityDomain().score(drift) is None
     assert SecurityDomain().references(drift) == []
@@ -301,8 +306,8 @@ def test_pipeline_carries_references_end_to_end(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     drift = _drift(
         "aws_security_group_rule",
-        declared={"cidr_blocks": ["0.0.0.0/0"]},
-        observed={"cidr_blocks": ["10.0.0.0/8"]},
+        declared={"cidr_blocks": ["10.0.0.0/8"]},
+        observed={"cidr_blocks": ["0.0.0.0/0"]},
     )
     case = Pipeline().run([drift]).alerts[0]
     assert case.flagged_by == "security"
