@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -13,6 +14,7 @@ from .notify import SURFACES, build_surfaces
 from .notify.base import Surface
 from .notify.console import ConsoleSurface
 from .reason.correlate import Correlator
+from .reason.cost import roll_up
 from .reason.enrich import ENRICHERS, Enricher, build_enricher
 from .reason.llm import LLMAnalyst
 from .reason.pipeline import CORRELATORS, Pipeline, build_correlator
@@ -167,6 +169,11 @@ def scan(
     if not stateless:
         with _open_store(state) as store:
             resolved = reconcile(report, store, now)
+            # Best-effort spend telemetry: persist this scan's LLM calls. Never a
+            # correctness path -- a wedged db must not break a scan, so we swallow failures.
+            with contextlib.suppress(Exception):
+                for call in analyst.calls:
+                    store.record_llm_call(call, now)
     for surface in surfaces:
         surface.emit(report, resolved=resolved)
 
@@ -255,6 +262,41 @@ def findings(state: Path = _STATE_OPTION) -> None:
     for f in rows:
         typer.echo(
             f"{f.fingerprint}  {f.status:<8}  {f.first_seen}  {f.last_severity:<8}  {f.last_title}"
+        )
+
+
+@app.command()
+def cost(
+    state: Path = _STATE_OPTION,
+    window: str = typer.Option(
+        "all",
+        "--window",
+        help="Spend window: all | 24h | 60m (60m is the fastest signal a caller has "
+        "gone wild on retries).",
+    ),
+) -> None:
+    """Estimated LLM spend by caller. Raw tokens are recorded per call (incl. failures);
+    dollars are priced at read time, so history re-prices when rates change."""
+    cutoff: datetime | None = None
+    if window == "24h":
+        cutoff = datetime.now(UTC) - timedelta(hours=24)
+    elif window == "60m":
+        cutoff = datetime.now(UTC) - timedelta(hours=1)
+    elif window != "all":
+        raise typer.BadParameter("window must be: all | 24h | 60m")
+    with _open_store(state) as store:
+        rows = roll_up(store.llm_calls_since(cutoff))
+    if not rows:
+        typer.echo("no LLM calls recorded yet.")
+        return
+    total = sum(r.cost_usd for r in rows)
+    calls = sum(r.calls for r in rows)
+    typer.echo(f"LLM spend ({window}): ~${total:.4f} over {calls} call(s)")
+    for r in rows:
+        fail = f"  {r.failures} failed" if r.failures else ""
+        typer.echo(
+            f"  {r.caller:<12} ~${r.cost_usd:.4f}  {r.calls} call(s){fail}  "
+            f"in={r.input_tokens} out={r.output_tokens} cache_read={r.cache_read_tokens}"
         )
 
 

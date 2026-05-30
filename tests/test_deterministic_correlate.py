@@ -34,7 +34,7 @@ def _drift(
     )
 
 
-def _boom(self, system, user):  # pragma: no cover - only runs if wiring is wrong
+def _boom(self, system, user, caller):  # pragma: no cover - only runs if wiring is wrong
     raise AssertionError("the model must not be called for deterministic correlation")
 
 
@@ -257,7 +257,7 @@ def test_llm_mode_degrades_to_grouping_on_failure(monkeypatch):
     # `llm` forces the LLM path, but a None/failed completion degrades to deterministic
     # grouping -- so shared-file Events still fold into one grouped Alert.
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-    monkeypatch.setattr(LLMAnalyst, "_complete", lambda self, system, user: None)
+    monkeypatch.setattr(LLMAnalyst, "_complete", lambda self, system, user, caller: None)
     drifts = [
         _drift("aws_instance.a", file="net.tf"),
         _drift("aws_subnet.b", file="net.tf"),

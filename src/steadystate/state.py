@@ -22,6 +22,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from .reason.cost import LlmCall
+
 # The finding lifecycle. A finding is born ``open``; an operator may ``mute`` or
 # ``snooze`` it; the reconciler flips it to ``resolved`` when it stops appearing,
 # and back to ``open`` if it recurs.
@@ -41,6 +43,24 @@ CREATE TABLE IF NOT EXISTS findings (
     snooze_until  TEXT,
     note          TEXT,
     actor         TEXT
+)
+"""
+
+# LLM spend telemetry: one row per model call (including failures + retries), raw token
+# counts only. Dollars are computed at read time from reason/cost.py, so history re-prices
+# for free. Append-only; never on the critical path -- a wedged db must not break a scan.
+_LLM_SCHEMA = """
+CREATE TABLE IF NOT EXISTS llm_calls (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    at                    TEXT NOT NULL,
+    caller                TEXT NOT NULL,
+    provider              TEXT NOT NULL,
+    model                 TEXT NOT NULL,
+    input_tokens          INTEGER NOT NULL,
+    output_tokens         INTEGER NOT NULL,
+    cache_creation_tokens INTEGER NOT NULL,
+    cache_read_tokens     INTEGER NOT NULL,
+    succeeded             INTEGER NOT NULL
 )
 """
 
@@ -79,6 +99,7 @@ class StateStore:
         self._conn = sqlite3.connect(str(path), isolation_level=None)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute(_SCHEMA)
+        self._conn.execute(_LLM_SCHEMA)
 
     def close(self) -> None:
         self._conn.close()
@@ -289,6 +310,39 @@ class StateStore:
             (status, snooze_until, note, actor, now_s, fingerprint),
         )
 
+    # -- LLM spend telemetry ----------------------------------------------------
+
+    def record_llm_call(self, call: LlmCall, now: datetime) -> None:
+        """Append one model call. Best-effort -- callers wrap this so telemetry never
+        breaks a scan; failures and retries each get their own row."""
+        self._conn.execute(
+            "INSERT INTO llm_calls (at, caller, provider, model, input_tokens, "
+            "output_tokens, cache_creation_tokens, cache_read_tokens, succeeded) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                _iso(now),
+                call.caller,
+                call.provider,
+                call.model,
+                call.input_tokens,
+                call.output_tokens,
+                call.cache_creation_tokens,
+                call.cache_read_tokens,
+                int(call.succeeded),
+            ),
+        )
+
+    def llm_calls_since(self, cutoff: datetime | None = None) -> list[LlmCall]:
+        """Every recorded call (oldest first), or only those at/after ``cutoff``. The
+        caller rolls these up and prices them at read time (reason/cost.py)."""
+        if cutoff is None:
+            rows = self._conn.execute("SELECT * FROM llm_calls ORDER BY at, id").fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT * FROM llm_calls WHERE at >= ? ORDER BY at, id", (_iso(cutoff),)
+            ).fetchall()
+        return [_row_to_llm_call(r) for r in rows]
+
 
 def _row_to_finding(row: sqlite3.Row) -> Finding:
     return Finding(
@@ -301,4 +355,17 @@ def _row_to_finding(row: sqlite3.Row) -> Finding:
         snooze_until=row["snooze_until"],
         note=row["note"],
         actor=row["actor"],
+    )
+
+
+def _row_to_llm_call(row: sqlite3.Row) -> LlmCall:
+    return LlmCall(
+        caller=row["caller"],
+        provider=row["provider"],
+        model=row["model"],
+        input_tokens=row["input_tokens"],
+        output_tokens=row["output_tokens"],
+        cache_creation_tokens=row["cache_creation_tokens"],
+        cache_read_tokens=row["cache_read_tokens"],
+        succeeded=bool(row["succeeded"]),
     )
