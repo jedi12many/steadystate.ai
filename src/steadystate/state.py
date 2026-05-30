@@ -66,6 +66,7 @@ CREATE TABLE IF NOT EXISTS llm_calls (
 
 # Remediations offered for approval under `--autonomy suggest`, keyed by drift fingerprint.
 # An operator drives them with the approve/decline verbs. status: pending | approved | declined.
+# `environment` is the scan's --label, carried so the audit log can record which env it was.
 _PENDING_SCHEMA = """
 CREATE TABLE IF NOT EXISTS pending_actions (
     fingerprint    TEXT PRIMARY KEY,
@@ -75,7 +76,25 @@ CREATE TABLE IF NOT EXISTS pending_actions (
     command        TEXT NOT NULL,
     status         TEXT NOT NULL,
     created_at     TEXT NOT NULL,
-    actor          TEXT
+    actor          TEXT,
+    environment    TEXT
+)
+"""
+
+# The remediation audit log: one APPEND-ONLY row per approve/decline, never mutated. This is
+# the accountability trail for the act loop -- what ran, when, who decided, and the outcome.
+_AUDIT_SCHEMA = """
+CREATE TABLE IF NOT EXISTS audit_log (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    at             TEXT NOT NULL,
+    fingerprint    TEXT NOT NULL,
+    source         TEXT NOT NULL,
+    drift_identity TEXT NOT NULL,
+    environment    TEXT,
+    actor          TEXT NOT NULL,
+    decision       TEXT NOT NULL,
+    outcome        TEXT NOT NULL,
+    detail         TEXT
 )
 """
 
@@ -83,6 +102,12 @@ CREATE TABLE IF NOT EXISTS pending_actions (
 PENDING = "pending"
 APPROVED = "approved"
 DECLINED = "declined"
+
+# Audit outcomes (the result of an approved remediation; a decline records DECLINED).
+VERIFIED = "verified"  # applied and the drift confirmed cleared
+APPLIED = "applied"  # ran, but post-apply verification didn't confirm it cleared
+FAILED = "failed"  # the executor could not apply
+NOOP = "noop"  # the drift was already gone by approval time
 
 
 def _iso(now: datetime) -> str:
@@ -117,6 +142,22 @@ class PendingAction:
     status: str = PENDING  # overwritten by the store on read; default eases construction
     created_at: str = ""  # the store stamps this on record
     actor: str | None = None
+    environment: str | None = None  # the scan's --label, so the audit log can record the env
+
+
+@dataclass(frozen=True)
+class AuditEntry:
+    """One append-only record of a remediation decision -- the act loop's accountability trail."""
+
+    fingerprint: str
+    source: str
+    drift_identity: str
+    actor: str  # who decided: cli / auto / a chat username
+    decision: str  # APPROVED | DECLINED
+    outcome: str  # VERIFIED | APPLIED | FAILED | NOOP (approved), or DECLINED
+    environment: str | None = None
+    detail: str | None = None  # the executor's result detail / message
+    at: str = ""  # the store stamps this on record
 
 
 class StateStore:
@@ -135,6 +176,15 @@ class StateStore:
         self._conn.execute(_SCHEMA)
         self._conn.execute(_LLM_SCHEMA)
         self._conn.execute(_PENDING_SCHEMA)
+        self._conn.execute(_AUDIT_SCHEMA)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Idempotent column adds for dbs created before a column existed (CREATE IF NOT EXISTS
+        leaves an old table untouched). Cheap and safe to run on every open."""
+        cols = {row["name"] for row in self._conn.execute("PRAGMA table_info(pending_actions)")}
+        if "environment" not in cols:
+            self._conn.execute("ALTER TABLE pending_actions ADD COLUMN environment TEXT")
 
     def close(self) -> None:
         self._conn.close()
@@ -389,8 +439,8 @@ class StateStore:
             return
         created = existing.created_at if existing is not None else _iso(now)
         self._conn.execute(
-            "INSERT OR REPLACE INTO pending_actions (fingerprint, source, path, "
-            "drift_identity, command, status, created_at, actor) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO pending_actions (fingerprint, source, path, drift_identity, "
+            "command, status, created_at, actor, environment) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 action.fingerprint,
                 action.source,
@@ -400,6 +450,7 @@ class StateStore:
                 PENDING,
                 created,
                 None,
+                action.environment,
             ),
         )
 
@@ -422,6 +473,39 @@ class StateStore:
             "UPDATE pending_actions SET status = ?, actor = ? WHERE fingerprint = ?",
             (status, actor, fingerprint),
         )
+
+    # -- audit log (append-only history of every remediation decision) ----------
+
+    def record_audit(self, entry: AuditEntry, now: datetime) -> None:
+        """Append one immutable record of an approve/decline. Never updates an existing row."""
+        self._conn.execute(
+            "INSERT INTO audit_log (at, fingerprint, source, drift_identity, environment, "
+            "actor, decision, outcome, detail) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                _iso(now),
+                entry.fingerprint,
+                entry.source,
+                entry.drift_identity,
+                entry.environment,
+                entry.actor,
+                entry.decision,
+                entry.outcome,
+                entry.detail,
+            ),
+        )
+
+    def audit_log(self, limit: int = 50, environment: str | None = None) -> list[AuditEntry]:
+        """The most recent audit records, newest first, optionally filtered to one environment."""
+        if environment is not None:
+            rows = self._conn.execute(
+                "SELECT * FROM audit_log WHERE environment = ? ORDER BY id DESC LIMIT ?",
+                (environment, limit),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT * FROM audit_log ORDER BY id DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return [_row_to_audit(row) for row in rows]
 
 
 def _row_to_finding(row: sqlite3.Row) -> Finding:
@@ -461,4 +545,19 @@ def _row_to_pending(row: sqlite3.Row) -> PendingAction:
         status=row["status"],
         created_at=row["created_at"],
         actor=row["actor"],
+        environment=row["environment"],
+    )
+
+
+def _row_to_audit(row: sqlite3.Row) -> AuditEntry:
+    return AuditEntry(
+        fingerprint=row["fingerprint"],
+        source=row["source"],
+        drift_identity=row["drift_identity"],
+        actor=row["actor"],
+        decision=row["decision"],
+        outcome=row["outcome"],
+        environment=row["environment"],
+        detail=row["detail"],
+        at=row["at"],
     )
