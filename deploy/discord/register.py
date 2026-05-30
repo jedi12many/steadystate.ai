@@ -24,6 +24,9 @@ import urllib.request
 from pathlib import Path
 
 _API = "https://discord.com/api/v10"
+# Discord's Cloudflare edge bans the default "Python-urllib/x" User-Agent (error 1010); send a
+# real one, matching the Discord surface (notify/discord.py).
+_USER_AGENT = "steadystate (+https://github.com/jedi12many/steadystate.ai)"
 
 
 def main() -> int:
@@ -45,7 +48,11 @@ def main() -> int:
     request = urllib.request.Request(
         url,
         data=json.dumps(command).encode(),
-        headers={"Authorization": f"Bot {token}", "Content-Type": "application/json"},
+        headers={
+            "Authorization": f"Bot {token}",
+            "Content-Type": "application/json",
+            "User-Agent": _USER_AGENT,
+        },
         method="POST",  # create-or-update by name
     )
     try:

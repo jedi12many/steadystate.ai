@@ -78,7 +78,20 @@ def format_discord_message(alert: Alert) -> dict:
         "color": _SEVERITY_COLOR.get(alert.severity.value, _DEFAULT_COLOR),
         "fields": fields,
     }
+    fingerprint = _fingerprint(alert)
+    if fingerprint:  # so an operator can copy it into /steadystate approve <fingerprint>
+        embed["footer"] = {"text": f"fingerprint: {fingerprint}"}
     return {"embeds": [embed]}
+
+
+def _fingerprint(alert: Alert) -> str | None:
+    """The key an operator would approve -- the alert's first drift, else its first policy
+    finding (mirrors the Slack surface's button value)."""
+    if alert.drifts:
+        return alert.drifts[0].fingerprint
+    if alert.findings:
+        return alert.findings[0].fingerprint
+    return None
 
 
 class DiscordSurface:

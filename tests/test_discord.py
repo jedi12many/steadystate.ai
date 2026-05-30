@@ -92,6 +92,20 @@ def test_format_omits_references_when_absent():
     assert "References" not in _fields(_embed(format_discord_message(_case())))
 
 
+def test_footer_carries_the_fingerprint_for_slash_approval():
+    embed = _embed(format_discord_message(_case()))
+    assert _case().drifts[0].fingerprint in embed["footer"]["text"]
+
+
+def test_no_footer_without_a_fingerprint():
+    bare = _embed(
+        format_discord_message(
+            Alert(title="t", severity=Severity.LOW, drifts=[], why_it_matters="w")
+        )
+    )
+    assert "footer" not in bare
+
+
 def test_severity_color_map():
     expected = {
         Severity.CRITICAL: 0x992D22,
