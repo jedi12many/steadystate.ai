@@ -37,6 +37,7 @@ No agent to install, no dashboard to learn. Point it at your IaC. Run `steadysta
 
 - **Security packs (AWS · GCP · Azure):** raise severity only for *positively recognized* exposure-increasing drift, mapped to ATT&CK — open `0.0.0.0/0` ingress → **T1190**, public bucket / relaxed storage → **T1530**, broad IAM/role → **T1098**. Honest framing: config-exposure → technique, *not* behavioral detection.
 - **Docker CIS compliance:** a standing-policy baseline (privileged, host net/pid, capabilities, image pinning, …), not just drift-scoring.
+- **Kubernetes Pod Security (`security-k8s`):** a standing baseline over declared manifests — privileged → **T1611**, host namespaces, added capabilities (host-escape-grade like `SYS_ADMIN` → HIGH), hostPath mounts, runAsNonRoot — mapped to CIS Kubernetes 5.2 + ATT&CK.
 
 ## Surfaces — out (`--to`)
 

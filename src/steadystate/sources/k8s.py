@@ -107,36 +107,121 @@ def _properties(obj: dict) -> dict:
     return props
 
 
-def _resources_from_objects(objects: list[dict]) -> list[Resource]:
-    """Project a list of K8s objects to canonical Resources. Pure + testable."""
+def _truthy(value: object) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "1", "yes")
+    return bool(value)
+
+
+def _security_concerns(obj: dict) -> dict:
+    """The pod-security *posture* of an object, as a dict of only the concerns actually present
+    (empty when clean). This feeds the standing-policy pack (security_k8s.py); it deliberately
+    reports affirmative violations only -- a vanilla manifest projects to {} and so reads exactly
+    as before, never getting a `security` key. Config-posture, NOT runtime detection."""
+    pod = _pod_spec(obj)
+    if not pod:
+        return {}
+    containers = [
+        c
+        for key in ("containers", "initContainers")
+        for c in (pod.get(key) or [])
+        if isinstance(c, dict)
+    ]
+
+    def sc(container: dict) -> dict:
+        return container.get("securityContext") or {}
+
+    concerns: dict = {}
+    if any(_truthy(sc(c).get("privileged")) for c in containers):
+        concerns["privileged"] = True
+    if _truthy(pod.get("hostNetwork")):
+        concerns["host_network"] = True
+    if _truthy(pod.get("hostPID")):
+        concerns["host_pid"] = True
+    if _truthy(pod.get("hostIPC")):
+        concerns["host_ipc"] = True
+    caps = sorted(
+        {str(cap) for c in containers for cap in (sc(c).get("capabilities") or {}).get("add") or []}
+    )
+    if caps:
+        concerns["added_capabilities"] = caps
+    host_paths = sorted(
+        {
+            str(path)
+            for v in (pod.get("volumes") or [])
+            if isinstance(v, dict) and (path := (v.get("hostPath") or {}).get("path"))
+        }
+    )
+    if host_paths:
+        concerns["host_path_volumes"] = host_paths
+    if any(sc(c).get("allowPrivilegeEscalation") is True for c in containers):
+        concerns["allow_privilege_escalation"] = True
+    pod_sc = pod.get("securityContext") or {}
+    runs_root = (
+        pod_sc.get("runAsUser") == 0
+        or pod_sc.get("runAsNonRoot") is False
+        or any(
+            sc(c).get("runAsUser") == 0 or sc(c).get("runAsNonRoot") is False for c in containers
+        )
+    )
+    if runs_root:
+        concerns["runs_as_root"] = True
+    return concerns
+
+
+def _resources_from_objects(objects: list[dict], *, with_security: bool) -> list[Resource]:
+    """Project a list of K8s objects to canonical Resources. Pure + testable. ``with_security``
+    attaches the posture projection (declared side only) under a ``security`` key when -- and
+    only when -- a concern is present, so clean objects are unchanged."""
     out: list[Resource] = []
     for obj in objects:
         identity = _identity(obj)
+        props = _properties(obj)
+        if with_security:
+            concerns = _security_concerns(obj)
+            if concerns:
+                props = {**props, "security": concerns}
         out.append(
             Resource(
                 kind=obj.get("kind") or "",
                 identity=identity,
                 provenance=Provenance(source="kubernetes", address=identity),
-                properties=_properties(obj),
+                properties=props,
             )
         )
     return out
 
 
 def resources_from_manifests(doc: object) -> list[Resource]:
-    """Turn a declared manifest document into Resources. Pure."""
-    return _resources_from_objects(_normalize(doc))
+    """Turn a declared manifest document into Resources -- with the security posture projection,
+    since the policy-relevant fields (privileged, hostNetwork, capabilities, ...) live here on the
+    declared side. Pure."""
+    return _resources_from_objects(_normalize(doc), with_security=True)
 
 
 def observed_resources_from_kubectl(doc: object) -> list[Resource]:
-    """Turn `kubectl get -o json` output into observed Resources. Pure. Identity matches
-    the declared side so the two align."""
-    return _resources_from_objects(_normalize(doc))
+    """Turn `kubectl get -o json` output into observed Resources. Pure. Identity matches the
+    declared side so they align. No security projection -- posture is audited declared-side."""
+    return _resources_from_objects(_normalize(doc), with_security=False)
+
+
+def _drift_only(resource: Resource) -> Resource:
+    """A copy without the ``security`` key, so the posture projection (declared-only) can't read
+    as drift when reconciled against the cluster. A no-op for clean objects (no security key)."""
+    if "security" not in resource.properties:
+        return resource
+    return Resource(
+        kind=resource.kind,
+        identity=resource.identity,
+        provenance=resource.provenance,
+        properties={k: v for k, v in resource.properties.items() if k != "security"},
+    )
 
 
 def reconcile_k8s(declared: list[Resource], observed: list[Resource]) -> list[Drift]:
-    """Reconcile declared vs cluster objects on presence + images/replicas. Pure."""
-    return reconcile(declared, observed)
+    """Reconcile declared vs cluster objects on presence + images/replicas. Pure. The security
+    posture projection is dropped first so it never shows as drift."""
+    return reconcile([_drift_only(r) for r in declared], [_drift_only(r) for r in observed])
 
 
 class KubernetesSource:

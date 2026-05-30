@@ -13,6 +13,7 @@ from .compliance import DockerComplianceDomain
 from .security import SecurityDomain
 from .security_azure import AzureSecurityDomain
 from .security_gcp import GCPSecurityDomain
+from .security_k8s import KubernetesSecurityDomain
 
 # The packs the pipeline loads by default. Append new packs here; pipeline.py
 # does not change.
@@ -21,6 +22,7 @@ DEFAULT_DOMAINS: list[Domain] = [
     GCPSecurityDomain(),
     AzureSecurityDomain(),
     DockerComplianceDomain(),
+    KubernetesSecurityDomain(),
 ]
 
 __all__ = [
