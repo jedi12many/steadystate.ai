@@ -1,0 +1,44 @@
+name: codeql
+
+# Static analysis (SAST) for the Python code: CodeQL taint-tracks untrusted input to
+# dangerous sinks (command/path injection, SSRF, ...). It's smart about our subprocess use --
+# it flags a shell-out only if attacker-controlled data can reach the argv, not just for
+# calling out to terraform/kubectl/docker. Results land in the repo's Security tab.
+#
+# NOTE: code scanning is free on PUBLIC repos but needs GitHub Advanced Security on private
+# ones. The job is gated on visibility, so while this repo is private it cleanly *skips*
+# (neutral, not a red failure) and starts running automatically the moment it goes public.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  actions: read
+  security-events: write # upload the SARIF results to the Security tab
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    # Only runs where code scanning is available without GHAS: a public repo.
+    if: ${{ github.event.repository.private == false }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: python
+          # security-extended adds the deeper security queries beyond the default set,
+          # without the style/quality noise of security-and-quality.
+          queries: security-extended
+      # Python is interpreted, so no build step -- CodeQL extracts the source directly.
+      - name: Analyze
+        uses: github/codeql-action/analyze@v3
