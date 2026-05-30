@@ -103,6 +103,10 @@ See **[ARCHITECTURE.md](./ARCHITECTURE.md)** — the evolved thesis (drift **and
 
 Python, stdlib-only at the core (HTTP/LLM via `urllib`; `typer` + `rich` for the CLI). Ship via `pip` or the container image.
 
+## Security
+
+A tool that can change live infrastructure should hold itself to the bar it enforces. The project is scanned on every PR — **CodeQL** (SAST), **pip-audit** (dependency CVEs), and **bandit** (Python SAST), plus Dependabot — and every outbound request goes through one http(s)-allow-listed gate. The remediation **guardrails** (apply-eligibility → snapshot → verify → revert; chat is a trigger, never a bypass) are the highest-severity area: see **[SECURITY.md](./SECURITY.md)** for what's in scope and how to report a vulnerability privately.
+
 ## License
 
 Apache-2.0. See [LICENSE](./LICENSE).

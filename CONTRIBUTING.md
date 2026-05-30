@@ -4,8 +4,9 @@ Thanks for helping build the drift-reasoning engine. This guide mirrors what CI
 actually does, so if it passes locally it passes on the runner.
 
 Read **[ARCHITECTURE.md](./ARCHITECTURE.md)** first. The whole codebase is organized
-around four plugin seams (StateSource / Domain / Surface / Executor); most
-contributions are a plugin against one of those seams, not a change to the core.
+around a handful of plugin seams — StateSource · Domain · Surface (and its Inbound
+counterpart) · Executor · Correlator, plus the Enricher and Probe seams (ARCHITECTURE.md
+§6); most contributions are a plugin against one of those seams, not a change to the core.
 
 ## Dev setup
 
@@ -20,25 +21,26 @@ python3 -m venv .venv
 (The `[llm]` extra pulls in `anthropic` for the LLM-backed reasoning; it's
 optional and not needed to run the tests.)
 
-## The checks (these mirror CI exactly)
+## The checks (these mirror CI)
 
 Run all of these before opening a PR. They are the CI gates:
 
 ```sh
-ruff check src tests        # lint
-ruff format --check src tests  # formatting
-mypy src                    # types
-pytest                      # tests (with coverage)
+ruff check src tests             # lint
+ruff format --check src tests    # formatting
+mypy src                         # types
+pytest                           # tests (with coverage)
+bandit -r src -c pyproject.toml  # security lint (SAST)
 ```
 
-> The `mypy`, `ruff format --check`, and coverage gates land in the same change
-> that adds this file. Once it merges they are required on every PR, alongside the
-> `ruff check` + `pytest` gates already in `.github/workflows/ci.yml`.
+CI additionally runs **pip-audit** (dependency CVEs) and **CodeQL** (deeper SAST) from
+`.github/workflows/security.yml` and `codeql.yml`. You don't need to run those locally, but a
+PR must pass them; the bandit config (reviewed skips + rationale) lives in `[tool.bandit]` in
+`pyproject.toml`.
 
-CI runs on a **self-hosted GitHub Actions runner** shared with the wider fleet, so
-keep the test suite fast, deterministic, and free of network/live-infra calls
-(the live `terraform` paths in `act/` are deliberately not exercised by unit
-tests). **All PRs must pass CI before merge.**
+CI runs on **GitHub-hosted runners**, so keep the test suite fast, deterministic, and free of
+network/live-infra calls (the live `terraform` paths in `act/` are deliberately not exercised
+by unit tests). **All PRs must pass CI before merge.**
 
 ## Branches & commits
 
