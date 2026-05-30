@@ -23,6 +23,7 @@ import urllib.request
 from dataclasses import dataclass
 
 from ..model import Drift
+from .cost import LlmCall
 
 _DEFAULT_MODEL = os.environ.get("STEADYSTATE_MODEL", "claude-sonnet-4-5")
 _HTTP_TIMEOUT = float(os.environ.get("STEADYSTATE_LLM_TIMEOUT", "30"))
@@ -155,8 +156,53 @@ class LLMAnalyst:
         )
         self.openai_model = os.environ.get("STEADYSTATE_LLM_MODEL")
         self.timeout = _HTTP_TIMEOUT
+        # Per-scan spend telemetry, accumulated in memory as calls are made; the CLI
+        # persists it after the run (best-effort, never on the critical path).
+        self.calls: list[LlmCall] = []
 
     # -- provider selection -------------------------------------------------
+
+    def _model_for(self, provider: str) -> str:
+        return self.model if provider == "anthropic" else (self.openai_model or "")
+
+    def _record(self, caller: str, provider: str, usage: dict, *, succeeded: bool) -> None:
+        """Append one call's usage to the in-memory log. Failures carry zeroed tokens."""
+        self.calls.append(
+            LlmCall(
+                caller=caller,
+                provider=provider,
+                model=self._model_for(provider),
+                input_tokens=usage.get("input", 0),
+                output_tokens=usage.get("output", 0),
+                cache_creation_tokens=usage.get("cache_creation", 0),
+                cache_read_tokens=usage.get("cache_read", 0),
+                succeeded=succeeded,
+            )
+        )
+
+    @staticmethod
+    def _anthropic_usage(message: object) -> dict:
+        u = getattr(message, "usage", None)
+        return {
+            "input": getattr(u, "input_tokens", 0) or 0,
+            "output": getattr(u, "output_tokens", 0) or 0,
+            "cache_creation": getattr(u, "cache_creation_input_tokens", 0) or 0,
+            "cache_read": getattr(u, "cache_read_input_tokens", 0) or 0,
+        }
+
+    @staticmethod
+    def _openai_usage(payload: dict) -> dict:
+        u = payload.get("usage") or {}
+        prompt = u.get("prompt_tokens", 0) or 0
+        cached = (u.get("prompt_tokens_details") or {}).get("cached_tokens", 0) or 0
+        # OpenAI folds cached tokens into prompt_tokens; split them out so cache reads
+        # price at the cheaper rate instead of being counted as full-price input.
+        return {
+            "input": max(prompt - cached, 0),
+            "output": u.get("completion_tokens", 0) or 0,
+            "cache_creation": 0,  # OpenAI has no separate cache-write line
+            "cache_read": cached,
+        }
 
     def _openai_ready(self) -> bool:
         return bool(self.openai_base_url and self.openai_api_key and self.openai_model)
@@ -208,6 +254,7 @@ class LLMAnalyst:
             max_tokens=400,
             messages=[{"role": "user", "content": f"{_INSTRUCTION}\n\n{_drift_prompt(drift)}"}],
         )
+        self._record("analyze", "anthropic", self._anthropic_usage(message), succeeded=True)
         text = "".join(
             block.text for block in message.content if getattr(block, "type", None) == "text"
         ).strip()
@@ -217,6 +264,7 @@ class LLMAnalyst:
         try:
             return self._analyze_with_openai(drift)
         except (urllib.error.URLError, OSError, TimeoutError, ValueError, KeyError, IndexError):
+            self._record("analyze", "openai", {}, succeeded=False)
             return self._degrade(drift, _UNREACHABLE_HINT)
 
     def _analyze_with_openai(self, drift: Drift) -> Analysis:
@@ -243,6 +291,7 @@ class LLMAnalyst:
         )
         with urllib.request.urlopen(request, timeout=self.timeout) as response:
             payload = json.loads(response.read())
+        self._record("analyze", "openai", self._openai_usage(payload), succeeded=True)
         text = payload["choices"][0]["message"]["content"].strip()
         return Analysis(why_it_matters=text, recommended_action=None, llm_backed=True)
 
@@ -254,7 +303,7 @@ class LLMAnalyst:
         shared attribute (see reason/correlate.py), never one-per-drift noise."""
         if not drifts:
             return []
-        text = self._complete(_CORRELATE_INSTRUCTION, _correlate_prompt(drifts))
+        text = self._complete(_CORRELATE_INSTRUCTION, _correlate_prompt(drifts), caller="correlate")
         clusters = _parse_clusters(text, len(drifts)) if text is not None else None
         return clusters if clusters is not None else self._uncorrelated(drifts)
 
@@ -264,28 +313,32 @@ class LLMAnalyst:
 
         return deterministic_correlate(drifts)
 
-    def _complete(self, system: str, user: str) -> str | None:
+    def _complete(self, system: str, user: str, caller: str) -> str | None:
         """Raw model text from the configured provider, or None if unavailable/failed."""
         provider = self._provider()
         if provider == "none":
             return None
         try:
             if provider == "anthropic":
-                return self._complete_anthropic(system, user)
-            return self._complete_openai(system, user)
+                return self._complete_anthropic(system, user, caller)
+            return self._complete_openai(system, user, caller)
         except ImportError:
-            # anthropic SDK missing; fall through to an OpenAI-compatible endpoint if set.
+            # anthropic SDK missing (no call made; not a spend event); fall through to an
+            # OpenAI-compatible endpoint if set.
             if provider == "anthropic" and self._openai_ready():
                 try:
-                    return self._complete_openai(system, user)
+                    return self._complete_openai(system, user, caller)
                 except Exception:
+                    self._record(caller, "openai", {}, succeeded=False)
                     return None
             return None
         except Exception:
             # any model/network/parse failure -> caller degrades honestly; never crash a scan.
+            # Record a failure row so a stuck retry loop is visible in the spend report.
+            self._record(caller, provider, {}, succeeded=False)
             return None
 
-    def _complete_anthropic(self, system: str, user: str) -> str:
+    def _complete_anthropic(self, system: str, user: str, caller: str) -> str:
         from anthropic import Anthropic
 
         client = Anthropic(api_key=self.api_key)
@@ -295,11 +348,12 @@ class LLMAnalyst:
             system=system,
             messages=[{"role": "user", "content": user}],
         )
+        self._record(caller, "anthropic", self._anthropic_usage(message), succeeded=True)
         return "".join(
             block.text for block in message.content if getattr(block, "type", None) == "text"
         ).strip()
 
-    def _complete_openai(self, system: str, user: str) -> str:
+    def _complete_openai(self, system: str, user: str, caller: str) -> str:
         assert self.openai_base_url and self.openai_api_key and self.openai_model
         url = self.openai_base_url.rstrip("/") + "/chat/completions"
         body = json.dumps(
@@ -323,4 +377,5 @@ class LLMAnalyst:
         )
         with urllib.request.urlopen(request, timeout=self.timeout) as response:
             payload = json.loads(response.read())
+        self._record(caller, "openai", self._openai_usage(payload), succeeded=True)
         return payload["choices"][0]["message"]["content"].strip()
