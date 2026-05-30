@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import contextlib
+import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import typer
 
 from .act import EXECUTORS, build_executor
+from .act.approve import apply_pending, decline_pending
 from .notify import SURFACES, build_surfaces
 from .notify.base import Surface
 from .notify.console import ConsoleSurface
@@ -19,9 +21,10 @@ from .reason.llm import LLMAnalyst
 from .reason.pipeline import CORRELATORS, Pipeline, build_correlator
 from .reason.report import Tuning
 from .reconcile_state import reconcile
+from .serve import serve_slack
 from .sources import CAPABILITIES, DRIFT_SOURCES, build_drift_source
 from .sources.base import StateSource
-from .state import APPROVED, DECLINED, PENDING, PendingAction, StateStore
+from .state import PendingAction, StateStore
 
 DEFAULT_STATE_PATH = ".steadystate/state.db"
 
@@ -390,24 +393,11 @@ def approve(
 ) -> None:
     """Approve a pending remediation: rebuild its source + executor and run it, guardrailed."""
     with _open_store(state) as store:
-        action = store.get_pending(fingerprint)
-        if action is None or action.status != PENDING:
-            typer.echo("no pending remediation for that fingerprint.")
-            raise typer.Exit(1)
-        executor = build_executor(action.source, Path(action.path))
-        if executor is None:
-            raise typer.BadParameter(f"source '{action.source}' is observe-only; cannot remediate.")
-        # Re-collect from the same input and match the drift by fingerprint, so the executor's
-        # snapshot/verify run against the live drift (which may have already cleared).
-        drifts = _drift_source(action.source, Path(action.path)).collect_drift()
-        drift = next((d for d in drifts if d.fingerprint == fingerprint), None)
-        if drift is None:
-            store.set_pending_status(fingerprint, APPROVED, actor)
-            typer.echo("drift no longer present; nothing to do.")
-            return
-        result = executor.remediate(drift, confirm=True)
-        store.set_pending_status(fingerprint, APPROVED, actor)
-    ConsoleSurface().emit_remediations([(result.plan, result)])
+        message, result = apply_pending(store, fingerprint, actor)
+    if result is not None:
+        ConsoleSurface().emit_remediations([(result.plan, result)])
+    else:
+        typer.echo(message)
 
 
 @app.command()
@@ -418,11 +408,23 @@ def decline(
 ) -> None:
     """Decline a pending remediation: it won't be re-offered until you approve it later."""
     with _open_store(state) as store:
-        if store.get_pending(fingerprint) is None:
-            typer.echo("no pending remediation for that fingerprint.")
-            raise typer.Exit(1)
-        store.set_pending_status(fingerprint, DECLINED, actor)
-    typer.echo(f"declined {fingerprint}")
+        typer.echo(decline_pending(store, fingerprint, actor))
+
+
+@app.command()
+def listen(
+    port: int = typer.Option(8723, "--port", help="Port for the Slack interactivity endpoint."),
+    state: Path = _STATE_OPTION,
+) -> None:
+    """Run the Slack approval listener: clicking Approve/Decline on a posted alert runs the
+    gated remediation. Needs STEADYSTATE_SLACK_SIGNING_SECRET; point your Slack app's
+    Interactivity Request URL at http://<host>:<port>/."""
+    secret = os.environ.get("STEADYSTATE_SLACK_SIGNING_SECRET")
+    if not secret:
+        raise typer.BadParameter("set STEADYSTATE_SLACK_SIGNING_SECRET to run the listener.")
+    state.parent.mkdir(parents=True, exist_ok=True)
+    typer.echo(f"steadystate: listening for Slack approvals on :{port}")
+    serve_slack(port, secret, str(state))
 
 
 def main() -> None:
