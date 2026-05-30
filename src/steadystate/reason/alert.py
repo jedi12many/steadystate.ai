@@ -61,3 +61,8 @@ class Alert:
     # its lifecycle state (open / muted / snoozed / resolved).
     first_seen: datetime | None = None
     status: str | None = None
+    # Live-health note attached by an enricher (reason/enrich.py) during a scan: a short
+    # summary of the drifted resource's current unhealthy state in an external system
+    # (Prometheus today). Populated only when enrichment runs and the resource is failing
+    # right now; None otherwise, so the stateless / un-enriched path is unchanged.
+    runtime_context: str | None = None
