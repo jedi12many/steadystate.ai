@@ -55,6 +55,8 @@ def format_discord_message(alert: Alert) -> dict:
         {"name": "Severity", "value": alert.severity.value, "inline": True},
         {"name": "Tier", "value": alert.layer.value, "inline": True},
     ]
+    if alert.environment:  # which environment this scan came from (scan --label)
+        fields.append({"name": "Environment", "value": alert.environment, "inline": True})
     if alert.drifts:  # source lives on the first drift's provenance, if we have one
         fields.append(
             {"name": "Source", "value": alert.drifts[0].provenance.source, "inline": True}
@@ -63,6 +65,8 @@ def format_discord_message(alert: Alert) -> dict:
         fields.append(
             {"name": "Source", "value": alert.findings[0].provenance.source, "inline": True}
         )
+    if alert.resources:  # *which* resource(s) drifted -- the identity an operator triages on
+        fields.append({"name": "Resource", "value": alert.resource_label(), "inline": False})
     if alert.flagged_by is not None:  # omit the field entirely when nothing flagged it
         fields.append({"name": "Flagged by", "value": alert.flagged_by, "inline": True})
     if alert.references:  # omit the field entirely when nothing mapped

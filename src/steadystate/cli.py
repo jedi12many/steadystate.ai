@@ -203,6 +203,12 @@ def scan(
         "guardrailed, never destroys, LLM not in the decision). Acting is always behind the "
         "executor guardrails.",
     ),
+    label: str = typer.Option(
+        "",
+        "--label",
+        help="Environment label for this scan (e.g. prod-aws, staging) -- shown on every alert "
+        "so an operator knows which environment it came from. Omit for none.",
+    ),
 ) -> None:
     """Scan declared state for drift and surface the Alerts."""
     if autonomy not in ("observe", "suggest", "auto"):
@@ -225,6 +231,9 @@ def scan(
     resources = src.collect_declared() if isinstance(src, StateSource) else []
     report = Pipeline(analyst=analyst, tuning=level, correlator=grouping).run(drifts, resources)
     report.llm_calls = analyst.calls  # this scan's LLM spend, for the prometheus surface
+    if label:  # stamp the environment on every item so each surfaced alert self-identifies
+        for item in report.items:
+            item.environment = label
     # Observability enrichment runs between run() and the state reconcile + emit, so a
     # severity bumped by a currently-failing resource flows into BOTH the state store and
     # the surfaces. None (--enrich none, the default) skips it; the enricher honestly

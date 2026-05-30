@@ -128,6 +128,19 @@ def test_format_omits_references_fact_when_absent():
     assert "References" not in _facts(card)
 
 
+def test_resource_fact_shows_which_resource_drifted():
+    assert _facts(_card(format_teams_message(_case())))["Resource"] == "aws_s3_bucket.logs"
+
+
+def test_environment_fact_when_labeled():
+    facts = _facts(_card(format_teams_message(_case(environment="staging"))))
+    assert facts["Environment"] == "staging"
+
+
+def test_no_environment_fact_by_default():
+    assert "Environment" not in _facts(_card(format_teams_message(_case())))
+
+
 def test_format_includes_references_fact_when_present():
     refs = [
         Reference(framework="MITRE", id="T1530"),

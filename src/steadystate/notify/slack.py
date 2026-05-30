@@ -51,6 +51,13 @@ def format_slack_message(alert: Alert) -> dict:
     backed = "LLM" if alert.llm_backed else "deterministic"
     header = f"{emoji} *{alert.title}*  ({alert.severity.value.upper()} | {backed})"
     lines = [header, alert.why_it_matters]
+    where = []
+    if alert.environment:  # which environment (scan --label)
+        where.append(f"*Environment:* {alert.environment}")
+    if alert.resources:  # which resource(s) drifted
+        where.append(f"*Resource:* {alert.resource_label()}")
+    if where:
+        lines.append("   ".join(where))
     if alert.recommended_action:
         lines.append(f"*Next:* {alert.recommended_action}")
     if alert.references:  # only when present; absent references add no line
