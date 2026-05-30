@@ -39,11 +39,16 @@ class ResolvedFinding:
 
 
 def _fingerprints(alert: Alert) -> list[str]:
-    # Drift Alerts key memory on their member drifts; standing-policy Alerts (drifts empty)
-    # key on their PolicyFindings. Both fingerprints are source|identity|<discriminator>, so
-    # the store treats them identically -- this is the one seam that makes new/recurring/
-    # resolved + mute/snooze work for policy findings, with no change to StateStore.
-    return [d.fingerprint for d in alert.drifts] + [f.fingerprint for f in alert.findings]
+    # Drift Alerts key memory on their member drifts; standing-policy Alerts on their
+    # PolicyFindings; malfunction Alerts on their Symptoms. Every fingerprint is
+    # source|identity|<discriminator>, so the store treats them identically -- this is the one
+    # seam that makes new/recurring/resolved + mute/snooze work for all three departure types,
+    # with no change to StateStore. A diagnosis Alert (drift + symptom) keys on both.
+    return (
+        [d.fingerprint for d in alert.drifts]
+        + [f.fingerprint for f in alert.findings]
+        + [s.fingerprint for s in alert.symptoms]
+    )
 
 
 def _display(drift: Drift, alert: Alert) -> tuple[str, str]:
@@ -78,6 +83,10 @@ def reconcile(
         # one-liner), so they record exactly like drifts -- the store never knows the difference.
         for pf in item.findings:
             seen[pf.fingerprint] = (item.severity.value, pf.title)
+        # Symptoms likewise -- a malfunction is a finding the store remembers (new/recurring/
+        # resolved) so a recovered pod shows as resolved next scan.
+        for symptom in item.symptoms:
+            seen[symptom.fingerprint] = (item.severity.value, symptom.title)
 
     # 2. Record + read back per-fingerprint state.
     state = store.record(seen, now)

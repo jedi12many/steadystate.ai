@@ -15,9 +15,10 @@ from typing import TYPE_CHECKING
 from ..model import Drift
 
 if TYPE_CHECKING:
-    # Imported under TYPE_CHECKING only: domains.base imports Severity from this module,
-    # so a runtime import here would be circular. Both are plain frozen value types.
+    # Imported under TYPE_CHECKING only: domains.base and observe.base import Severity from this
+    # module, so a runtime import here would be circular. All are plain value types.
     from ..domains.base import PolicyFinding, Reference
+    from ..observe.base import Symptom
 
 
 class Layer(str, Enum):
@@ -54,6 +55,10 @@ class Alert:
     # PolicyFinding(s) a Domain.evaluate generated. Carries the data the surfaces render
     # and the fingerprint reconciliation keys memory on. Empty for ordinary drift Alerts.
     findings: list[PolicyFinding] = field(default_factory=list)
+    # The operational origin of a malfunction Alert: the Symptom(s) an observer produced (the
+    # resource is failing now). On a *diagnosis* Alert these ride alongside `drifts` -- a Symptom
+    # correlated with the Drift that is its likely root cause. Empty for ordinary drift Alerts.
+    symptoms: list[Symptom] = field(default_factory=list)
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     # Memory annotations, populated by the state store during a stateful scan and
     # left None when scanning statelessly (so Pipeline stays pure and the stateless
@@ -74,11 +79,13 @@ class Alert:
     @property
     def resources(self) -> list[str]:
         """The identities of the resources this alert concerns -- its drifts' identities, else
-        its policy findings'. What a surface shows so an operator knows *which* resource drifted,
-        not merely that something did."""
+        its policy findings', else its symptoms'. What a surface shows so an operator knows
+        *which* resource is affected, not merely that something is."""
         if self.drifts:
             return [drift.identity for drift in self.drifts]
-        return [finding.identity for finding in self.findings]
+        if self.findings:
+            return [finding.identity for finding in self.findings]
+        return [symptom.identity for symptom in self.symptoms]
 
     def resource_label(self, limit: int = 5) -> str:
         """A compact 'which resources' string for surfaces: the identities, capped with a +N."""

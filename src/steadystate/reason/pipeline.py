@@ -13,6 +13,7 @@ Events still fold into one Alert, not singleton noise.
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from ..act.plan import RemediationPlan, assess
 from ..domains import default_domains
@@ -22,6 +23,9 @@ from .alert import Alert, Layer, Severity
 from .correlate import Cluster, Correlator, DeterministicCorrelator, LLMCorrelator
 from .llm import LLMAnalyst
 from .report import Report, Tuning, classify
+
+if TYPE_CHECKING:  # observe.base imports Severity from .alert; guard to avoid the import cycle
+    from ..observe.base import Symptom
 
 _SEVERITY_RANK = {Severity.LOW: 0, Severity.MEDIUM: 1, Severity.HIGH: 2, Severity.CRITICAL: 3}
 
@@ -192,11 +196,63 @@ class Pipeline:
             findings=[finding],
         )
 
-    def run(self, drifts: list[Drift], resources: list[Resource] | None = None) -> Report:
-        """Reason about ``drifts`` and, when given the declared ``resources`` inventory, the
-        standing-policy posture of that baseline. ``resources`` defaults to None so the
-        stateless drift path is byte-for-byte unchanged (no policy pass, no behaviour change).
-        """
+    def _alert_from_symptom(self, symptom: Symptom, layer: Layer) -> Alert:
+        """Turn an operational malfunction into an Alert (or, below the bar, a Signal). No drift,
+        so ``drifts`` is empty and the symptom rides in ``symptoms`` -- which carries the
+        fingerprint memory keys on and the evidence the surfaces render. A standalone symptom
+        unless `_diagnose` later folds it into a co-located drift's Alert."""
+        return Alert(
+            title=symptom.title,
+            severity=symptom.severity,
+            drifts=[],
+            why_it_matters=symptom.detail,
+            layer=layer,
+            recommended_action=None,
+            llm_backed=False,
+            flagged_by=symptom.provenance.source,
+            symptoms=[symptom],
+        )
+
+    def _diagnose(self, drift_alerts: list[Alert], symptom_alerts: list[Alert]) -> list[Alert]:
+        """Cross-type correlation -- the headline. A Symptom on a resource that ALSO has a Drift
+        is the same incident: the drift is the likely root cause of the malfunction. Fold such a
+        symptom INTO the drift's Alert (which already carries the fix -- reconcile the drift),
+        raising its severity and reframing it as a diagnosis. Returns the symptom Alerts that
+        stood alone (no co-located drift) to surface on their own."""
+        by_identity: dict[str, Alert] = {}
+        for alert in drift_alerts:
+            for drift in alert.drifts:
+                by_identity.setdefault(drift.identity, alert)
+
+        standalone: list[Alert] = []
+        for symptom_alert in symptom_alerts:
+            symptom = symptom_alert.symptoms[0]
+            host = by_identity.get(symptom.identity)
+            if host is None:
+                standalone.append(symptom_alert)
+                continue
+            host.symptoms.append(symptom)
+            if _SEVERITY_RANK[symptom.severity] > _SEVERITY_RANK[host.severity]:
+                host.severity = symptom.severity
+            name = symptom.identity.rsplit("/", 1)[-1].rsplit(".", 1)[-1]
+            host.title = f"{name} is failing -- likely root cause: drift"
+            host.why_it_matters = (
+                f"{host.why_it_matters}  Operational impact: {symptom.detail} "
+                f"-- likely root cause: {host.drifts[0].summary()}."
+            )
+        return standalone
+
+    def run(
+        self,
+        drifts: list[Drift],
+        resources: list[Resource] | None = None,
+        symptoms: list[Symptom] | None = None,
+    ) -> Report:
+        """Reason about ``drifts``; the declared ``resources`` posture (standing-policy pass); and
+        any operational ``symptoms`` an observer found. Both extra inputs default to None so the
+        stateless drift path is byte-for-byte unchanged. A Symptom co-located with a Drift folds
+        into one diagnosis Alert (`_diagnose`); the rest stand alone -- the same Signal/Event/Alert
+        machinery for all three departure types."""
         signals: list[Alert] = []
         events: list[_Event] = []
         for drift in drifts:
@@ -206,7 +262,7 @@ class Pipeline:
             else:
                 events.append((drift, severity, flagged_by, references))
         clusters = self.correlator.correlate([event[0] for event in events])
-        alerts = [self._alert_from_cluster(cluster, events) for cluster in clusters]
+        drift_alerts = [self._alert_from_cluster(cluster, events) for cluster in clusters]
 
         # Standing-policy pass over the declared baseline (CIS/STIG): each domain that
         # implements evaluate() generates findings the same Brain-Tuning bar sorts into
@@ -219,4 +275,17 @@ class Pipeline:
                 alert = self._alert_from_finding(finding, domain.name, layer)
                 (signals if below_bar else policy_alerts).append(alert)
 
-        return Report(items=signals + alerts + policy_alerts, tuning=self.tuning)
+        # Operational pass: an observer's Symptoms sort by the same bar. A surfaced symptom on a
+        # drifted resource diagnoses into that drift's Alert; the rest stand alone.
+        symptom_alerts: list[Alert] = []
+        for symptom in symptoms or []:
+            below_bar = classify(symptom.severity, self.tuning) is Layer.SIGNAL
+            layer = Layer.SIGNAL if below_bar else Layer.ALERT
+            alert = self._alert_from_symptom(symptom, layer)
+            (signals if below_bar else symptom_alerts).append(alert)
+        standalone_symptoms = self._diagnose(drift_alerts, symptom_alerts)
+
+        return Report(
+            items=signals + drift_alerts + policy_alerts + standalone_symptoms,
+            tuning=self.tuning,
+        )
