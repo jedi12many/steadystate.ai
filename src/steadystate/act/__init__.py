@@ -12,6 +12,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
+from .ansible import AnsibleExecutor
 from .base import Executor
 from .terraform import TerraformExecutor
 
@@ -21,10 +22,17 @@ def _terraform(path: Path) -> Executor:
     return TerraformExecutor(working_dir=None if path.is_file() else path)
 
 
+def _ansible(path: Path) -> Executor:
+    # The playbook + inventory come from env (STEADYSTATE_ANSIBLE_PLAYBOOK/_INVENTORY); a dir
+    # path is the working dir to run the playbook in (a captured-check file has none).
+    return AnsibleExecutor(working_dir=None if path.is_file() else path)
+
+
 # source name -> factory(path) -> Executor. Only sources listed here can act; everything
-# else is observe-only by omission. (terraform today; k8s/ansible/compose are the next entries.)
+# else is observe-only by omission. (k8s/compose are the next entries.)
 EXECUTORS: dict[str, Callable[[Path], Executor]] = {
     "terraform": _terraform,
+    "ansible": _ansible,
 }
 
 __all__ = ["EXECUTORS", "Executor", "build_executor"]
