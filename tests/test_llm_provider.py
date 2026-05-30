@@ -10,7 +10,7 @@ import types
 import urllib.error
 
 from steadystate.model import ChangeType, Drift, Provenance
-from steadystate.reason.llm import LLMAnalyst
+from steadystate.reason.llm import LLMAnalyst, _llm_enabled
 
 
 def _drift() -> Drift:
@@ -126,3 +126,37 @@ def test_openai_unreachable_degrades_honestly(monkeypatch):
     assert analysis.llm_backed is False
     assert analysis.recommended_action is None
     assert "modified" in analysis.why_it_matters  # never crashes, never fabricates
+
+
+# -- the live kill switch -------------------------------------------------------
+
+
+def test_llm_enabled_parses_env(monkeypatch):
+    monkeypatch.delenv("STEADYSTATE_LLM_ENABLED", raising=False)
+    assert _llm_enabled() is True  # default on
+    for off in ("false", "0", "no", "off", "False", ""):
+        monkeypatch.setenv("STEADYSTATE_LLM_ENABLED", off)
+        assert _llm_enabled() is False
+    monkeypatch.setenv("STEADYSTATE_LLM_ENABLED", "true")
+    assert _llm_enabled() is True
+
+
+def test_kill_switch_disables_provider_even_with_a_key():
+    # An explicit key is present, yet the kill switch wins: no provider, honest degrade.
+    assert LLMAnalyst(api_key="sk-test", enabled=False)._provider() == "none"
+
+
+def test_kill_switch_via_env(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.delenv("STEADYSTATE_LLM_PROVIDER", raising=False)
+    monkeypatch.setenv("STEADYSTATE_LLM_ENABLED", "false")
+    assert LLMAnalyst()._provider() == "none"
+    monkeypatch.setenv("STEADYSTATE_LLM_ENABLED", "true")
+    assert LLMAnalyst()._provider() == "anthropic"
+
+
+def test_kill_switch_makes_no_call_and_records_no_spend():
+    analyst = LLMAnalyst(api_key="sk-test", enabled=False)
+    clusters = analyst.correlate([_drift(), _drift()])  # degrades to deterministic grouping
+    assert all(not c.llm_backed for c in clusters)
+    assert analyst.calls == []  # nothing attempted -> no spend rows

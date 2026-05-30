@@ -28,6 +28,17 @@ from .cost import LlmCall
 _DEFAULT_MODEL = os.environ.get("STEADYSTATE_MODEL", "claude-sonnet-4-5")
 _HTTP_TIMEOUT = float(os.environ.get("STEADYSTATE_LLM_TIMEOUT", "30"))
 
+
+def _llm_enabled() -> bool:
+    """The live kill switch. ``STEADYSTATE_LLM_ENABLED=false`` (or 0/no/off) disables every
+    model call -- the analyst degrades honestly, exactly as if no provider were configured.
+    Enabled by default; a single env flip cuts all LLM spend without touching keys."""
+    value = os.environ.get("STEADYSTATE_LLM_ENABLED")
+    if value is None:
+        return True
+    return value.strip().lower() not in ("0", "false", "no", "off", "")
+
+
 _INSTRUCTION = (
     "You are steadystate.ai's drift analyst. A resource has drifted from its declared "
     "state. In 1-2 plain sentences, explain why an operator should care, then suggest one "
@@ -142,7 +153,12 @@ class LLMAnalyst:
     """Explains why a drift matters via Anthropic or any OpenAI-compatible endpoint.
     Degrades honestly when nothing is configured."""
 
-    def __init__(self, model: str | None = None, api_key: str | None = None) -> None:
+    def __init__(
+        self, model: str | None = None, api_key: str | None = None, enabled: bool | None = None
+    ) -> None:
+        # The kill switch: explicit `enabled`, else the STEADYSTATE_LLM_ENABLED env var.
+        # When off, _provider() reports "none" and every call degrades honestly.
+        self.enabled = _llm_enabled() if enabled is None else enabled
         # Anthropic (back-compat): explicit api_key or ANTHROPIC_API_KEY; `model` is
         # the Anthropic model name.
         self.model = model or _DEFAULT_MODEL
@@ -208,6 +224,8 @@ class LLMAnalyst:
         return bool(self.openai_base_url and self.openai_api_key and self.openai_model)
 
     def _provider(self) -> str:
+        if not self.enabled:  # kill switch -> behave exactly as if no provider were configured
+            return "none"
         forced = (os.environ.get("STEADYSTATE_LLM_PROVIDER") or "").strip().lower()
         if forced == "anthropic":
             return "anthropic" if self.api_key else "none"
