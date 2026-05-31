@@ -19,6 +19,7 @@ from ..act.plan import RemediationPlan, assess
 from ..domains import default_domains
 from ..domains.base import Domain, PolicyFinding, Reference, evaluate_with, references_for
 from ..model import ChangeType, Drift, Resource
+from ..plugins import merged
 from .alert import Alert, Layer, Severity
 from .correlate import Cluster, Correlator, DeterministicCorrelator, LLMCorrelator
 from .llm import LLMAnalyst
@@ -34,13 +35,18 @@ _SEVERITY_RANK = {Severity.LOW: 0, Severity.MEDIUM: 1, Severity.HIGH: 2, Severit
 _Event = tuple[Drift, Severity, "str | None", "list[Reference]"]
 
 # The correlator plugin registry: name -> factory(analyst) -> Correlator. Mirrors
-# DRIFT_SOURCES (sources/__init__.py) and SURFACES (notify/__init__.py): a new
-# correlator is one line here (in-tree now; importlib entry points later, like the
-# other seams). "auto" is resolved in build_correlator, not registered as a name.
-CORRELATORS: dict[str, Callable[[LLMAnalyst], Correlator]] = {
+# DRIFT_SOURCES (sources/__init__.py) and SURFACES (notify/__init__.py): a new in-tree
+# correlator is one line in _BUILTIN_CORRELATORS, and an out-of-tree one is a
+# `steadystate.correlators` entry point overlaid by merged() (built-ins win a clash).
+# "auto" is resolved in build_correlator, not registered as a name.
+_BUILTIN_CORRELATORS: dict[str, Callable[[LLMAnalyst], Correlator]] = {
     "deterministic": lambda _analyst: DeterministicCorrelator(),
     "llm": lambda analyst: LLMCorrelator(analyst),
 }
+
+CORRELATORS: dict[str, Callable[[LLMAnalyst], Correlator]] = merged(
+    "correlators", _BUILTIN_CORRELATORS
+)
 
 
 def build_correlator(mode: str, analyst: LLMAnalyst) -> Correlator:

@@ -1,11 +1,12 @@
 """StateSource plugins: declared state in.
 
 Drift sources register here so `--source <name>` dispatches without hand-editing
-the CLI for each one. Add a source: write its module in this package, then add a
-single line to DRIFT_SOURCES -- the CLI and its tests pick it up automatically.
+the CLI for each one. Add an in-tree source: write its module in this package, then
+add a single line to _BUILTIN_SOURCES -- the CLI and its tests pick it up automatically.
 
-(This is the in-tree registry; the eventual endpoint is importlib entry points so
-out-of-tree packs register without editing this file -- see ARCHITECTURE.md.)
+Out-of-tree sources register the same way without editing this file: a separately
+installed package declares a `steadystate.sources` entry point and `merged()` overlays
+it on the built-ins (built-ins win a name clash). See plugins.py / ARCHITECTURE.md.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ import json
 from collections.abc import Callable
 from pathlib import Path
 
+from ..plugins import merged
 from .ansible import AnsibleSource
 from .argocd import ArgoCDSource
 from .base import Capabilities, DriftSource
@@ -69,7 +71,7 @@ def _k8s(path: Path) -> DriftSource:
 # name -> factory(path) -> DriftSource. Indexed by the CLI's --source choice.
 # docker-compose has no native plan diff, so it reconciles declared services
 # (`docker compose config`) against running containers (`docker compose ps`).
-DRIFT_SOURCES: dict[str, Callable[[Path], DriftSource]] = {
+_BUILTIN_SOURCES: dict[str, Callable[[Path], DriftSource]] = {
     "terraform": _terraform,
     "argocd": _argocd,
     "ansible": _ansible,
@@ -80,8 +82,8 @@ DRIFT_SOURCES: dict[str, Callable[[Path], DriftSource]] = {
 }
 
 # Per-plugin command manifests: observe (pre-approved, read-only) vs destructive (needs
-# approval). Keyed like DRIFT_SOURCES -- adding a source means declaring its commands too.
-CAPABILITIES: dict[str, Capabilities] = {
+# approval). Keyed like the source registry -- adding a source means declaring its commands too.
+_BUILTIN_CAPABILITIES: dict[str, Capabilities] = {
     "terraform": TerraformSource.commands,
     "argocd": ArgoCDSource.commands,
     "ansible": AnsibleSource.commands,
@@ -90,6 +92,34 @@ CAPABILITIES: dict[str, Capabilities] = {
     "rancher": RancherSource.commands,
     "helm": HelmSource.commands,
 }
+
+
+def _build_sources() -> dict[str, Callable[[Path], DriftSource]]:
+    return merged("sources", _BUILTIN_SOURCES)
+
+
+def _build_capabilities(
+    sources: dict[str, Callable[[Path], DriftSource]],
+) -> dict[str, Capabilities]:
+    """Built-in command manifests, plus any a discovered source factory advertises.
+
+    An out-of-tree source factory may carry a ``commands`` attribute (a ``Capabilities``) so it
+    shows up in ``steadystate commands`` and the catalog; if it doesn't, the source still scans,
+    it just isn't listed there. Built-in manifests are authoritative and never overridden.
+    """
+    caps = dict(_BUILTIN_CAPABILITIES)
+    for name, factory in sources.items():
+        if name in caps:
+            continue
+        advertised = getattr(factory, "commands", None)
+        if isinstance(advertised, Capabilities):
+            caps[name] = advertised
+    return caps
+
+
+# The live registries: built-ins overlaid with discovered `steadystate.sources` entry points.
+DRIFT_SOURCES: dict[str, Callable[[Path], DriftSource]] = _build_sources()
+CAPABILITIES: dict[str, Capabilities] = _build_capabilities(DRIFT_SOURCES)
 
 __all__ = ["CAPABILITIES", "DRIFT_SOURCES", "Capabilities", "build_drift_source"]
 

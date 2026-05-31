@@ -4,7 +4,13 @@ Every remediation is apply-eligibility-checked, snapshotted, verified, and rever
 (or any trigger) is a convenience, never a bypass of those guardrails. Executors register
 here per source, mirroring DRIFT_SOURCES: a source with an executor can be *acted on*; a
 source with none is **observe-only** -- steadystate detects its drift but cannot remediate it,
-and build_executor returns None. Adding a backend's act half is one line here.
+and build_executor returns None. Adding an in-tree backend's act half is one line in
+_BUILTIN_EXECUTORS.
+
+Out-of-tree executors register the same way without editing this file: a separately installed
+package declares a `steadystate.executors` entry point (a factory(path) -> Executor) and
+`merged()` overlays it on the built-ins (built-ins win a name clash). See plugins.py. A
+discovered executor is bound by source name, so it pairs with a discovered (or built-in) source.
 """
 
 from __future__ import annotations
@@ -12,6 +18,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
+from ..plugins import merged
 from .ansible import AnsibleExecutor
 from .base import Executor
 from .terraform import TerraformExecutor
@@ -30,10 +37,13 @@ def _ansible(path: Path) -> Executor:
 
 # source name -> factory(path) -> Executor. Only sources listed here can act; everything
 # else is observe-only by omission. (k8s/compose are the next entries.)
-EXECUTORS: dict[str, Callable[[Path], Executor]] = {
+_BUILTIN_EXECUTORS: dict[str, Callable[[Path], Executor]] = {
     "terraform": _terraform,
     "ansible": _ansible,
 }
+
+# Built-ins overlaid with discovered `steadystate.executors` entry points.
+EXECUTORS: dict[str, Callable[[Path], Executor]] = merged("executors", _BUILTIN_EXECUTORS)
 
 __all__ = ["EXECUTORS", "Executor", "build_executor"]
 
