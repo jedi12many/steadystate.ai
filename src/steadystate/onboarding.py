@@ -228,6 +228,34 @@ _ENRICH = Capability(
     ),
 )
 
+
+def _assess_github_pr(env: Env) -> tuple[Status, str]:
+    """github-pr delivery accepts either steadystate's own token or the CI ``GITHUB_TOKEN``."""
+    if env.get("STEADYSTATE_GITHUB_TOKEN") or env.get("GITHUB_TOKEN"):
+        return Status.READY, "token present"
+    return Status.OFF, "set STEADYSTATE_GITHUB_TOKEN (or rely on the CI GITHUB_TOKEN)"
+
+
+_GITHUB_PR = Capability(
+    "github-pr",
+    "GitHub PR delivery",
+    "Open a PR codifying drift (--deliver github-pr). CI: the Actions GITHUB_TOKEN; else a token.",
+    (
+        Setting(
+            "STEADYSTATE_GITHUB_TOKEN",
+            "GitHub token with contents + pull_requests write (blank to use the CI GITHUB_TOKEN)",
+            secret=True,
+            required=False,
+        ),
+        Setting(
+            "STEADYSTATE_GITHUB_REPO",
+            "owner/repo (optional -- auto-detected from the git remote)",
+            required=False,
+        ),
+    ),
+    assessor=_assess_github_pr,
+)
+
 # Ordered sections -- the order `init` walks and `doctor` prints.
 SECTIONS: tuple[tuple[str, tuple[Capability, ...]], ...] = (
     ("Reasoning", (_LLM,)),
@@ -235,6 +263,7 @@ SECTIONS: tuple[tuple[str, tuple[Capability, ...]], ...] = (
     ("Chat back (listen --from)", (_SLACK_LISTEN, _TEAMS_LISTEN, _DISCORD_LISTEN)),
     ("Source credentials", (_ARGOCD, _RANCHER, _ANSIBLE)),
     ("Live-health enrichment", (_ENRICH,)),
+    ("Remediation delivery (--deliver)", (_GITHUB_PR,)),
 )
 
 

@@ -44,6 +44,35 @@ class RemediationArtifact:
         return re.sub(r"[^A-Za-z0-9._-]", "_", self.drift_identity)
 
 
+def files_from_patch(patch: str) -> dict[str, str]:
+    """Reconstruct ``{repo_path: full_file_content}`` from a **whole-file-addition** unified diff
+    (the form ``new_file_patch`` produces) -- what an API-based delivery (github-pr) needs, since
+    it builds a tree from file contents, not a diff. Only new-file hunks are recovered; an edit or
+    delete hunk contributes nothing for that path, so a caller can detect the gap and skip rather
+    than ship a partial change. Deterministic, no git invoked."""
+    files: dict[str, str] = {}
+    path: str | None = None
+    is_new_file = False
+    body: list[str] = []
+
+    def _flush() -> None:
+        if path is not None and is_new_file:
+            files[path] = "\n".join(body) + ("\n" if body else "")
+
+    for line in patch.splitlines():
+        if line.startswith("diff --git "):
+            _flush()
+            path, is_new_file, body = None, False, []
+        elif line == "--- /dev/null":
+            is_new_file = True
+        elif line.startswith("+++ b/"):
+            path = line[len("+++ b/") :]
+        elif line.startswith("+") and not line.startswith("+++"):
+            body.append(line[1:])
+    _flush()
+    return files
+
+
 def new_file_patch(path: str, content: str) -> str:
     """A git-apply-able unified diff that *creates* ``path`` with ``content``.
 
