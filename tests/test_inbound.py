@@ -335,6 +335,34 @@ def test_run_command_probe_appends_a_spend_footer(monkeypatch, tmp_path):
     assert "prod: 1 alert" in msg and "LLM: 1 call(s)" in msg  # the summon shows what it cost
 
 
+def test_run_command_probe_shows_the_fingerprint_to_act_on(monkeypatch, tmp_path):
+    from steadystate.reason.report import Report
+
+    drift = Drift(
+        identity="aws_s3_bucket.logs",
+        kind="aws_s3_bucket",
+        change_type=ChangeType.MODIFIED,
+        provenance=Provenance(source="terraform"),
+    )
+    alert = Alert(
+        title="bucket drifted",
+        severity=Severity.HIGH,
+        drifts=[drift],
+        why_it_matters="x",
+        layer=Layer.ALERT,
+    )
+    monkeypatch.setenv(
+        "STEADYSTATE_TARGETS",
+        _targets_file(tmp_path, {"prod": {"source": "terraform", "path": "/x", "label": "prod"}}),
+    )
+    monkeypatch.setattr(
+        "steadystate.inbound.server.build_report", lambda *a, **k: Report(items=[alert])
+    )
+    msg = run_command(Command(PROBE, "amy", "prod"), ":memory:")
+    # the fingerprint is shown so a benign finding can be `mute`d
+    assert f"fp {drift.fingerprint}" in msg
+
+
 # -- cost (chat view of `steadystate cost`) -------------------------------------
 
 

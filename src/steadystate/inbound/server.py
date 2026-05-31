@@ -56,7 +56,12 @@ def _summarize(name: str, alerts: list[Alert], suppressed: int = 0) -> str:
             return f"{name}: clean except {suppressed} muted/snoozed -- add `unmute` to show."
         return f"{name}: clean -- no drift or symptoms above the bar."
     lines = [f"{name}: {len(alerts)} alert(s)"]
-    lines += [f"  {a.severity.value.upper():<8} {a.title}" for a in alerts]
+    for a in alerts:
+        lines.append(f"  {a.severity.value.upper():<8} {a.title}")
+        # The fingerprint(s) so the finding is actionable -- `mute <fp>` a benign one, and a
+        # diagnosis Alert (drift + symptom) lists both, since suppressing it needs both muted.
+        for fp in _fingerprints(a):
+            lines.append(f"           fp {fp}")
     if suppressed:
         lines.append(f"  (+{suppressed} suppressed by mute/snooze -- add `unmute` to show)")
     return "\n".join(lines)
