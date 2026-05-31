@@ -10,6 +10,8 @@ change between releases until 1.0.0. Releases are published as GitHub Releases.
 
 ### Added
 
+- `mute` chat verb -- closes the see-it -> silence-it loop entirely in chat. A summoned probe shows each finding's fingerprint; `@steadystate mute <fingerprint>` now silences a benign one (e.g. the Cloud Run scaling noise) on future scans/probes, without dropping to a terminal. It writes through the same `store.mute` the CLI uses (upserts, so it works on a fingerprint a stateless probe never recorded), across every provider (Teams @mention, Slack/Discord slash -- Discord adds a `mute` subcommand, re-run `register.py`). Un-muting stays CLI (`steadystate unmute <fp>`). Also: `.gitignore` now excludes `.claude/worktrees/` (leftover agent worktrees, never commit the embedded repos).
+
 - Probe output shows fingerprints: a summoned `probe <target>` (chat + CLI) now prints each finding's fingerprint under its line, so what it surfaces is actionable -- copy the fp and `steadystate mute <fp>` a benign one (closing the loop with probe's mute-honoring). A diagnosis Alert (drift + symptom) lists both fingerprints, since suppressing it needs both muted.
 
 - LLM spend, in chat: a `cost` verb (`@steadystate cost`, or `cost day` / `cost week` for the trend) posts the same spend rollup `steadystate cost` prints, read from the listener's shared store -- so it covers the scheduled scans + approvals, not just chat. And a summoned `probe <target>` now carries a one-line spend footer (`LLM: 2 call(s) - 9.1k tokens - ~$0.03`), so you see what the on-demand scan cost. Both read-only over the same `command_from_text` grammar + dispatch every provider uses (Teams @mention, Slack/Discord slash); Discord adds a `cost` subcommand (re-run `register.py`).

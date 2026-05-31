@@ -66,4 +66,8 @@ from the listener's `STEADYSTATE_TARGETS` file (name → source + path + label) 
 default; pass the `unmute: true` option to show everything for that run.
 
 **See spend:** `/steadystate cost` posts the LLM spend rollup (or `cost period:day|week` for the
-trend). Re-run `register.py` after upgrading so the new `cost` subcommand + `unmute` option appear.
+trend).
+
+**Silence a finding:** each probe finding shows its fingerprint; `/steadystate mute fingerprint:<fp>`
+quiets a benign one on future scans (un-mute with the CLI: `steadystate unmute <fp>`). Re-run
+`register.py` after upgrading so the new `cost` + `mute` subcommands and the `unmute` option appear.

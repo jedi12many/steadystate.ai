@@ -12,3 +12,6 @@ build/
 .env
 .coverage
 htmlcov/
+
+# Leftover agent worktrees (never commit the embedded repos)
+.claude/worktrees/

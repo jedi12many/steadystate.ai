@@ -26,6 +26,7 @@ from .base import (
     COST,
     DECLINE,
     HELP,
+    MUTE,
     PENDING,
     PROBE,
     Command,
@@ -138,8 +139,9 @@ def _run_probe(target_name: str, state_path: str, bypass: bool) -> str:
 
 def run_command(command: Command, state_path: str) -> str:
     """Drive a parsed Command to an outcome string the provider echoes back. The read-only verbs
-    (help, pending, probe, cost) answer directly; approve/decline run the SAME guardrailed core the
-    CLI uses. probe is read-only -- it scans + reports, so chat stays a trigger, never a bypass."""
+    (help, pending, probe, cost) answer directly; mute and approve/decline write through the SAME
+    cores the CLI uses. probe is read-only -- it scans + reports, so chat stays a trigger, never a
+    bypass; mute only silences a finding, never touches infrastructure."""
     if command.verb == HELP:
         return render_help()
     if command.verb == PENDING:
@@ -154,6 +156,12 @@ def run_command(command: Command, state_path: str) -> str:
             return message
         if command.verb == DECLINE:
             return decline_pending(store, command.argument, command.actor)
+        if command.verb == MUTE:
+            # Silence a finding (e.g. a benign probe result) on future scans/probes. Upserts, so
+            # it works on a fingerprint the store hasn't recorded yet -- exactly the probe case.
+            store.mute(command.argument, None, command.actor, datetime.now(UTC))
+            fp = command.argument
+            return f"Muted {fp} -- silenced on future scans until `steadystate unmute {fp}`."
     return "Nothing to do."
 
 

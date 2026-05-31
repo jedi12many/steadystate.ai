@@ -11,7 +11,7 @@ import json
 import pytest
 
 from steadystate.inbound import build_inbound
-from steadystate.inbound.base import APPROVE, COST, DECLINE, HELP, PENDING, PROBE, Command
+from steadystate.inbound.base import APPROVE, COST, DECLINE, HELP, MUTE, PENDING, PROBE, Command
 from steadystate.inbound.discord import (
     DiscordInbound,
     command_from_payload,
@@ -54,6 +54,10 @@ def test_parse_approve_and_decline():
     assert command_from_payload(_command("decline", "fp2", actor="amy")) == Command(
         DECLINE, "amy", "fp2"
     )
+
+
+def test_parse_mute_takes_its_fingerprint_option():
+    assert command_from_payload(_command("mute", "fp9")) == Command(MUTE, "jeff", "fp9")
 
 
 def test_parse_readonly_help_and_pending_take_no_argument():

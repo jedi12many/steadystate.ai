@@ -25,7 +25,7 @@ import json
 import os
 from collections.abc import Mapping
 
-from .base import APPROVE, COST, DECLINE, HELP, PENDING, PROBE, Command
+from .base import APPROVE, COST, DECLINE, HELP, MUTE, PENDING, PROBE, Command
 
 try:  # the optional [discord] extra; absence is handled by ready(), never an import crash
     from nacl.exceptions import BadSignatureError
@@ -86,8 +86,8 @@ def command_from_payload(payload: dict) -> Command | None:
             "",
         )
         return Command(verb, actor, period)
-    if verb in (APPROVE, DECLINE, PROBE):
-        # approve/decline carry a `fingerprint` option, probe a `target` -- take the first
+    if verb in (APPROVE, DECLINE, PROBE, MUTE):
+        # approve/decline/mute carry a `fingerprint` option, probe a `target` -- take the first
         # non-empty STRING option (so probe's boolean `unmute` is never mistaken for the target).
         options = subcommands[0].get("options") or []
         argument = next(
