@@ -31,6 +31,7 @@ DECLINE = "decline"
 HELP = "help"
 PENDING = "pending"
 PROBE = "probe"
+COST = "cost"
 
 # The command grammar, in the order ``help`` lists them: verb -> (usage, one-line summary).
 # ``help`` renders itself from this table, so a newly added verb is discoverable the moment it
@@ -42,6 +43,7 @@ COMMANDS: dict[str, tuple[str, str]] = {
         "probe <target> [unmute]",
         "scan a named target now; honors mutes (`unmute` shows all)",
     ),
+    COST: ("cost [day|week]", "show LLM spend -- a rollup, or a day/week trend"),
     APPROVE: ("approve <fingerprint>", "apply a pending remediation (guardrailed)"),
     DECLINE: ("decline <fingerprint>", "dismiss a pending remediation"),
 }
@@ -50,6 +52,8 @@ COMMANDS: dict[str, tuple[str, str]] = {
 _NEEDS_ARGUMENT = frozenset({APPROVE, DECLINE, PROBE})
 # The bypass flag (probe): show muted/snoozed findings too, for this one run.
 _UNMUTE_FLAGS = frozenset({"unmute", "--unmute"})
+# Verbs that take an *optional* argument (cost's period); absent it, they still dispatch.
+_OPTIONAL_ARGUMENT = frozenset({COST})
 
 
 @dataclass(frozen=True)
@@ -89,6 +93,9 @@ def command_from_text(text: str, actor: str) -> Command | None:
             if args:  # the first non-flag token is the argument; an `unmute` token sets bypass
                 return Command(verb, actor, args[0], bypass=len(args) < len(rest))
         elif verb in COMMANDS:
+            # cost takes an optional period (day|week); help/pending take nothing.
+            if verb in _OPTIONAL_ARGUMENT and index + 1 < len(tokens):
+                return Command(verb, actor, tokens[index + 1])
             return Command(verb, actor)
     return None
 

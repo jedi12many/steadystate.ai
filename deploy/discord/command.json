@@ -33,6 +33,23 @@
     },
     {
       "type": 1,
+      "name": "cost",
+      "description": "Show LLM spend -- a rollup, or a day/week trend",
+      "options": [
+        {
+          "type": 3,
+          "name": "period",
+          "description": "Bucket spend into a trend (default is a per-caller rollup)",
+          "required": false,
+          "choices": [
+            { "name": "day", "value": "day" },
+            { "name": "week", "value": "week" }
+          ]
+        }
+      ]
+    },
+    {
+      "type": 1,
       "name": "approve",
       "description": "Approve a pending remediation by fingerprint",
       "options": [

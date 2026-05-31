@@ -17,10 +17,21 @@ from pathlib import Path
 from ..act.approve import apply_pending, decline_pending
 from ..engine import build_report
 from ..reason.alert import Alert
+from ..reason.cost import roll_up, roll_up_by_period, scan_cost_line
 from ..reconcile_state import _fingerprints
 from ..state import StateStore
 from ..targets import load_targets_from_env
-from .base import APPROVE, DECLINE, HELP, PENDING, PROBE, Command, InboundAdapter, render_help
+from .base import (
+    APPROVE,
+    COST,
+    DECLINE,
+    HELP,
+    PENDING,
+    PROBE,
+    Command,
+    InboundAdapter,
+    render_help,
+)
 
 
 def _render_pending(state_path: str) -> str:
@@ -39,7 +50,7 @@ def _render_pending(state_path: str) -> str:
 def _summarize(name: str, alerts: list[Alert], suppressed: int = 0) -> str:
     """A chat summary of a summoned scan: the kept alerts (worst first, as the report orders them)
     or a clean all-clear, plus how many were withheld by mute/snooze. Read-only -- it reports,
-    it never records or applies."""
+    it never records or applies. (The spend footer is appended by the caller.)"""
     if not alerts:
         if suppressed:
             return f"{name}: clean except {suppressed} muted/snoozed -- add `unmute` to show."
@@ -49,6 +60,31 @@ def _summarize(name: str, alerts: list[Alert], suppressed: int = 0) -> str:
     if suppressed:
         lines.append(f"  (+{suppressed} suppressed by mute/snooze -- add `unmute` to show)")
     return "\n".join(lines)
+
+
+def _render_cost(state_path: str, period: str) -> str:
+    """The chat view of `steadystate cost`: cumulative LLM spend from the listener's store (which
+    the scheduled scans + approvals share). ``period`` "day"/"week" gives the trend, else the
+    per-caller rollup. Read-only."""
+    if not state_path or not Path(state_path).exists():
+        return "No spend recorded yet."
+    with StateStore(state_path) as store:
+        if period in ("day", "week"):
+            buckets = roll_up_by_period(store.timed_llm_calls_since(None), period)
+            if not buckets:
+                return "No LLM calls recorded yet."
+            total = sum(p.cost_usd for p in buckets)
+            lines = [f"LLM spend (by {period}): ~${total:.4f} total"]
+            lines += [f"  {p.period:<11} ~${p.cost_usd:.4f}  {p.calls} call(s)" for p in buckets]
+            return "\n".join(lines)
+        rows = roll_up(store.llm_calls_since(None))
+        if not rows:
+            return "No LLM calls recorded yet."
+        total = sum(r.cost_usd for r in rows)
+        calls = sum(r.calls for r in rows)
+        lines = [f"LLM spend (all): ~${total:.4f} over {calls} call(s)"]
+        lines += [f"  {r.caller:<12} ~${r.cost_usd:.4f}  {r.calls} call(s)" for r in rows]
+        return "\n".join(lines)
 
 
 def _honor_mutes(alerts: list[Alert], state_path: str) -> tuple[list[Alert], int]:
@@ -72,7 +108,8 @@ def _run_probe(target_name: str, state_path: str, bypass: bool) -> str:
     """Summon: scan a named target now and report what's wrong. Resolves the name against the
     targets registry (STEADYSTATE_TARGETS), runs the SAME engine a scheduled scan runs -- and,
     unless ``bypass`` (the `unmute` flag), honors the mutes/snoozes the operator already set
-    (read-only). It never records or applies -- chat stays a trigger, not a bypass."""
+    (read-only). The reply carries a one-line spend footer. It never records or applies -- chat
+    stays a trigger, not a bypass."""
     targets = load_targets_from_env()
     if not targets:
         return "No targets configured (set STEADYSTATE_TARGETS to a targets file on the listener)."
@@ -89,19 +126,23 @@ def _run_probe(target_name: str, state_path: str, bypass: bool) -> str:
     # a missing path would create one, a write). `unmute` skips suppression for this run.
     if not bypass and state_path and Path(state_path).exists():
         alerts, suppressed = _honor_mutes(alerts, state_path)
-    return _summarize(target_name, alerts, suppressed)
+    summary = _summarize(target_name, alerts, suppressed)
+    spend = scan_cost_line(report.llm_calls)  # None on a --no-llm run -> no footer
+    return f"{summary}\n  {spend}" if spend else summary
 
 
 def run_command(command: Command, state_path: str) -> str:
     """Drive a parsed Command to an outcome string the provider echoes back. The read-only verbs
-    (help, pending, probe) answer directly; approve/decline run the SAME guardrailed core the CLI
-    uses. probe is read-only -- it scans + reports, so chat stays a trigger, never a bypass."""
+    (help, pending, probe, cost) answer directly; approve/decline run the SAME guardrailed core the
+    CLI uses. probe is read-only -- it scans + reports, so chat stays a trigger, never a bypass."""
     if command.verb == HELP:
         return render_help()
     if command.verb == PENDING:
         return _render_pending(state_path)
     if command.verb == PROBE:
         return _run_probe(command.argument, state_path, command.bypass)
+    if command.verb == COST:
+        return _render_cost(state_path, command.argument)
     with StateStore(state_path) as store:
         if command.verb == APPROVE:
             message, _result = apply_pending(store, command.argument, command.actor)

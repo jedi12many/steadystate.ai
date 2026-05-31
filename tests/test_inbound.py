@@ -13,6 +13,7 @@ import pytest
 from steadystate.inbound import INBOUND, build_inbound
 from steadystate.inbound.base import (
     APPROVE,
+    COST,
     DECLINE,
     HELP,
     PENDING,
@@ -87,6 +88,8 @@ def test_text_grammar_parses_act_and_readonly_verbs():
     assert command_from_text("help", "amy") == Command(HELP, "amy")
     assert command_from_text("pending", "amy") == Command(PENDING, "amy")
     assert command_from_text("probe prod-k8s", "amy") == Command(PROBE, "amy", "prod-k8s")
+    assert command_from_text("cost", "amy") == Command(COST, "amy")  # optional arg absent
+    assert command_from_text("cost week", "amy") == Command(COST, "amy", "week")  # optional period
 
 
 def test_text_grammar_parses_the_probe_unmute_flag():
@@ -111,7 +114,7 @@ def test_text_grammar_needs_a_fingerprint_for_act_verbs_and_ignores_unknowns():
 
 def test_render_help_lists_every_command():
     text = render_help()
-    for verb in (HELP, PENDING, PROBE, APPROVE, DECLINE):
+    for verb in (HELP, PENDING, PROBE, COST, APPROVE, DECLINE):
         assert verb in text
 
 
@@ -314,6 +317,59 @@ def test_run_command_probe_reports_an_engine_failure_without_crashing(monkeypatc
     assert "Probe of 'prod' failed: source blew up" in run_command(
         Command(PROBE, "amy", "prod"), ":memory:"
     )
+
+
+def test_run_command_probe_appends_a_spend_footer(monkeypatch, tmp_path):
+    from steadystate.reason.cost import LlmCall
+
+    report = _report_with_one_alert()
+    report.llm_calls = [
+        LlmCall("correlate", "anthropic", "claude-sonnet-4-5", input_tokens=1000, output_tokens=100)
+    ]
+    monkeypatch.setenv(
+        "STEADYSTATE_TARGETS",
+        _targets_file(tmp_path, {"prod": {"source": "argocd", "path": "/x", "label": "prod"}}),
+    )
+    monkeypatch.setattr("steadystate.inbound.server.build_report", lambda *a, **k: report)
+    msg = run_command(Command(PROBE, "amy", "prod"), ":memory:")
+    assert "prod: 1 alert" in msg and "LLM: 1 call(s)" in msg  # the summon shows what it cost
+
+
+# -- cost (chat view of `steadystate cost`) -------------------------------------
+
+
+def _record_calls(db: str) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from steadystate.reason.cost import LlmCall
+
+    now = datetime.now(UTC)
+    with StateStore(db) as store:
+        store.record_llm_call(
+            LlmCall("correlate", "anthropic", "claude-sonnet-4-5", input_tokens=12000), now
+        )
+        store.record_llm_call(
+            LlmCall("analyze", "anthropic", "claude-opus-4-8", input_tokens=5000),
+            now - timedelta(days=1),
+        )
+
+
+def test_run_command_cost_rolls_up_by_caller(tmp_path):
+    db = str(tmp_path / "s.db")
+    _record_calls(db)
+    msg = run_command(Command(COST, "amy"), db)
+    assert "LLM spend (all)" in msg and "correlate" in msg and "analyze" in msg
+
+
+def test_run_command_cost_day_shows_the_trend(tmp_path):
+    db = str(tmp_path / "s.db")
+    _record_calls(db)
+    msg = run_command(Command(COST, "amy", "day"), db)
+    assert "by day" in msg and msg.count("~$") >= 2  # a total + at least one day row
+
+
+def test_run_command_cost_says_so_when_nothing_recorded(tmp_path):
+    assert "No spend recorded" in run_command(Command(COST, "amy"), str(tmp_path / "empty.db"))
 
 
 # -- the generic dispatch shell (verify -> handshake -> parse -> run) ------------

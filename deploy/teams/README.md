@@ -47,7 +47,10 @@ for an operator who didn't set up the deployment. (Teams needs no command regist
 as soon as you upgrade.)
 
 **Summon a scan:** `@steadystate probe <target>` runs an on-demand scan of a named target and posts
-what's wrong back to the channel (read-only). Targets come from the listener's `STEADYSTATE_TARGETS`
-file (name → source + path + label) — see [deploy/kubernetes/listener.yaml](../kubernetes/listener.yaml).
-It honors your mutes/snoozes by default; add `unmute` (`@steadystate probe <target> unmute`) to show
-everything for that run.
+what's wrong back to the channel (read-only), with a one-line spend footer. Targets come from the
+listener's `STEADYSTATE_TARGETS` file (name → source + path + label) — see
+[deploy/kubernetes/listener.yaml](../kubernetes/listener.yaml). It honors your mutes/snoozes by
+default; add `unmute` (`@steadystate probe <target> unmute`) to show everything for that run.
+
+**See spend:** `@steadystate cost` posts the LLM spend rollup, or `@steadystate cost day` / `cost week`
+for the trend.
