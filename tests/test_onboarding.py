@@ -125,8 +125,9 @@ def test_doctor_never_prints_a_secret_value(tmp_path):
 def test_init_writes_only_the_configured_capabilities(tmp_path, monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     env_file = tmp_path / ".env"
-    # 13 capabilities -> 13 confirms. Decline LLM; configure Slack (y + url); decline the other 11.
-    answers = "n\n" + "y\nhttps://hooks.slack.com/x\n" + "n\n" * 11
+    # One confirm per capability (LLM is first, Slack second). Decline LLM; configure Slack (y +
+    # url); decline the rest -- derived from the catalog so adding a capability doesn't break this.
+    answers = "n\n" + "y\nhttps://hooks.slack.com/x\n" + "n\n" * (len(ob.capabilities()) - 2)
     result = _run(["init", "--env-file", str(env_file)], input=answers)
     assert result.exit_code == 0
     written = read_env_file(env_file)
@@ -137,7 +138,7 @@ def test_init_writes_only_the_configured_capabilities(tmp_path, monkeypatch):
 
 def test_init_writes_nothing_when_everything_is_declined(tmp_path):
     env_file = tmp_path / ".env"
-    result = _run(["init", "--env-file", str(env_file)], input="n\n" * 13)
+    result = _run(["init", "--env-file", str(env_file)], input="n\n" * len(ob.capabilities()))
     assert result.exit_code == 0
     assert not env_file.exists()  # no file created when nothing was configured
     assert "no file written" in result.stdout
