@@ -9,6 +9,11 @@
     },
     {
       "type": 1,
+      "name": "targets",
+      "description": "List the probe targets this listener knows"
+    },
+    {
+      "type": 1,
       "name": "pending",
       "description": "Show remediations awaiting approval, with their fingerprints"
     },
@@ -22,6 +27,18 @@
           "name": "target",
           "description": "The named target to scan (from the listener's targets file)",
           "required": true
+        },
+        {
+          "type": 5,
+          "name": "verbose",
+          "description": "Show the full evidence per finding (why + declared/observed)",
+          "required": false
+        },
+        {
+          "type": 5,
+          "name": "cost",
+          "description": "Add the per-caller LLM spend breakdown for this probe",
+          "required": false
         },
         {
           "type": 5,
@@ -47,6 +64,16 @@
           ]
         }
       ]
+    },
+    {
+      "type": 1,
+      "name": "findings",
+      "description": "List remembered findings: fingerprint, status, severity"
+    },
+    {
+      "type": 1,
+      "name": "history",
+      "description": "Show the remediation audit log (newest first)"
     },
     {
       "type": 1,

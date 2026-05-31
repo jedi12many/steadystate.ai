@@ -11,7 +11,19 @@ import json
 import pytest
 
 from steadystate.inbound import build_inbound
-from steadystate.inbound.base import APPROVE, COST, DECLINE, HELP, MUTE, PENDING, PROBE, Command
+from steadystate.inbound.base import (
+    APPROVE,
+    COST,
+    DECLINE,
+    FINDINGS,
+    HELP,
+    HISTORY,
+    MUTE,
+    PENDING,
+    PROBE,
+    TARGETS,
+    Command,
+)
 from steadystate.inbound.discord import (
     DiscordInbound,
     command_from_payload,
@@ -60,9 +72,12 @@ def test_parse_mute_takes_its_fingerprint_option():
     assert command_from_payload(_command("mute", "fp9")) == Command(MUTE, "jeff", "fp9")
 
 
-def test_parse_readonly_help_and_pending_take_no_argument():
+def test_parse_readonly_verbs_take_no_argument():
     assert command_from_payload(_readonly_command("help")) == Command(HELP, "jeff")
     assert command_from_payload(_readonly_command("pending", "amy")) == Command(PENDING, "amy")
+    assert command_from_payload(_readonly_command("targets")) == Command(TARGETS, "jeff")
+    assert command_from_payload(_readonly_command("findings")) == Command(FINDINGS, "jeff")
+    assert command_from_payload(_readonly_command("history")) == Command(HISTORY, "jeff")
 
 
 def test_parse_cost_with_and_without_its_period_option():
@@ -103,7 +118,7 @@ def test_parse_probe_takes_its_target_option():
     assert command_from_payload(payload) == Command(PROBE, "jeff", "prod-k8s")
 
 
-def test_parse_probe_unmute_boolean_option_sets_bypass():
+def test_parse_probe_boolean_flag_options_become_flags():
     payload = {
         "type": 2,
         "data": {
@@ -115,13 +130,17 @@ def test_parse_probe_unmute_boolean_option_sets_bypass():
                     "options": [
                         {"name": "target", "type": 3, "value": "prod-k8s"},
                         {"name": "unmute", "type": 5, "value": True},
+                        {"name": "verbose", "type": 5, "value": True},
+                        {"name": "cost", "type": 5, "value": False},  # off -> not a flag
                     ],
                 }
             ],
         },
         "member": {"user": {"username": "jeff"}},
     }
-    assert command_from_payload(payload) == Command(PROBE, "jeff", "prod-k8s", bypass=True)
+    assert command_from_payload(payload) == Command(
+        PROBE, "jeff", "prod-k8s", flags=frozenset({"unmute", "verbose"})
+    )
 
 
 def test_parse_actor_falls_back_to_top_level_user_then_default():

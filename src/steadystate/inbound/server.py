@@ -9,6 +9,7 @@ control flow are testable without standing up a socket.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -25,10 +26,13 @@ from .base import (
     APPROVE,
     COST,
     DECLINE,
+    FINDINGS,
     HELP,
+    HISTORY,
     MUTE,
     PENDING,
     PROBE,
+    TARGETS,
     Command,
     InboundAdapter,
     render_help,
@@ -48,17 +52,45 @@ def _render_pending(state_path: str) -> str:
     return "\n".join(lines)
 
 
-def _summarize(name: str, alerts: list[Alert], suppressed: int = 0) -> str:
+def _compact(value: object) -> str:
+    """A one-line, length-capped view of a drift's declared/observed side for `verbose`."""
+    return json.dumps(value, default=str)[:240] if value is not None else "(none)"
+
+
+def _evidence(alert: Alert) -> list[str]:
+    """The full reasoning + before/after for one alert -- what `probe ... verbose` adds so an
+    operator can *audit* a finding (is it accurate?) instead of trusting the title alone."""
+    out = [f"           why: {alert.why_it_matters}"]
+    if alert.recommended_action:
+        out.append(f"           fix: {alert.recommended_action}")
+    for d in alert.drifts:
+        out.append(f"           drift: {d.summary()}")
+        if d.declared is not None or d.observed is not None:
+            out.append(f"             declared: {_compact(d.declared)}")
+            out.append(f"             observed: {_compact(d.observed)}")
+    for f in alert.findings:
+        out.append(f"           finding: {f.title} -- {f.detail}")
+    for s in alert.symptoms:
+        out.append(f"           symptom: {s.title} -- {s.detail}")
+    return out
+
+
+def _summarize(name: str, alerts: list[Alert], suppressed: int = 0, verbose: bool = False) -> str:
     """A chat summary of a summoned scan: the kept alerts (worst first, as the report orders them)
-    or a clean all-clear, plus how many were withheld by mute/snooze. Read-only -- it reports,
-    it never records or applies. (The spend footer is appended by the caller.)"""
+    or a clean all-clear, plus how many were withheld by mute/snooze. ``verbose`` adds the full
+    evidence per alert. Read-only -- it reports, it never records or applies. (Spend footer is
+    appended by the caller.)"""
     if not alerts:
         if suppressed:
             return f"{name}: clean except {suppressed} muted/snoozed -- add `unmute` to show."
         return f"{name}: clean -- no drift or symptoms above the bar."
     lines = [f"{name}: {len(alerts)} alert(s)"]
     for a in alerts:
-        lines.append(f"  {a.severity.value.upper():<8} {a.title}")
+        chips = " ".join(f"[{r.framework} {r.id}]" for r in a.references)
+        head = f"  {a.severity.value.upper():<8} {a.title}"
+        lines.append(f"{head}  {chips}" if chips else head)
+        if verbose:
+            lines += _evidence(a)
         # The fingerprint(s) so the finding is actionable -- `mute <fp>` a benign one, and a
         # diagnosis Alert (drift + symptom) lists both, since suppressing it needs both muted.
         for fp in _fingerprints(a):
@@ -110,12 +142,52 @@ def _honor_mutes(alerts: list[Alert], state_path: str) -> tuple[list[Alert], int
     return kept, suppressed
 
 
-def _run_probe(target_name: str, state_path: str, bypass: bool) -> str:
+def _render_targets() -> str:
+    """The chat view of the probe-target registry (STEADYSTATE_TARGETS) -- so an operator can see
+    what `probe <target>` can reach without recalling the targets file."""
+    targets = load_targets_from_env()
+    if not targets:
+        return "No targets configured (set STEADYSTATE_TARGETS on the listener)."
+    lines = [f"{len(targets)} target(s):"]
+    lines += [f"  {name:<14} {t.source:<14} {t.label}" for name, t in sorted(targets.items())]
+    return "\n".join(lines)
+
+
+def _render_findings(state_path: str) -> str:
+    """The chat view of `steadystate findings`: every remembered finding, its fingerprint, status
+    (open/muted/snoozed/resolved) and last severity -- the keys for mute/approve. Read-only."""
+    if not state_path or not Path(state_path).exists():
+        return "No findings recorded yet."
+    with StateStore(state_path) as store:
+        rows = store.all_findings()
+    if not rows:
+        return "No findings recorded yet."
+    lines = [f"{len(rows)} finding(s):"]
+    lines += [f"  {f.fingerprint}  {f.status:<8} {f.last_severity:<6} {f.last_title}" for f in rows]
+    return "\n".join(lines)
+
+
+def _render_history(state_path: str) -> str:
+    """The chat view of `steadystate history`: the remediation audit log, newest first -- what ran
+    against real infra, who decided, and the outcome. Read-only."""
+    if not state_path or not Path(state_path).exists():
+        return "No remediation history."
+    with StateStore(state_path) as store:
+        rows = store.audit_log(limit=10)
+    if not rows:
+        return "No remediation history."
+    lines = ["recent remediations (newest first):"]
+    lines += [f"  {r.outcome.upper():<9} {r.drift_identity}  {r.actor}  {r.at[:10]}" for r in rows]
+    return "\n".join(lines)
+
+
+def _run_probe(target_name: str, state_path: str, flags: frozenset[str]) -> str:
     """Summon: scan a named target now and report what's wrong. Resolves the name against the
     targets registry (STEADYSTATE_TARGETS), runs the SAME engine a scheduled scan runs -- and,
-    unless ``bypass`` (the `unmute` flag), honors the mutes/snoozes the operator already set
-    (read-only). The reply carries a one-line spend footer. It never records or applies -- chat
-    stays a trigger, not a bypass."""
+    unless ``unmute`` is set, honors the mutes/snoozes the operator already set (read-only).
+    ``verbose`` adds the full evidence per alert; ``cost`` adds the per-caller spend breakdown.
+    The reply carries a one-line spend footer. It never records or applies -- chat stays a
+    trigger, not a bypass."""
     targets = load_targets_from_env()
     if not targets:
         return "No targets configured (set STEADYSTATE_TARGETS to a targets file on the listener)."
@@ -130,26 +202,39 @@ def _run_probe(target_name: str, state_path: str, bypass: bool) -> str:
     suppressed = 0
     # Honor mutes by default, read-only -- but only when there's an existing store to read (opening
     # a missing path would create one, a write). `unmute` skips suppression for this run.
-    if not bypass and state_path and Path(state_path).exists():
+    if "unmute" not in flags and state_path and Path(state_path).exists():
         alerts, suppressed = _honor_mutes(alerts, state_path)
-    summary = _summarize(target_name, alerts, suppressed)
+    out = _summarize(target_name, alerts, suppressed, verbose="verbose" in flags)
     spend = scan_cost_line(report.llm_calls)  # None on a --no-llm run -> no footer
-    return f"{summary}\n  {spend}" if spend else summary
+    if spend:
+        out += f"\n  {spend}"
+        if "cost" in flags:  # the per-caller breakdown of this probe's spend
+            out += "".join(
+                f"\n    {r.caller:<12} ~${r.cost_usd:.4f}  {r.calls} call(s)"
+                for r in roll_up(report.llm_calls)
+            )
+    return out
 
 
 def run_command(command: Command, state_path: str) -> str:
     """Drive a parsed Command to an outcome string the provider echoes back. The read-only verbs
-    (help, pending, probe, cost) answer directly; mute and approve/decline write through the SAME
-    cores the CLI uses. probe is read-only -- it scans + reports, so chat stays a trigger, never a
-    bypass; mute only silences a finding, never touches infrastructure."""
+    (help, targets, pending, probe, cost, findings, history) answer directly; mute and
+    approve/decline write through the SAME cores the CLI uses. probe is read-only -- it scans +
+    reports, so chat stays a trigger, never a bypass; mute only silences a finding."""
     if command.verb == HELP:
         return render_help()
+    if command.verb == TARGETS:
+        return _render_targets()
     if command.verb == PENDING:
         return _render_pending(state_path)
     if command.verb == PROBE:
-        return _run_probe(command.argument, state_path, command.bypass)
+        return _run_probe(command.argument, state_path, command.flags)
     if command.verb == COST:
         return _render_cost(state_path, command.argument)
+    if command.verb == FINDINGS:
+        return _render_findings(state_path)
+    if command.verb == HISTORY:
+        return _render_history(state_path)
     with StateStore(state_path) as store:
         if command.verb == APPROVE:
             message, _result = apply_pending(store, command.argument, command.actor)

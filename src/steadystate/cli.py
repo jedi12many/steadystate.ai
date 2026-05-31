@@ -585,19 +585,27 @@ def chat(state: Path = _STATE_OPTION) -> None:
 @app.command()
 def probe(
     target: str = typer.Argument(..., help="A named target from STEADYSTATE_TARGETS to scan now."),
-    unmute: bool = typer.Option(
+    verbose: bool = typer.Option(
         False,
-        "--unmute",
-        help="Show muted/snoozed findings too (bypass suppression for this run).",
+        "--verbose",
+        "-v",
+        help="Show the full evidence per finding (why + declared/observed).",
+    ),
+    cost: bool = typer.Option(False, "--cost", help="Add the per-caller LLM spend breakdown."),
+    unmute: bool = typer.Option(
+        False, "--unmute", help="Show muted/snoozed findings too (bypass suppression this run)."
     ),
     state: Path = _STATE_OPTION,
 ) -> None:
     """Summon a scan of a named target now -- the one-shot, scriptable form of the chat
     `probe <target>` verb. Resolves the target from STEADYSTATE_TARGETS, runs the read-only engine
-    (drift + health), and prints what's wrong. Honors the mutes/snoozes in --state by default;
-    --unmute shows everything. The SAME path the listener runs, so it's a faithful local test."""
+    (drift + health), and prints what's wrong. Honors the mutes/snoozes in --state by default
+    (--unmute shows everything); --verbose adds the evidence. The SAME path the listener runs."""
     state.parent.mkdir(parents=True, exist_ok=True)
-    typer.echo(run_command(Command(PROBE, _local_actor(), target, bypass=unmute), str(state)))
+    flags = frozenset(
+        name for name, on in (("verbose", verbose), ("cost", cost), ("unmute", unmute)) if on
+    )
+    typer.echo(run_command(Command(PROBE, _local_actor(), target, flags=flags), str(state)))
 
 
 def main() -> None:

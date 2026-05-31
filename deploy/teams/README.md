@@ -41,10 +41,11 @@ The listener verifies the HMAC signature, runs the **same** guardrailed remediat
 and Discord paths use (actor recorded as the Teams sender's name), and replies in-channel with the
 outcome. `@steadystate decline <fingerprint>` declines it.
 
-**Discovery, no fingerprint needed:** `@steadystate help` lists the commands the listener accepts,
-and `@steadystate pending` shows the remediations awaiting approval with their fingerprints — handy
-for an operator who didn't set up the deployment. (Teams needs no command registration; these work
-as soon as you upgrade.)
+**Discovery, no fingerprint needed:** `@steadystate help` (commands), `@steadystate targets` (what
+`probe` can reach), `@steadystate pending` (awaiting approval, with fingerprints), `@steadystate
+findings` (remembered findings + status), `@steadystate history` (the audit log) — handy for an
+operator who didn't set up the deployment. And `@steadystate probe <target> verbose` shows the full
+evidence per finding. (Teams needs no command registration; these work as soon as you upgrade.)
 
 **Summon a scan:** `@steadystate probe <target>` runs an on-demand scan of a named target and posts
 what's wrong back to the channel (read-only), with a one-line spend footer. Targets come from the
