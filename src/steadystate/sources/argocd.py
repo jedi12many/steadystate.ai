@@ -10,13 +10,11 @@ Each resource carries group/kind/namespace/name plus a per-resource `status`
 
 from __future__ import annotations
 
-import json
 import os
 import urllib.request
 
-from .._http import safe_urlopen
 from ..model import ChangeType, Drift, Provenance
-from .base import Capabilities
+from .base import Capabilities, fetch_json
 
 
 def _identity(res: dict) -> str:
@@ -58,11 +56,13 @@ class ArgoCDSource:
         app_name: str | None = None,
         base_url: str | None = None,
         token: str | None = None,
+        timeout: float = 30.0,  # an API read; bounded so a hung server can't block the scan
     ) -> None:
         self._app = app
         self.app_name = app_name
         self.base_url = base_url or os.environ.get("ARGOCD_SERVER")
         self.token = token or os.environ.get("ARGOCD_TOKEN")
+        self.timeout = timeout
 
     def collect_drift(self) -> list[Drift]:
         app = self._app if self._app is not None else self._fetch()
@@ -75,5 +75,5 @@ class ArgoCDSource:
         req = urllib.request.Request(url)
         if self.token:
             req.add_header("Authorization", f"Bearer {self.token}")
-        with safe_urlopen(req) as resp:
-            return json.loads(resp.read())
+        result = fetch_json(req, timeout=self.timeout, tool="argocd")
+        return result if isinstance(result, dict) else {}
