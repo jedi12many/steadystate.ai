@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from steadystate.model import Provenance, Resource
-from steadystate.probe import PROBES, auto_prober_for, build_prober
+from steadystate.probe import PROBE_CAPABILITIES, PROBES, auto_prober_for, build_prober
 from steadystate.probe.base import Symptom
 from steadystate.probe.kubectl import (
     KubectlProbe,
@@ -14,6 +14,26 @@ from steadystate.probe.kubectl import (
     unhealthy_pods,
 )
 from steadystate.reason.alert import Severity
+
+
+def test_probe_capabilities_cover_every_registered_probe():
+    # A probe registered without a declared command manifest would slip past `steadystate commands`
+    # and the catalog -- this fails if the two registries drift apart.
+    assert set(PROBE_CAPABILITIES) == set(PROBES)
+
+
+def test_probes_are_observe_only_and_declare_kubectl_logs():
+    for name, caps in PROBE_CAPABILITIES.items():
+        assert caps.destructive == (), f"{name} probe must not declare a destructive command"
+    # The whole point: `kubectl logs` (the failing pod's evidence) is now a declared observe cmd.
+    assert any("kubectl logs" in cmd for cmd in PROBE_CAPABILITIES["kubectl"].observe)
+    assert any("docker logs" in cmd for cmd in PROBE_CAPABILITIES["docker"].observe)
+
+
+def test_probe_manifest_matches_what_the_probe_actually_runs():
+    # The kubectl probe shells out to `kubectl get pods` and `kubectl logs`; both must be declared.
+    declared = " ".join(PROBE_CAPABILITIES["kubectl"].observe)
+    assert "kubectl get pods" in declared and "kubectl logs" in declared
 
 
 def _symptom(category: str = "CrashLoopBackOff", identity: str = "apps/Deployment/prod/web"):

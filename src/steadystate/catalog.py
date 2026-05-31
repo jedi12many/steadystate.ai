@@ -17,7 +17,7 @@ from .act import EXECUTORS
 from .domains import DEFAULT_DOMAINS
 from .inbound import INBOUND
 from .notify import SURFACES
-from .probe import PROBES
+from .probe import PROBE_CAPABILITIES, PROBES
 from .reason.enrich import ENRICHERS
 from .reason.pipeline import CORRELATORS
 from .sources import CAPABILITIES, DRIFT_SOURCES
@@ -71,6 +71,16 @@ def _source_items() -> list[PluginItem]:
     return items
 
 
+def _probe_items() -> list[PluginItem]:
+    """Probes, annotated with how many observe commands each declares (observe-only by nature)."""
+    items = []
+    for name in sorted(PROBES):
+        caps = PROBE_CAPABILITIES.get(name)
+        detail = f"{len(caps.observe)} observe" if caps is not None else ""
+        items.append(PluginItem(name, detail))
+    return items
+
+
 def _seams() -> list[Seam]:
     """Every plugin seam and what's registered in it, read live from the registries."""
     return [
@@ -81,7 +91,7 @@ def _seams() -> list[Seam]:
         Seam("Executors", "fix --source", _names(EXECUTORS)),
         Seam("Correlators", "--correlator", [PluginItem("auto"), *_names(CORRELATORS)]),
         Seam("Enrichers", "--enrich", _names(ENRICHERS)),
-        Seam("Probes", "--probe", _names(PROBES)),
+        Seam("Probes", "--probe", _probe_items()),
     ]
 
 

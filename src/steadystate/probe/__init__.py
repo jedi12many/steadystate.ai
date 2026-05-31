@@ -13,6 +13,7 @@ import json
 from collections.abc import Callable
 from pathlib import Path
 
+from ..sources.base import Capabilities
 from .argocd import ArgoCDProbe
 from .base import Prober, Symptom
 from .docker import DockerProbe
@@ -37,6 +38,16 @@ PROBES: dict[str, Callable[[Path], Prober]] = {
     "argocd": lambda path: ArgoCDProbe(_load_json(path)),
 }
 
+# Per-probe command manifest, mirroring the sources' CAPABILITIES: the read-only `observe`
+# commands each probe shells out to (a probe never acts, so there are no destructive ones). Keyed
+# like PROBES, so `steadystate commands` and the catalog show exactly what a probe will run -- and
+# an operator can derive least-privilege access (e.g. kubectl `pods` + `pods/log`) from it.
+PROBE_CAPABILITIES: dict[str, Capabilities] = {
+    "kubectl": KubectlProbe.commands,
+    "docker": DockerProbe.commands,
+    "argocd": ArgoCDProbe.commands,
+}
+
 # Which probe `--probe auto` picks per source -- only the sources with a real health signal
 # distinct from their drift (k8s pods, compose containers, ArgoCD's own health field).
 _AUTO: dict[str, str] = {
@@ -45,7 +56,14 @@ _AUTO: dict[str, str] = {
     "argocd": "argocd",
 }
 
-__all__ = ["PROBES", "Prober", "Symptom", "auto_prober_for", "build_prober"]
+__all__ = [
+    "PROBE_CAPABILITIES",
+    "PROBES",
+    "Prober",
+    "Symptom",
+    "auto_prober_for",
+    "build_prober",
+]
 
 
 def auto_prober_for(source: str) -> str | None:
