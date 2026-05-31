@@ -61,3 +61,18 @@ def test_commands_cli_marks_observe_only_plugins():
 def test_commands_cli_rejects_unknown_source():
     result = _runner().invoke(app, ["commands", "--source", "nope"])
     assert result.exit_code != 0
+
+
+def test_commands_cli_documents_probe_observe_commands():
+    # The whole point of this change: `kubectl logs` (run by the probe) is now in the manifest.
+    result = _runner().invoke(app, ["commands"])
+    assert result.exit_code == 0
+    assert "kubectl (probe)" in result.stdout
+    assert "kubectl logs --tail --previous" in result.stdout
+    assert "docker logs --tail" in result.stdout
+
+
+def test_commands_cli_single_source_omits_probes():
+    # Filtering to one source shows just that source, not the probe section.
+    result = _runner().invoke(app, ["commands", "--source", "terraform"])
+    assert "(probe)" not in result.stdout

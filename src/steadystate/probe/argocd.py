@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from ..model import Provenance, Resource
 from ..reason.alert import Severity
+from ..sources.base import Capabilities
 from .base import Symptom
 
 # ArgoCD health.status -> severity. Healthy/Progressing/Suspended are fine or transient (skipped);
@@ -61,6 +62,9 @@ class ArgoCDProbe:
     Constructed with the captured Application dict (the same snapshot the source reads)."""
 
     name = "argocd"
+    # Reads the per-resource health.status from the captured Application snapshot (same doc the
+    # source rides for sync) -- no live command of its own, hence an empty observe manifest.
+    commands = Capabilities(observe=())
 
     def __init__(self, app: dict | None = None) -> None:
         self._app = app or {}
