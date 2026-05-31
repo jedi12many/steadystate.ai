@@ -10,6 +10,7 @@ change between releases until 1.0.0. Releases are published as GitHub Releases.
 
 ### Added
 
+- Summon -- chat-triggered scans (`@steadystate probe <target>`): the operator-initiated counterpart to the scheduled run. Someone pings you about prod, you send the agent to look instead of SSH-ing in. The inbound `probe` verb resolves a named target from the listener's registry (`STEADYSTATE_TARGETS` -> name -> source + path + label), runs the **same** reasoning engine the `scan` CLI runs (factored into `engine.build_report`, so there's one path, not two -- drift + probe + correlation), and posts the alerts back to the thread. **Read-only** (observe, stateless): it reports drift + health, never records or applies -- chat stays a trigger, not a bypass. Across all three providers (Teams `@steadystate probe <target>`, Slack/Discord `/steadystate probe`). The persistent listener it needs -- the long-lived counterpart to the scheduled CronJob -- ships as a Deployment + Service + Ingress + targets ConfigMap (`deploy/kubernetes/listener.yaml`). (A slow scan can exceed a provider's interaction timeout; fast/health targets are the sweet spot, async deferral is next.)
 - Drift core (v0): canonical state model + reconciler + reasoning pipeline emitting Alerts.
 - Terraform StateSource: declared-vs-real drift via `terraform show/plan -json`.
 - Guardrailed Terraform executor: apply-eligibility check + snapshot/verify/revert; nothing applies without both eligibility and explicit confirm.

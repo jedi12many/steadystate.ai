@@ -8,7 +8,12 @@ Ready-to-adapt deployment artifacts for the examples in [../DEPLOYMENT.md](../DE
   Azure drift scan, secrets via Vault. Copy into `.github/workflows/` in your IaC repo.
 - **[`kubernetes/`](kubernetes/)** — Example 2: in-cluster CronJob + read-only RBAC
   (Rancher/Fleet by default). `kubectl apply -f kubernetes/rbac.yaml -f kubernetes/cronjob.yaml`.
+- **[`kubernetes/listener.yaml`](kubernetes/listener.yaml)** — the **persistent inbound listener**
+  (Deployment + Service + Ingress + a targets ConfigMap): the long-lived counterpart to the
+  CronJob, so chat can talk *back* — approve/decline, `pending`/`help`, and `probe <target>`
+  (Summon). Needs a public HTTPS endpoint (the Ingress) and the provider's signing secret. Apply
+  `rbac.yaml` first (it provides the namespace, the read-only ServiceAccount, and the state PVC).
 
-All start **observe-only** (alert, don't act). See DEPLOYMENT.md for the autonomy model and how
+All scanning starts **observe-only** (alert, don't act); the Summon `probe` verb is read-only too. See DEPLOYMENT.md for the autonomy model and how
 each maps to steadystate's sources and surfaces. These are templates — adjust paths, secret
 names, surfaces, and the schedule for your environment.

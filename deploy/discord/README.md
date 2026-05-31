@@ -54,7 +54,12 @@ The listener verifies the Ed25519 signature, runs the **same** guardrailed remed
 Slack paths use (actor recorded as the Discord username), and replies in-channel with the outcome.
 `/steadystate decline fingerprint:<fp>` declines it.
 
-**Don't know the fingerprint (or what's available)?** The same command registers two read-only
+**Don't know the fingerprint (or what's available)?** The same command registers read-only
 subcommands for discovery — `/steadystate help` lists what the listener accepts, and
 `/steadystate pending` shows the remediations awaiting approval with their fingerprints. Re-run
-`register.py` after upgrading to pick them up (the four subcommands ship in `command.json`).
+`register.py` after upgrading to pick them up (the subcommands ship in `command.json`).
+
+**Summon a scan:** `/steadystate probe <target>` runs an on-demand scan of a named target and
+posts what's wrong back to the channel (read-only). Targets come from the listener's
+`STEADYSTATE_TARGETS` file (name → source + path + label) — see
+[deploy/kubernetes/listener.yaml](../kubernetes/listener.yaml).

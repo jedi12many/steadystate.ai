@@ -13,21 +13,18 @@ from rich.table import Table
 from .act import EXECUTORS, build_executor
 from .act.approve import apply_pending, decline_pending
 from .catalog import gather_catalog, render_console, render_html
+from .engine import build_report
 from .inbound import INBOUND, build_inbound
 from .inbound.server import serve
 from .notify import SURFACES, build_surfaces
 from .notify.base import Surface
 from .notify.console import ConsoleSurface
-from .probe import PROBES, Prober, auto_prober_for, build_prober
-from .reason.correlate import Correlator
+from .probe import PROBES
 from .reason.cost import roll_up
-from .reason.enrich import ENRICHERS, Enricher, build_enricher
-from .reason.llm import LLMAnalyst
-from .reason.pipeline import CORRELATORS, Pipeline, build_correlator
-from .reason.report import Tuning
+from .reason.enrich import ENRICHERS
+from .reason.pipeline import CORRELATORS
 from .reconcile_state import reconcile
 from .sources import CAPABILITIES, DRIFT_SOURCES, build_drift_source
-from .sources.base import StateSource
 from .state import PendingAction, StateStore
 
 DEFAULT_STATE_PATH = ".steadystate/state.db"
@@ -57,44 +54,6 @@ def _surfaces(names: list[str]) -> list[Surface]:
     Adding a surface is a one-line registry entry -- this dispatcher never changes."""
     try:
         return build_surfaces(names)
-    except ValueError as exc:
-        raise typer.BadParameter(str(exc)) from None
-
-
-def _tuning(value: str) -> Tuning:
-    try:
-        return Tuning(value)
-    except ValueError:
-        raise typer.BadParameter("tuning must be: lenient | default | strict") from None
-
-
-def _correlator(value: str, analyst: LLMAnalyst) -> Correlator:
-    """Resolve --correlator to a Correlator via the registry in reason/pipeline.py.
-    Adding a correlator is a one-line registry entry -- this dispatcher never changes."""
-    try:
-        return build_correlator(value, analyst)
-    except ValueError as exc:
-        raise typer.BadParameter(str(exc)) from None
-
-
-def _enricher(value: str) -> Enricher | None:
-    """Resolve --enrich to an Enricher (or None) via the registry in reason/enrich.py.
-    Adding an enricher is a one-line registry entry -- this dispatcher never changes."""
-    try:
-        return build_enricher(value)
-    except ValueError as exc:
-        raise typer.BadParameter(str(exc)) from None
-
-
-def _prober(value: str, source: str, path: Path) -> Prober | None:
-    """Resolve --probe to a Prober (or None). ``auto`` picks the probe matching the source (None
-    when none makes sense, e.g. terraform/ansible); a name builds that probe. The dispatcher
-    never changes -- adding a probe is a one-line registry entry."""
-    if value == "auto":
-        name = auto_prober_for(source)
-        return None if name is None else _prober(name, source, path)
-    try:
-        return build_prober(value, path)
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from None
 
@@ -245,34 +204,22 @@ def scan(
             "--autonomy auto needs the state store for its audit trail; remove --stateless."
         )
     surfaces = _surfaces([name.strip() for name in to.split(",") if name.strip()])
-    level = _tuning(tuning)
-    # --no-llm forces the kill switch; otherwise the analyst reads STEADYSTATE_LLM_ENABLED.
-    analyst = LLMAnalyst(enabled=False if no_llm else None)
-    grouping = _correlator(correlator, analyst)
-    enricher = _enricher(enrich)
-    prober = _prober(probe, source, path)
-    src = _drift_source(source, path)
-    drifts = src.collect_drift()
-    # The declared inventory feeds the standing-policy pass (CIS/STIG) AND the observe pass.
-    # Only sources that enumerate declared state implement StateSource; native drift sources
-    # (Terraform, ArgoCD) don't, so they contribute no baseline -- guard rather than assume.
-    resources = src.collect_declared() if isinstance(src, StateSource) else []
-    # The prober reads the live health of those declared resources into Symptoms (the second
-    # departure type). None (--probe none, the default) -> no symptoms, the path is unchanged.
-    symptoms = prober.probe(resources) if prober is not None else []
-    report = Pipeline(analyst=analyst, tuning=level, correlator=grouping).run(
-        drifts, resources, symptoms
-    )
-    report.llm_calls = analyst.calls  # this scan's LLM spend, for the prometheus surface
-    if label:  # stamp the environment on every item so each surfaced alert self-identifies
-        for item in report.items:
-            item.environment = label
-    # Observability enrichment runs between run() and the state reconcile + emit, so a
-    # severity bumped by a currently-failing resource flows into BOTH the state store and
-    # the surfaces. None (--enrich none, the default) skips it; the enricher honestly
-    # no-ops when unconfigured, so the un-enriched path is unchanged.
-    if enricher is not None:
-        enricher.enrich(report)
+    # The reasoned report -- drift + probe symptoms, scored/correlated/enriched -- comes from
+    # the shared engine, the SAME path the chat-summoned probe runs (inbound/server.py). An
+    # unknown source/probe/correlator/enricher/tuning surfaces as a clean BadParameter.
+    try:
+        report = build_report(
+            source,
+            path,
+            probe=probe,
+            tuning=tuning,
+            correlator=correlator,
+            enrich=enrich,
+            no_llm=no_llm,
+            label=label,
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from None
     # The Pipeline is pure; memory is applied here, between run() and emit(). Stateless
     # scans skip the store entirely and surface exactly as before (Alerts un-annotated).
     # One `now` for the whole scan so the store's timestamps and the console's NEW-vs-age
@@ -286,7 +233,7 @@ def scan(
             # Best-effort spend telemetry: persist this scan's LLM calls. Never a
             # correctness path -- a wedged db must not break a scan, so we swallow failures.
             with contextlib.suppress(Exception):
-                for call in analyst.calls:
+                for call in report.llm_calls:
                     store.record_llm_call(call, now)
             if autonomy in ("suggest", "auto"):  # offer an eligible remediation per drift
                 recorded = _record_suggestions(store, source, path, report, now, label or None)
@@ -541,14 +488,16 @@ def listen(
     channel: str = typer.Option(
         "slack",
         "--from",
-        help=f"Chat channel to accept approvals from: {' | '.join(sorted(INBOUND))}.",
+        help=f"Chat channel to accept commands from: {' | '.join(sorted(INBOUND))}.",
     ),
     port: int = typer.Option(8723, "--port", help="Port for the interactivity endpoint."),
     state: Path = _STATE_OPTION,
 ) -> None:
-    """Run the approval listener: clicking Approve/Decline on a posted alert runs the gated
-    remediation. Each channel needs its signing secret / public key in the environment; point
-    your chat app's interactivity Request URL at http://<host>:<port>/."""
+    """Run the chat command listener: the persistent, two-way counterpart to a scheduled scan.
+    It accepts `approve`/`decline` (the gated remediation), the read-only `help`/`pending`, and
+    `probe <target>` (Summon -- an on-demand scan of a named target from STEADYSTATE_TARGETS).
+    Each channel needs its signing secret / public key in the environment; point your chat app's
+    Request URL at http://<host>:<port>/. Set STEADYSTATE_TARGETS to enable `probe`."""
     try:
         adapter = build_inbound(channel)
     except ValueError as exc:
@@ -557,7 +506,7 @@ def listen(
     if problem:
         raise typer.BadParameter(problem)
     state.parent.mkdir(parents=True, exist_ok=True)
-    typer.echo(f"steadystate: listening for {adapter.name} approvals on :{port}")
+    typer.echo(f"steadystate: listening for {adapter.name} commands on :{port}")
     serve(adapter, port, str(state))
 
 

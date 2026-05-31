@@ -16,6 +16,7 @@ from steadystate.inbound.base import (
     DECLINE,
     HELP,
     PENDING,
+    PROBE,
     Command,
     command_from_text,
     render_help,
@@ -28,7 +29,7 @@ from steadystate.inbound.slack import (
 )
 from steadystate.model import ChangeType, Drift, Provenance
 from steadystate.notify.slack import format_slack_message
-from steadystate.reason.alert import Alert, Severity
+from steadystate.reason.alert import Alert, Layer, Severity
 from steadystate.state import PendingAction, StateStore
 
 _SECRET = "shhh"
@@ -85,6 +86,7 @@ def test_text_grammar_parses_act_and_readonly_verbs():
     assert command_from_text("decline fp7", "amy") == Command(DECLINE, "amy", "fp7")
     assert command_from_text("help", "amy") == Command(HELP, "amy")
     assert command_from_text("pending", "amy") == Command(PENDING, "amy")
+    assert command_from_text("probe prod-k8s", "amy") == Command(PROBE, "amy", "prod-k8s")
 
 
 def test_text_grammar_is_case_insensitive_and_skips_leading_noise():
@@ -99,7 +101,7 @@ def test_text_grammar_needs_a_fingerprint_for_act_verbs_and_ignores_unknowns():
 
 def test_render_help_lists_every_command():
     text = render_help()
-    for verb in (HELP, PENDING, APPROVE, DECLINE):
+    for verb in (HELP, PENDING, PROBE, APPROVE, DECLINE):
         assert verb in text
 
 
@@ -187,6 +189,70 @@ def test_run_command_pending_lists_open_remediations(tmp_path):
 def test_run_command_pending_says_so_when_empty(tmp_path):
     msg = run_command(Command(PENDING, "amy"), str(tmp_path / "s.db"))
     assert "No remediations" in msg
+
+
+# -- probe (Summon): resolve a named target -> run the engine -> summarize ------
+
+
+def _targets_file(tmp_path, data: dict) -> str:
+    path = tmp_path / "targets.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    return str(path)
+
+
+def _report_with_one_alert() -> object:
+    from steadystate.reason.report import Report
+
+    alert = Alert(
+        title="web is Degraded",
+        severity=Severity.HIGH,
+        drifts=[],
+        why_it_matters="0/3 pods available",
+        layer=Layer.ALERT,
+    )
+    return Report(items=[alert])
+
+
+def test_run_command_probe_resolves_and_summarizes(monkeypatch, tmp_path):
+    monkeypatch.setenv(
+        "STEADYSTATE_TARGETS",
+        _targets_file(tmp_path, {"prod": {"source": "argocd", "path": "/x", "label": "prod"}}),
+    )
+    # Stub the engine: this test is about the wiring (resolve -> run -> summarize), not a real scan.
+    monkeypatch.setattr(
+        "steadystate.inbound.server.build_report", lambda *a, **k: _report_with_one_alert()
+    )
+    msg = run_command(Command(PROBE, "amy", "prod"), ":memory:")
+    assert "prod: 1 alert" in msg and "web is Degraded" in msg and "HIGH" in msg
+
+
+def test_run_command_probe_unknown_target_lists_the_known_ones(monkeypatch, tmp_path):
+    monkeypatch.setenv(
+        "STEADYSTATE_TARGETS",
+        _targets_file(tmp_path, {"prod": {"source": "argocd", "path": "/x"}}),
+    )
+    msg = run_command(Command(PROBE, "amy", "nope"), ":memory:")
+    assert "Unknown target 'nope'" in msg and "prod" in msg
+
+
+def test_run_command_probe_with_no_targets_configured(monkeypatch):
+    monkeypatch.delenv("STEADYSTATE_TARGETS", raising=False)
+    assert "No targets configured" in run_command(Command(PROBE, "amy", "prod"), ":memory:")
+
+
+def test_run_command_probe_reports_an_engine_failure_without_crashing(monkeypatch, tmp_path):
+    monkeypatch.setenv(
+        "STEADYSTATE_TARGETS",
+        _targets_file(tmp_path, {"prod": {"source": "argocd", "path": "/missing.json"}}),
+    )
+
+    def boom(*a, **k):
+        raise ValueError("source blew up")
+
+    monkeypatch.setattr("steadystate.inbound.server.build_report", boom)
+    assert "Probe of 'prod' failed: source blew up" in run_command(
+        Command(PROBE, "amy", "prod"), ":memory:"
+    )
 
 
 # -- the generic dispatch shell (verify -> handshake -> parse -> run) ------------
