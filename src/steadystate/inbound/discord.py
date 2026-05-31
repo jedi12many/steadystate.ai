@@ -77,14 +77,22 @@ def command_from_payload(payload: dict) -> Command | None:
         return Command(verb, actor)
     if verb in (APPROVE, DECLINE, PROBE):
         # approve/decline carry a `fingerprint` option, probe a `target` -- take the first
-        # non-empty string option, whatever it's named.
+        # non-empty STRING option (so probe's boolean `unmute` is never mistaken for the target).
         options = subcommands[0].get("options") or []
         argument = next(
-            (o["value"] for o in options if isinstance(o, dict) and str(o.get("value") or "")),
+            (
+                o["value"]
+                for o in options
+                if isinstance(o, dict) and isinstance(o.get("value"), str)
+            ),
             None,
         )
+        bypass = any(
+            isinstance(o, dict) and o.get("name") == "unmute" and o.get("value") is True
+            for o in options
+        )
         if isinstance(argument, str) and argument:
-            return Command(verb, actor, argument)
+            return Command(verb, actor, argument, bypass=bypass)
     return None
 
 

@@ -585,14 +585,19 @@ def chat(state: Path = _STATE_OPTION) -> None:
 @app.command()
 def probe(
     target: str = typer.Argument(..., help="A named target from STEADYSTATE_TARGETS to scan now."),
+    unmute: bool = typer.Option(
+        False,
+        "--unmute",
+        help="Show muted/snoozed findings too (bypass suppression for this run).",
+    ),
     state: Path = _STATE_OPTION,
 ) -> None:
     """Summon a scan of a named target now -- the one-shot, scriptable form of the chat
     `probe <target>` verb. Resolves the target from STEADYSTATE_TARGETS, runs the read-only engine
-    (drift + health), and prints what's wrong. The SAME path the listener runs, so it's a faithful
-    local test of Summon -- and easy to drop into cron/CI."""
+    (drift + health), and prints what's wrong. Honors the mutes/snoozes in --state by default;
+    --unmute shows everything. The SAME path the listener runs, so it's a faithful local test."""
     state.parent.mkdir(parents=True, exist_ok=True)
-    typer.echo(run_command(Command(PROBE, _local_actor(), target), str(state)))
+    typer.echo(run_command(Command(PROBE, _local_actor(), target, bypass=unmute), str(state)))
 
 
 def main() -> None:
