@@ -201,8 +201,22 @@ def test_registry_builds_probes_and_rejects_unknown(tmp_path):
 
 
 def test_auto_maps_each_source_with_a_health_signal():
-    assert auto_prober_for("kubernetes") == "kubectl"
+    # Keyed on the registered --source name: the Kubernetes source is "k8s", not "kubernetes".
+    assert auto_prober_for("k8s") == "kubectl"
     assert auto_prober_for("docker-compose") == "docker"
     assert auto_prober_for("argocd") == "argocd"
     assert auto_prober_for("terraform") is None  # no health probe makes sense for terraform
     assert auto_prober_for("ansible") is None
+    assert auto_prober_for("kubernetes") is None  # the old wrong key is NOT a registered source
+
+
+def test_auto_keys_are_registered_sources():
+    # The bug this guards: the auto-map keyed on "kubernetes", which no source registers as, so
+    # `--source k8s --probe auto` silently ran no probe and the tests (keyed the same wrong way)
+    # shipped it green. Every auto-map key must be a real --source name, every value a real probe.
+    from steadystate.probe import _AUTO
+    from steadystate.sources import DRIFT_SOURCES
+
+    unknown_sources = set(_AUTO) - set(DRIFT_SOURCES)
+    assert not unknown_sources, f"auto-map keys are not registered sources: {unknown_sources}"
+    assert set(_AUTO.values()) <= set(PROBES), "auto-map points at an unregistered probe"
