@@ -14,6 +14,8 @@ from rich.table import Table
 
 from .act import EXECUTORS, build_executor
 from .act.approve import apply_pending, decline_pending
+from .act.base import Proposer
+from .act.deliver import build_deliveries
 from .catalog import gather_catalog, render_console, render_html
 from .engine import build_report
 from .inbound import INBOUND, build_inbound
@@ -114,6 +116,47 @@ def _record_suggestions(
     return recorded
 
 
+def _propose(source: str, path: Path, report, deliver_names: list[str]) -> None:
+    """Under `--autonomy propose`, render each drift as a reviewable *code change* and ship it
+    through the chosen delivery adapter(s). The patch is deterministic (the LLM is never in it);
+    delivery holds any auth, and the default `patch-file` needs none. A source whose executor
+    can't express a fix as code (observe-only, or apply-only like Ansible) has nothing to propose
+    and says so. An unconfigured adapter is skipped honestly, never silently dropped."""
+    executor = build_executor(source, path)
+    if not isinstance(executor, Proposer):
+        typer.echo(f"autonomy=propose: source '{source}' has no code-change remediations.")
+        return
+    try:
+        adapters = build_deliveries(deliver_names)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from None
+    ready = []
+    for adapter in adapters:
+        if adapter.ready():
+            ready.append(adapter)
+        else:
+            typer.echo(f"  delivery '{adapter.name}' is not configured; skipping.")
+    artifacts = [
+        artifact
+        for alert in report.alerts
+        for drift in alert.drifts
+        if (artifact := executor.propose(drift)) is not None
+    ]
+    if not artifacts:
+        typer.echo("autonomy=propose: no code-change remediations for this scan.")
+        return
+    typer.echo(f"autonomy=propose: {len(artifacts)} code-change artifact(s).")
+    for artifact in artifacts:
+        marker = " [DESTRUCTIVE]" if artifact.destructive else ""
+        typer.echo(f"  {artifact.title}{marker}")
+        for adapter in ready:
+            receipt = adapter.deliver(artifact)
+            verb = "delivered" if receipt.delivered else "skipped"
+            typer.echo(f"    {verb} via {adapter.name} -> {receipt.ref}")
+        for op in artifact.state_ops:
+            typer.echo(f"    state: {op}")
+
+
 def _auto_apply(store: StateStore, fingerprints: list[str]) -> None:
     """Under `--autonomy auto`, run each eligible pending remediation through the SAME guardrailed
     approval core a human `approve` uses. The LLM is never in this decision: eligibility is
@@ -210,9 +253,17 @@ def scan(
         "observe",
         "--autonomy",
         help="observe (alert only, default) | suggest (record an eligible remediation per "
-        "drift to approve/decline later) | auto (apply every eligible remediation now -- "
-        "guardrailed, never destroys, LLM not in the decision). Acting is always behind the "
-        "executor guardrails.",
+        "drift to approve/decline later) | propose (emit each fix as a reviewable code change "
+        "via --deliver; deterministic patch, never a live apply) | auto (apply every eligible "
+        "remediation now -- guardrailed, never destroys, LLM not in the decision). Acting is "
+        "always behind the executor guardrails.",
+    ),
+    deliver: str = typer.Option(
+        "patch-file",
+        "--deliver",
+        help="Where `--autonomy propose` ships each code-change artifact: patch-file (default; "
+        "writes a .patch under STEADYSTATE_PATCH_DIR, no auth -- apply with `git apply`). "
+        "Comma-separated for several. Ignored unless --autonomy propose.",
     ),
     label: str = typer.Option(
         "",
@@ -235,8 +286,8 @@ def scan(
     ),
 ) -> None:
     """Scan declared state for drift and surface the Alerts."""
-    if autonomy not in ("observe", "suggest", "auto"):
-        raise typer.BadParameter("autonomy must be: observe | suggest | auto")
+    if autonomy not in ("observe", "suggest", "propose", "auto"):
+        raise typer.BadParameter("autonomy must be: observe | suggest | propose | auto")
     if autonomy == "auto" and stateless:
         raise typer.BadParameter(
             "--autonomy auto needs the state store for its audit trail; remove --stateless."
@@ -299,6 +350,8 @@ def scan(
                     _auto_apply(store, recorded)
     for surface in surfaces:
         surface.emit(report, resolved=resolved)
+    if autonomy == "propose":  # render each drift as a reviewable code change and deliver it
+        _propose(source, path, report, [d.strip() for d in deliver.split(",") if d.strip()])
     # A paid call should never go unseen: print this scan's spend (silent on a --no-llm run).
     # --cost adds the per-caller breakdown of this scan. Cumulative spend lives in `cost`.
     spend = scan_cost_line(report.llm_calls)

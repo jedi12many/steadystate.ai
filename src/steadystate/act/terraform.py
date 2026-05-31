@@ -14,7 +14,9 @@ from collections.abc import Callable
 from pathlib import Path
 
 from ..model import Drift
+from .artifact import RemediationArtifact
 from .base import RemediationResult
+from .codify import terraform_adopt
 from .plan import RemediationPlan, assess
 
 # Verifying a reconcile against real cloud infra has two traps a naive "is the resource still in
@@ -39,6 +41,13 @@ class TerraformExecutor:
 
     def plan_for(self, drift: Drift) -> RemediationPlan:
         return assess(drift)
+
+    def propose(self, drift: Drift) -> RemediationArtifact | None:
+        """Render the drift as a reviewable code change (the Proposer capability), or None when
+        there's no safe code-change for it. Today: a REMOVED (in-reality, not-in-state) drift
+        becomes a non-destructive *adopt* artifact -- the safe inverse of the destroy that
+        ``assess`` refuses to auto-apply. Pure: no infra touched, no model in the loop."""
+        return terraform_adopt(drift)
 
     def remediate(self, drift: Drift, *, confirm: bool = False) -> RemediationResult:
         plan = self.plan_for(drift)
