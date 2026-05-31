@@ -55,6 +55,39 @@ def _t(day: int) -> datetime:
     return datetime(2026, 1, day, 12, 0, 0, tzinfo=UTC)
 
 
+def test_verbose_shows_the_declared_observed_evidence():
+    drift = Drift(
+        identity="aws_s3_bucket.logs",
+        kind="aws_s3_bucket",
+        change_type=ChangeType.MODIFIED,
+        provenance=Provenance(source="terraform"),
+        declared={"acl": "public-read"},
+        observed={"acl": "private"},
+    )
+    report = Report(
+        items=[
+            Alert(
+                title="bucket drift",
+                severity=Severity.HIGH,
+                drifts=[drift],
+                why_it_matters="x",
+                layer=Layer.ALERT,
+            )
+        ]
+    )
+
+    def _emit(verbose: bool) -> str:
+        surface = ConsoleSurface(verbose=verbose)
+        surface._console = Console(file=io.StringIO(), width=200, no_color=True)
+        surface.emit(report)
+        return surface._console.file.getvalue()
+
+    assert "declared:" not in _emit(verbose=False)  # default stays terse
+    out = _emit(verbose=True)
+    assert "declared:" in out and "public-read" in out
+    assert "observed:" in out and "private" in out
+
+
 def test_new_finding_renders_new_marker():
     report = Report(items=[_alert(first_seen=_t(5), status="open")])
     out = _render(report, now=_t(5))
