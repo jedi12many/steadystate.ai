@@ -38,26 +38,33 @@ PROBE = "probe"
 COMMANDS: dict[str, tuple[str, str]] = {
     HELP: ("help", "list the commands this listener accepts"),
     PENDING: ("pending", "show remediations awaiting approval, with their fingerprints"),
-    PROBE: ("probe <target>", "scan a named target now and post what's wrong (read-only)"),
+    PROBE: (
+        "probe <target> [unmute]",
+        "scan a named target now; honors mutes (`unmute` shows all)",
+    ),
     APPROVE: ("approve <fingerprint>", "apply a pending remediation (guardrailed)"),
     DECLINE: ("decline <fingerprint>", "dismiss a pending remediation"),
 }
 # Verbs that require an argument to mean anything (a fingerprint for approve/decline, a target
 # name for probe); help/pending take none.
 _NEEDS_ARGUMENT = frozenset({APPROVE, DECLINE, PROBE})
+# The bypass flag (probe): show muted/snoozed findings too, for this one run.
+_UNMUTE_FLAGS = frozenset({"unmute", "--unmute"})
 
 
 @dataclass(frozen=True)
 class Command:
-    """A parsed operator instruction: a verb, who sent it, and an optional argument.
+    """A parsed operator instruction: a verb, who sent it, an optional argument, and a flag.
 
-    The argument is the pending remediation's fingerprint for approve/decline; the read-only
-    help/pending take none. Provider-agnostic by design -- the cores in server.py act on this,
-    never on a Slack/Discord/Teams payload."""
+    The argument is the pending remediation's fingerprint for approve/decline, or the target name
+    for probe; the read-only help/pending take none. ``bypass`` is probe's ``unmute`` -- show
+    muted/snoozed findings too for this run. Provider-agnostic by design -- the cores in server.py
+    act on this, never on a Slack/Discord/Teams payload."""
 
     verb: str  # one of COMMANDS
     actor: str  # who sent it -- recorded for the audit trail
-    argument: str = ""  # the fingerprint for approve/decline; "" for help/pending
+    argument: str = ""  # the fingerprint for approve/decline, the target for probe; else ""
+    bypass: bool = False  # probe `unmute`: skip mute/snooze suppression for this run
 
 
 def render_help() -> str:
@@ -70,14 +77,17 @@ def render_help() -> str:
 
 def command_from_text(text: str, actor: str) -> Command | None:
     """Parse a free-text instruction (a Teams @mention or a Slack slash command) into a Command,
-    or None if no known verb appears. Scans tokens for the first verb; approve/decline take the
-    next token as their fingerprint (and are skipped if none follows), help/pending take none."""
+    or None if no known verb appears. Scans tokens for the first verb; approve/decline/probe take
+    the first following non-flag token as their argument (and are skipped if none follows),
+    help/pending take none. A trailing ``unmute`` / ``--unmute`` sets ``bypass`` (probe)."""
     tokens = text.split()
     for index, token in enumerate(tokens):
         verb = token.lower()
         if verb in _NEEDS_ARGUMENT:
-            if index + 1 < len(tokens):
-                return Command(verb, actor, tokens[index + 1])
+            rest = tokens[index + 1 :]
+            args = [t for t in rest if t.lower() not in _UNMUTE_FLAGS]
+            if args:  # the first non-flag token is the argument; an `unmute` token sets bypass
+                return Command(verb, actor, args[0], bypass=len(args) < len(rest))
         elif verb in COMMANDS:
             return Command(verb, actor)
     return None

@@ -62,4 +62,6 @@ subcommands for discovery — `/steadystate help` lists what the listener accept
 **Summon a scan:** `/steadystate probe <target>` runs an on-demand scan of a named target and
 posts what's wrong back to the channel (read-only). Targets come from the listener's
 `STEADYSTATE_TARGETS` file (name → source + path + label) — see
-[deploy/kubernetes/listener.yaml](../kubernetes/listener.yaml).
+[deploy/kubernetes/listener.yaml](../kubernetes/listener.yaml). It honors your mutes/snoozes by
+default; pass the `unmute: true` option to show everything for that run (re-run `register.py`
+after upgrading so the new option appears).

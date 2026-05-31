@@ -80,6 +80,27 @@ def test_parse_probe_takes_its_target_option():
     assert command_from_payload(payload) == Command(PROBE, "jeff", "prod-k8s")
 
 
+def test_parse_probe_unmute_boolean_option_sets_bypass():
+    payload = {
+        "type": 2,
+        "data": {
+            "name": "steadystate",
+            "options": [
+                {
+                    "name": "probe",
+                    "type": 1,
+                    "options": [
+                        {"name": "target", "type": 3, "value": "prod-k8s"},
+                        {"name": "unmute", "type": 5, "value": True},
+                    ],
+                }
+            ],
+        },
+        "member": {"user": {"username": "jeff"}},
+    }
+    assert command_from_payload(payload) == Command(PROBE, "jeff", "prod-k8s", bypass=True)
+
+
 def test_parse_actor_falls_back_to_top_level_user_then_default():
     payload = _command("approve", "fp1")
     del payload["member"]
