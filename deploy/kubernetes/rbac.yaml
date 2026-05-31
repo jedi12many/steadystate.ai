@@ -17,6 +17,9 @@ kind: ClusterRole
 metadata:
   name: steadystate-readonly
 rules:
+  # `*` already covers pod logs. If you tighten to an explicit resource list, the `--probe kubectl`
+  # health check needs BOTH `pods` and the `pods/log` subresource (see `steadystate commands`):
+  #   resources: ["pods", "pods/log", "deployments", "statefulsets", "services", ...]
   - apiGroups: ["", "apps", "batch", "networking.k8s.io"]
     resources: ["*"]
     verbs: ["get", "list"]

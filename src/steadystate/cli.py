@@ -22,7 +22,7 @@ from .notify import SURFACES, build_surfaces
 from .notify.base import Surface
 from .notify.console import ConsoleSurface
 from .onboarding import SECTIONS, Status, audit, read_env_file, summary, write_env_file
-from .probe import PROBES
+from .probe import PROBE_CAPABILITIES, PROBES
 from .reason.cost import roll_up, roll_up_by_period, scan_cost_line
 from .reason.enrich import ENRICHERS
 from .reason.pipeline import CORRELATORS
@@ -428,7 +428,10 @@ def commands(
     source: str = typer.Option("", "--source", help="Show one source; default shows all."),
 ) -> None:
     """Document each plugin's commands by permission category: observe (pre-approved,
-    read-only) vs potentially destructive (require approval before they run)."""
+    read-only) vs potentially destructive (require approval before they run).
+
+    Covers sources and probes -- a probe (`--probe`) shells out too (e.g. `kubectl logs`), so its
+    read-only commands are declared here for the same transparency + least-privilege RBAC."""
     if source and source not in CAPABILITIES:
         known = ", ".join(sorted(CAPABILITIES))
         raise typer.BadParameter(f"unknown source '{source}' (known: {known})")
@@ -444,6 +447,12 @@ def commands(
                 typer.echo(f"    {cmd}")
         else:
             typer.echo("    (none -- observe-only plugin)")
+    if not source:  # probes are observe-only health readers; list them after the sources
+        for name in sorted(PROBE_CAPABILITIES):
+            typer.echo(f"{name} (probe)")
+            typer.echo("  observe (pre-approved):")
+            for cmd in PROBE_CAPABILITIES[name].observe or ("(reads a captured snapshot)",):
+                typer.echo(f"    {cmd}")
 
 
 @app.command()

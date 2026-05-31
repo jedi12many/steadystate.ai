@@ -17,6 +17,7 @@ from dataclasses import dataclass
 
 from ..model import Provenance, Resource
 from ..reason.alert import Severity
+from ..sources.base import Capabilities
 from .base import Symptom
 
 logger = logging.getLogger(__name__)
@@ -93,6 +94,8 @@ class DockerProbe:
     """Produces a Symptom per declared docker-compose service whose container is failing now."""
 
     name = "docker"
+    # Observe-only: a probe reads health, it never changes a container.
+    commands = Capabilities(observe=("docker ps --format json", "docker logs --tail"))
 
     def __init__(self, log_tail: int = 20, timeout: float = 10.0) -> None:
         self.log_tail = log_tail

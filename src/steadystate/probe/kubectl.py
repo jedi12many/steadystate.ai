@@ -15,6 +15,7 @@ from dataclasses import dataclass
 
 from ..model import Provenance, Resource
 from ..reason.alert import Severity
+from ..sources.base import Capabilities
 from .base import Symptom
 
 logger = logging.getLogger(__name__)
@@ -111,6 +112,12 @@ class KubectlProbe:
     """Produces a Symptom per declared kubernetes workload whose pods are unhealthy now."""
 
     name = "kubectl"
+    # Observe-only: a probe reads health, it never changes a workload. Declared so the manifest
+    # is honest -- `kubectl logs` (the failing pod's evidence) hits the `pods/log` subresource,
+    # which a least-privilege RBAC must grant `pods` AND `pods/log` for.
+    commands = Capabilities(
+        observe=("kubectl get pods -o json", "kubectl logs --tail --previous"),
+    )
 
     def __init__(self, log_tail: int = 20, timeout: float = 10.0) -> None:
         self.log_tail = log_tail

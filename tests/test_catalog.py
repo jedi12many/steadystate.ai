@@ -44,6 +44,12 @@ def test_source_items_carry_observe_act_counts():
     assert "observe" in terraform.detail and "act" in terraform.detail
 
 
+def test_probe_items_carry_observe_counts():
+    probes = next(s for s in _catalog().seams if s.title == "Probes")
+    kubectl = next(i for i in probes.items if i.name == "kubectl")
+    assert "observe" in kubectl.detail  # the probe's read-only command count is surfaced
+
+
 def test_commands_include_scan_options_and_filter_the_help_flag():
     scan = next(c for c in _catalog().commands if c.name == "scan")
     flags = [o.flags for o in scan.options]
