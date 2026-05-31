@@ -20,11 +20,19 @@ import json
 import os
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from .._http import safe_urlopen
 from ..model import Drift
 from .cost import LlmCall
+
+# An optional egress gate: called with (provider, model, system, user) right before a prompt
+# would be sent, it returns True to allow the send or False to skip it (the analyst then degrades
+# exactly as if no provider were configured). Lets the CLI show the prompt + destination and ask
+# for confirmation first -- a per-call review and, incidentally, a hard spend gate. Opt-in only;
+# the default (None) sends without asking, so headless scans / the listener are unchanged.
+PromptGate = Callable[[str, str, str, str], bool]
 
 _DEFAULT_MODEL = os.environ.get("STEADYSTATE_MODEL", "claude-sonnet-4-5")
 _HTTP_TIMEOUT = float(os.environ.get("STEADYSTATE_LLM_TIMEOUT", "30"))
@@ -159,11 +167,17 @@ class LLMAnalyst:
     Degrades honestly when nothing is configured."""
 
     def __init__(
-        self, model: str | None = None, api_key: str | None = None, enabled: bool | None = None
+        self,
+        model: str | None = None,
+        api_key: str | None = None,
+        enabled: bool | None = None,
+        gate: PromptGate | None = None,
     ) -> None:
         # The kill switch: explicit `enabled`, else the STEADYSTATE_LLM_ENABLED env var.
         # When off, _provider() reports "none" and every call degrades honestly.
         self.enabled = _llm_enabled() if enabled is None else enabled
+        # Optional egress gate (see PromptGate): consulted before every send. None = send freely.
+        self.gate = gate
         # Anthropic (back-compat): explicit api_key or ANTHROPIC_API_KEY; `model` is
         # the Anthropic model name.
         self.model = model or _DEFAULT_MODEL
@@ -247,6 +261,8 @@ class LLMAnalyst:
 
     def analyze(self, drift: Drift) -> Analysis:
         provider = self._provider()
+        if provider != "none" and not self._allowed(provider, _INSTRUCTION, _drift_prompt(drift)):
+            return self._degrade(drift, "declined before send (egress gate).")
         if provider == "anthropic":
             try:
                 return self._analyze_with_claude(drift)
@@ -336,10 +352,20 @@ class LLMAnalyst:
 
         return deterministic_correlate(drifts)
 
+    def _allowed(self, provider: str, system: str, user: str) -> bool:
+        """Consult the egress gate (if any) before a send. True = send. The gate sees exactly the
+        provider, model, and the full prompt that would go out -- nothing more leaves the box than
+        what it's shown. No gate -> always True (the default, unchanged behaviour)."""
+        if self.gate is None:
+            return True
+        return self.gate(provider, self._model_for(provider), system, user)
+
     def _complete(self, system: str, user: str, caller: str) -> str | None:
         """Raw model text from the configured provider, or None if unavailable/failed."""
         provider = self._provider()
         if provider == "none":
+            return None
+        if not self._allowed(provider, system, user):  # egress gate said no -> degrade
             return None
         try:
             if provider == "anthropic":

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -59,6 +60,18 @@ def _surfaces(names: list[str]) -> list[Surface]:
         return build_surfaces(names)
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from None
+
+
+def _confirm_llm_egress(provider: str, model: str, system: str, user: str) -> bool:
+    """The `--confirm-llm` egress gate: show exactly what would be sent + where, then ask. Returns
+    True to allow the send. The analyst degrades to deterministic on a decline -- nothing leaves."""
+    console = Console()
+    console.print(f"\n[bold yellow]About to send a prompt to {provider} ({model}).[/bold yellow]")
+    console.print("[dim]--- instruction ---[/dim]")
+    console.print(system)
+    console.print("[dim]--- content (your declared/observed state) ---[/dim]")
+    console.print(user)
+    return typer.confirm("Send this to the model?", default=False)
 
 
 def _open_store(state: Path) -> StateStore:
@@ -184,6 +197,14 @@ def scan(
         help="Kill switch: make no LLM calls this scan (correlation degrades to "
         "deterministic, analysis to drift facts). Same as STEADYSTATE_LLM_ENABLED=false.",
     ),
+    confirm_llm: bool = typer.Option(
+        False,
+        "--confirm-llm",
+        help="Before any prompt is sent to the model, show it (the instruction + your infra "
+        "state) and the destination, and ask. Decline -> nothing leaves the box, the scan "
+        "degrades to deterministic. A per-call egress review and a hard spend gate. Interactive "
+        "only: with no terminal to ask on it runs without the LLM (fail-closed).",
+    ),
     autonomy: str = typer.Option(
         "observe",
         "--autonomy",
@@ -224,6 +245,15 @@ def scan(
         for surface in surfaces:
             if isinstance(surface, ConsoleSurface):
                 surface.verbose = True
+    # --confirm-llm: review egress before it happens. Needs a terminal to ask on; with none we
+    # fail closed (run without the LLM, sending nothing) rather than block a headless scan forever.
+    gate = None
+    if confirm_llm and not no_llm:
+        if sys.stdin.isatty():
+            gate = _confirm_llm_egress
+        else:
+            typer.echo("--confirm-llm: no terminal to confirm on; running without the LLM.")
+            no_llm = True
     # The reasoned report -- drift + probe symptoms, scored/correlated/enriched -- comes from
     # the shared engine, the SAME path the chat-summoned probe runs (inbound/server.py). An
     # unknown source/probe/correlator/enricher/tuning surfaces as a clean BadParameter.
@@ -237,6 +267,7 @@ def scan(
             enrich=enrich,
             no_llm=no_llm,
             label=label,
+            llm_gate=gate,
         )
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from None

@@ -18,7 +18,7 @@ from pathlib import Path
 from .act import build_executor
 from .probe import Prober, auto_prober_for, build_prober
 from .reason.enrich import build_enricher
-from .reason.llm import LLMAnalyst
+from .reason.llm import LLMAnalyst, PromptGate
 from .reason.pipeline import Pipeline, build_correlator
 from .reason.report import Report, Tuning
 from .sources import build_drift_source
@@ -46,14 +46,18 @@ def build_report(
     enrich: str = "none",
     no_llm: bool = False,
     label: str = "",
+    llm_gate: PromptGate | None = None,
 ) -> Report:
     """Build a reasoned Report: drift + (optional) probe symptoms, scored + correlated + enriched,
     every item stamped with ``label``. Pure -- no state store, no surfaces.
 
+    ``llm_gate`` (opt-in) is consulted before any prompt is sent to the model -- the CLI passes a
+    confirmer so a cautious operator can review/approve egress; headless callers leave it None.
+
     Raises ``ValueError`` for an unknown source / probe / correlator / enricher / tuning.
     """
     level = Tuning(tuning)  # ValueError on a bad value
-    analyst = LLMAnalyst(enabled=False if no_llm else None)
+    analyst = LLMAnalyst(enabled=False if no_llm else None, gate=llm_gate)
     grouping = build_correlator(correlator, analyst)
     enricher = build_enricher(enrich)
     prober = build_prober_for(probe, source, path)
