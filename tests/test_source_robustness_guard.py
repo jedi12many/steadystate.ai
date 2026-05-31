@@ -3,10 +3,10 @@
 The per-bug tests (test_source_failures, test_http_source_failures) each pin one source. This is
 the guard that closes the *class*: it drives every registered `DRIFT_SOURCES` entry's live path
 with the underlying tool/HTTP failing and requires a `SourceError`. A new source with no wiring
-here fails on `name in _LIVE`, so it can't ship without a failure-path test -- the same
-"registry and its tests can't silently drift apart" property as `test_auto_keys_are_registered_sources`
-and `test_every_registered_source_declares_commands`. (Why this matters: M1/M2 went unnoticed
-because every *other* source test injected clean captured JSON and never exercised the live branch.)
+here fails the wiring check below, so it can't ship without a failure-path test -- the same
+"registry and its tests can't silently drift apart" property as the auto-probe-key and
+per-source command-manifest guards. (Why this matters: M1/M2 went unnoticed because every
+*other* source test injected clean captured JSON and never exercised the live branch.)
 """
 
 from __future__ import annotations
