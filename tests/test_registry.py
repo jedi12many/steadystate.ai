@@ -32,6 +32,7 @@ def _inputs(tmp_path):
         "docker-compose": _sample(tmp_path, "compose.json", {"config": {"services": {}}, "ps": []}),
         "k8s": _sample(tmp_path, "k8s.json", {"declared": [], "observed": []}),
         "rancher": _sample(tmp_path, "gitrepo.json", {"status": {"resources": []}}),
+        "helm": _sample(tmp_path, "helm.json", []),
     }
 
 

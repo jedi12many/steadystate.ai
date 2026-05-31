@@ -32,7 +32,7 @@ No agent to install, no dashboard to learn. Point it at your IaC. Run `steadysta
 
 ## Sources — declared state in (`--source`)
 
-`terraform` · `ansible` · `kubernetes` · `rancher` (Fleet) · `argocd` · `docker-compose`. Each rides the tool's own machine-readable output (never raw-file parsing) and declares its read-only **observe** commands vs its **potentially destructive** ones — `steadystate commands` documents both. Adding a source is a one-line registry entry.
+`terraform` · `ansible` · `kubernetes` · `rancher` (Fleet) · `argocd` · `docker-compose` · `helm`. Each rides the tool's own machine-readable output (never raw-file parsing) and declares its read-only **observe** commands vs its **potentially destructive** ones — `steadystate commands` documents both. Adding a source is a one-line registry entry.
 
 ## Domains — what drift *means* (plugins)
 

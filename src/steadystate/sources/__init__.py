@@ -18,6 +18,7 @@ from .ansible import AnsibleSource
 from .argocd import ArgoCDSource
 from .base import Capabilities, DriftSource
 from .docker_compose import DockerComposeSource
+from .helm import HelmSource
 from .k8s import KubernetesSource
 from .rancher import RancherSource
 from .terraform import TerraformSource
@@ -41,6 +42,11 @@ def _ansible(path: Path) -> DriftSource:
 def _rancher(path: Path) -> DriftSource:
     # A FILE = a captured Fleet GitRepo JSON.
     return RancherSource(gitrepo=json.loads(path.read_text()))
+
+
+def _helm(path: Path) -> DriftSource:
+    # A FILE = captured `helm list --output json` (a JSON array of releases).
+    return HelmSource(releases=json.loads(path.read_text()))
 
 
 def _docker_compose(path: Path) -> DriftSource:
@@ -70,6 +76,7 @@ DRIFT_SOURCES: dict[str, Callable[[Path], DriftSource]] = {
     "docker-compose": _docker_compose,
     "k8s": _k8s,
     "rancher": _rancher,
+    "helm": _helm,
 }
 
 # Per-plugin command manifests: observe (pre-approved, read-only) vs destructive (needs
@@ -81,6 +88,7 @@ CAPABILITIES: dict[str, Capabilities] = {
     "docker-compose": DockerComposeSource.commands,
     "k8s": KubernetesSource.commands,
     "rancher": RancherSource.commands,
+    "helm": HelmSource.commands,
 }
 
 __all__ = ["CAPABILITIES", "DRIFT_SOURCES", "Capabilities", "build_drift_source"]
