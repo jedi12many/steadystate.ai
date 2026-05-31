@@ -169,10 +169,19 @@ class StateStore:
     """
 
     def __init__(self, path: str | Path = ":memory:") -> None:
-        # isolation_level=None -> autocommit; each statement is its own transaction,
-        # which is all this single-writer, one-shot-per-scan store needs.
+        # isolation_level=None -> autocommit; each statement is its own transaction.
         self._conn = sqlite3.connect(str(path), isolation_level=None)
         self._conn.row_factory = sqlite3.Row
+        # This store is shared by design: a scheduled scan and the chat listener (which writes
+        # from per-command daemon threads) hit one file on a shared volume. WAL lets readers and
+        # the single writer proceed without blocking each other; busy_timeout makes a contended
+        # write wait-and-retry instead of raising "database is locked"; synchronous=NORMAL is the
+        # durability/throughput point WAL is designed for. busy_timeout + synchronous are
+        # per-connection, so they're set on every open (WAL is a persistent db property, but
+        # re-stating it is a harmless no-op). On :memory: (tests) WAL is silently not applied.
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA busy_timeout=5000")
+        self._conn.execute("PRAGMA synchronous=NORMAL")
         self._conn.execute(_SCHEMA)
         self._conn.execute(_LLM_SCHEMA)
         self._conn.execute(_PENDING_SCHEMA)
@@ -484,6 +493,21 @@ class StateStore:
             "UPDATE pending_actions SET status = ?, actor = ? WHERE fingerprint = ?",
             (status, actor, fingerprint),
         )
+
+    def claim_pending(
+        self, fingerprint: str, from_status: str, to_status: str, actor: str | None = None
+    ) -> bool:
+        """Atomically move a pending action from ``from_status`` to ``to_status``, returning True
+        iff THIS call made the transition. The conditional ``WHERE status = from_status`` is the
+        concurrency guard against double-approval: with two approvers racing the same fingerprint
+        (two chat users), exactly one sees ``rowcount == 1`` and proceeds to remediate, while the
+        other sees 0 and bails -- so an irreversible remediation runs at most once. Autocommit (+
+        WAL) makes the check-and-set one atomic statement, closing the read-then-act TOCTOU."""
+        cur = self._conn.execute(
+            "UPDATE pending_actions SET status = ?, actor = ? WHERE fingerprint = ? AND status = ?",
+            (to_status, actor, fingerprint, from_status),
+        )
+        return cur.rowcount == 1
 
     # -- audit log (append-only history of every remediation decision) ----------
 
