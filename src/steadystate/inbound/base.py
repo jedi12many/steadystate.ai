@@ -33,44 +33,57 @@ PENDING = "pending"
 PROBE = "probe"
 COST = "cost"
 MUTE = "mute"
+TARGETS = "targets"
+HISTORY = "history"
+FINDINGS = "findings"
 
 # The command grammar, in the order ``help`` lists them: verb -> (usage, one-line summary).
 # ``help`` renders itself from this table, so a newly added verb is discoverable the moment it
 # lands -- the table is the single source of truth for both dispatch and self-documentation.
 COMMANDS: dict[str, tuple[str, str]] = {
     HELP: ("help", "list the commands this listener accepts"),
+    TARGETS: ("targets", "list the probe targets this listener knows"),
     PENDING: ("pending", "show remediations awaiting approval, with their fingerprints"),
     PROBE: (
-        "probe <target> [unmute]",
-        "scan a named target now; honors mutes (`unmute` shows all)",
+        "probe <target> [verbose|cost|unmute]",
+        "scan a named target now; `verbose` shows the evidence, `unmute` shows muted",
     ),
     COST: ("cost [day|week]", "show LLM spend -- a rollup, or a day/week trend"),
+    FINDINGS: ("findings", "list remembered findings: fingerprint, status, severity"),
+    HISTORY: ("history", "show the remediation audit log (newest first)"),
     MUTE: ("mute <fingerprint>", "silence a finding (e.g. a benign probe result) on future scans"),
     APPROVE: ("approve <fingerprint>", "apply a pending remediation (guardrailed)"),
     DECLINE: ("decline <fingerprint>", "dismiss a pending remediation"),
 }
 # Verbs that require an argument to mean anything (a fingerprint for approve/decline/mute, a
-# target name for probe); help/pending take none.
+# target name for probe); the rest take none or an optional one.
 _NEEDS_ARGUMENT = frozenset({APPROVE, DECLINE, PROBE, MUTE})
-# The bypass flag (probe): show muted/snoozed findings too, for this one run.
-_UNMUTE_FLAGS = frozenset({"unmute", "--unmute"})
 # Verbs that take an *optional* argument (cost's period); absent it, they still dispatch.
 _OPTIONAL_ARGUMENT = frozenset({COST})
+
+# Recognized modifier flags (with or without dashes) -> the canonical name a command checks for.
+# `verbose` = show the full evidence; `cost` = the per-caller spend breakdown; `unmute` = probe
+# bypasses mute/snooze suppression this run. Adding a flag is one row here.
+_FLAG_ALIASES = {
+    "unmute": "unmute", "--unmute": "unmute",
+    "cost": "cost", "--cost": "cost",
+    "verbose": "verbose", "--verbose": "verbose", "-v": "verbose",
+}  # fmt: skip
 
 
 @dataclass(frozen=True)
 class Command:
-    """A parsed operator instruction: a verb, who sent it, an optional argument, and a flag.
+    """A parsed operator instruction: a verb, who sent it, an optional argument, and any flags.
 
-    The argument is the pending remediation's fingerprint for approve/decline, or the target name
-    for probe; the read-only help/pending take none. ``bypass`` is probe's ``unmute`` -- show
-    muted/snoozed findings too for this run. Provider-agnostic by design -- the cores in server.py
-    act on this, never on a Slack/Discord/Teams payload."""
+    The argument is the pending remediation's fingerprint for approve/decline/mute, or the target
+    name for probe; many verbs take none. ``flags`` is the set of recognized modifiers present
+    (e.g. ``{"verbose"}``, ``{"unmute", "cost"}``). Provider-agnostic by design -- the cores in
+    server.py act on this, never on a Slack/Discord/Teams payload."""
 
     verb: str  # one of COMMANDS
     actor: str  # who sent it -- recorded for the audit trail
-    argument: str = ""  # the fingerprint for approve/decline, the target for probe; else ""
-    bypass: bool = False  # probe `unmute`: skip mute/snooze suppression for this run
+    argument: str = ""  # the fingerprint for approve/decline/mute, the target for probe; else ""
+    flags: frozenset[str] = frozenset()  # canonical modifier flags present (see _FLAG_ALIASES)
 
 
 def render_help() -> str:
@@ -83,22 +96,23 @@ def render_help() -> str:
 
 def command_from_text(text: str, actor: str) -> Command | None:
     """Parse a free-text instruction (a Teams @mention or a Slack slash command) into a Command,
-    or None if no known verb appears. Scans tokens for the first verb; approve/decline/probe take
-    the first following non-flag token as their argument (and are skipped if none follows),
-    help/pending take none. A trailing ``unmute`` / ``--unmute`` sets ``bypass`` (probe)."""
+    or None if no known verb appears. Scans tokens for the first verb, then splits the rest into
+    recognized flags (verbose / cost / unmute) and plain tokens; the first plain token is the
+    argument. A verb that *requires* an argument is skipped when none follows."""
     tokens = text.split()
     for index, token in enumerate(tokens):
         verb = token.lower()
+        if verb not in COMMANDS:
+            continue
+        rest = tokens[index + 1 :]
+        flags = frozenset(_FLAG_ALIASES[t.lower()] for t in rest if t.lower() in _FLAG_ALIASES)
+        args = [t for t in rest if t.lower() not in _FLAG_ALIASES]
         if verb in _NEEDS_ARGUMENT:
-            rest = tokens[index + 1 :]
-            args = [t for t in rest if t.lower() not in _UNMUTE_FLAGS]
-            if args:  # the first non-flag token is the argument; an `unmute` token sets bypass
-                return Command(verb, actor, args[0], bypass=len(args) < len(rest))
-        elif verb in COMMANDS:
-            # cost takes an optional period (day|week); help/pending take nothing.
-            if verb in _OPTIONAL_ARGUMENT and index + 1 < len(tokens):
-                return Command(verb, actor, tokens[index + 1])
-            return Command(verb, actor)
+            if not args:  # required argument absent -> not actionable; keep scanning
+                continue
+            return Command(verb, actor, args[0], flags=flags)
+        argument = args[0] if (verb in _OPTIONAL_ARGUMENT and args) else ""
+        return Command(verb, actor, argument, flags=flags)
     return None
 
 

@@ -25,7 +25,19 @@ import json
 import os
 from collections.abc import Mapping
 
-from .base import APPROVE, COST, DECLINE, HELP, MUTE, PENDING, PROBE, Command
+from .base import (
+    APPROVE,
+    COST,
+    DECLINE,
+    FINDINGS,
+    HELP,
+    HISTORY,
+    MUTE,
+    PENDING,
+    PROBE,
+    TARGETS,
+    Command,
+)
 
 try:  # the optional [discord] extra; absence is handled by ready(), never an import crash
     from nacl.exceptions import BadSignatureError
@@ -62,10 +74,15 @@ def _actor(payload: dict) -> str:
     return user.get("username") or "discord"
 
 
+_ARGLESS = frozenset({HELP, TARGETS, PENDING, FINDINGS, HISTORY})
+_BOOL_FLAGS = frozenset({"unmute", "cost", "verbose"})  # probe's boolean options -> canonical flags
+
+
 def command_from_payload(payload: dict) -> Command | None:
     """A Command from a Discord APPLICATION_COMMAND payload, or None if it isn't one of ours.
-    The command is ``/steadystate <verb> [fingerprint:<fp>]`` -- a subcommand whose name is the
-    verb; approve/decline carry a ``fingerprint`` string option, help/pending carry none."""
+    The command is ``/steadystate <verb> [...]`` -- a subcommand whose name is the verb; the
+    arg-taking verbs carry a string option (a `fingerprint` or a `target`), probe also carries
+    boolean flag options (`verbose`/`cost`/`unmute`), help/targets/etc carry none."""
     if payload.get("type") != _APPLICATION_COMMAND:
         return None
     subcommands = (payload.get("data") or {}).get("options") or []
@@ -73,10 +90,10 @@ def command_from_payload(payload: dict) -> Command | None:
         return None
     verb = subcommands[0].get("name")
     actor = _actor(payload)
-    if verb in (HELP, PENDING):
+    options = subcommands[0].get("options") or []
+    if verb in _ARGLESS:
         return Command(verb, actor)
     if verb == COST:  # an optional `period` (day|week) string option
-        options = subcommands[0].get("options") or []
         period = next(
             (
                 o["value"]
@@ -87,9 +104,8 @@ def command_from_payload(payload: dict) -> Command | None:
         )
         return Command(verb, actor, period)
     if verb in (APPROVE, DECLINE, PROBE, MUTE):
-        # approve/decline/mute carry a `fingerprint` option, probe a `target` -- take the first
-        # non-empty STRING option (so probe's boolean `unmute` is never mistaken for the target).
-        options = subcommands[0].get("options") or []
+        # take the first non-empty STRING option (the fingerprint / target), and any boolean flag
+        # options that are set (so probe's `verbose`/`cost`/`unmute` ride through).
         argument = next(
             (
                 o["value"]
@@ -98,12 +114,13 @@ def command_from_payload(payload: dict) -> Command | None:
             ),
             None,
         )
-        bypass = any(
-            isinstance(o, dict) and o.get("name") == "unmute" and o.get("value") is True
+        flags = frozenset(
+            o["name"]
             for o in options
+            if isinstance(o, dict) and o.get("name") in _BOOL_FLAGS and o.get("value") is True
         )
         if isinstance(argument, str) and argument:
-            return Command(verb, actor, argument, bypass=bypass)
+            return Command(verb, actor, argument, flags=flags)
     return None
 
 

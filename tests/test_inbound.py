@@ -15,10 +15,13 @@ from steadystate.inbound.base import (
     APPROVE,
     COST,
     DECLINE,
+    FINDINGS,
     HELP,
+    HISTORY,
     MUTE,
     PENDING,
     PROBE,
+    TARGETS,
     Command,
     command_from_text,
     render_help,
@@ -94,14 +97,21 @@ def test_text_grammar_parses_act_and_readonly_verbs():
     assert command_from_text("mute fp9", "amy") == Command(MUTE, "amy", "fp9")
 
 
-def test_text_grammar_parses_the_probe_unmute_flag():
+def test_text_grammar_parses_probe_flags():
     assert command_from_text("probe prod unmute", "amy") == Command(
-        PROBE, "amy", "prod", bypass=True
+        PROBE, "amy", "prod", flags=frozenset({"unmute"})
     )
     assert command_from_text("probe prod --unmute", "amy") == Command(
-        PROBE, "amy", "prod", bypass=True
+        PROBE, "amy", "prod", flags=frozenset({"unmute"})
     )
-    assert command_from_text("probe prod", "amy") == Command(PROBE, "amy", "prod", bypass=False)
+    assert command_from_text("probe prod", "amy") == Command(PROBE, "amy", "prod")
+    # multiple flags, any order, with/without dashes
+    assert command_from_text("probe prod verbose -v cost", "amy") == Command(
+        PROBE, "amy", "prod", flags=frozenset({"verbose", "cost"})
+    )
+    assert command_from_text("probe verbose prod", "amy") == Command(
+        PROBE, "amy", "prod", flags=frozenset({"verbose"})
+    )
 
 
 def test_text_grammar_is_case_insensitive_and_skips_leading_noise():
@@ -116,7 +126,7 @@ def test_text_grammar_needs_a_fingerprint_for_act_verbs_and_ignores_unknowns():
 
 def test_render_help_lists_every_command():
     text = render_help()
-    for verb in (HELP, PENDING, PROBE, COST, MUTE, APPROVE, DECLINE):
+    for verb in (HELP, TARGETS, PENDING, PROBE, COST, FINDINGS, HISTORY, MUTE, APPROVE, DECLINE):
         assert verb in text
 
 
@@ -313,7 +323,7 @@ def test_run_command_probe_honors_mutes_and_unmute_bypasses(tmp_path, monkeypatc
     assert "clean except 1 muted" in muted and "unmute" in muted
 
     # unmute bypasses suppression for this run
-    assert "1 alert" in run_command(Command(PROBE, "me", "demo", bypass=True), db)
+    assert "1 alert" in run_command(Command(PROBE, "me", "demo", flags=frozenset({"unmute"})), db)
 
 
 def test_run_command_probe_reports_an_engine_failure_without_crashing(monkeypatch, tmp_path):
@@ -345,6 +355,67 @@ def test_run_command_probe_appends_a_spend_footer(monkeypatch, tmp_path):
     monkeypatch.setattr("steadystate.inbound.server.build_report", lambda *a, **k: report)
     msg = run_command(Command(PROBE, "amy", "prod"), ":memory:")
     assert "prod: 1 alert" in msg and "LLM: 1 call(s)" in msg  # the summon shows what it cost
+
+
+def test_run_command_targets_lists_configured_targets(monkeypatch, tmp_path):
+    monkeypatch.setenv(
+        "STEADYSTATE_TARGETS",
+        _targets_file(
+            tmp_path,
+            {
+                "prod-k8s": {"source": "k8s", "path": "/m", "label": "prod-k8s"},
+                "sandbox": {"source": "terraform", "path": "/iac", "label": "gcp"},
+            },
+        ),
+    )
+    msg = run_command(Command(TARGETS, "amy"), ":memory:")
+    assert "2 target(s)" in msg and "prod-k8s" in msg and "sandbox" in msg and "terraform" in msg
+
+
+def test_run_command_targets_says_so_when_none(monkeypatch):
+    monkeypatch.delenv("STEADYSTATE_TARGETS", raising=False)
+    assert "No targets configured" in run_command(Command(TARGETS, "amy"), ":memory:")
+
+
+def test_run_command_findings_and_history_empty(tmp_path):
+    db = str(tmp_path / "s.db")
+    assert "No findings recorded" in run_command(Command(FINDINGS, "amy"), db)
+    assert "No remediation history" in run_command(Command(HISTORY, "amy"), db)
+
+
+def test_run_command_probe_verbose_shows_the_evidence(monkeypatch, tmp_path):
+    from steadystate.reason.report import Report
+
+    drift = Drift(
+        identity="aws_s3_bucket.logs",
+        kind="aws_s3_bucket",
+        change_type=ChangeType.MODIFIED,
+        provenance=Provenance(source="terraform"),
+        declared={"acl": "private"},
+        observed={"acl": "public-read"},
+    )
+    alert = Alert(
+        title="bucket public-read",
+        severity=Severity.HIGH,
+        drifts=[drift],
+        why_it_matters="bucket exposed to the internet",
+        recommended_action="terraform apply -target=...",
+        layer=Layer.ALERT,
+    )
+    monkeypatch.setenv(
+        "STEADYSTATE_TARGETS",
+        _targets_file(tmp_path, {"prod": {"source": "terraform", "path": "/x", "label": "prod"}}),
+    )
+    monkeypatch.setattr(
+        "steadystate.inbound.server.build_report", lambda *a, **k: Report(items=[alert])
+    )
+    # without verbose: just title + fp
+    plain = run_command(Command(PROBE, "amy", "prod"), ":memory:")
+    assert "why:" not in plain
+    # with verbose: the reasoning + the declared->observed before/after
+    detail = run_command(Command(PROBE, "amy", "prod", flags=frozenset({"verbose"})), ":memory:")
+    assert "why: bucket exposed" in detail
+    assert '"acl": "private"' in detail and '"acl": "public-read"' in detail
 
 
 def test_run_command_probe_shows_the_fingerprint_to_act_on(monkeypatch, tmp_path):

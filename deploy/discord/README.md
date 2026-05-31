@@ -55,9 +55,11 @@ Slack paths use (actor recorded as the Discord username), and replies in-channel
 `/steadystate decline fingerprint:<fp>` declines it.
 
 **Don't know the fingerprint (or what's available)?** The same command registers read-only
-subcommands for discovery — `/steadystate help` lists what the listener accepts, and
-`/steadystate pending` shows the remediations awaiting approval with their fingerprints. Re-run
-`register.py` after upgrading to pick them up (the subcommands ship in `command.json`).
+subcommands for discovery — `/steadystate help` (what it accepts), `/steadystate targets` (what
+`probe` can reach), `/steadystate pending` (awaiting approval, with fingerprints), `/steadystate
+findings` (remembered findings + status), `/steadystate history` (the audit log). And
+`/steadystate probe <target> verbose:true` shows the full evidence per finding. Re-run
+`register.py` after upgrading to pick the new subcommands + options up (they ship in `command.json`).
 
 **Summon a scan:** `/steadystate probe <target>` runs an on-demand scan of a named target and
 posts what's wrong back to the channel (read-only), with a one-line spend footer. Targets come
