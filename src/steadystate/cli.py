@@ -332,8 +332,17 @@ def fix(
             f"source '{source}' is observe-only -- no executor to remediate with. "
             "Run `steadystate commands` to see each plugin's act commands."
         )
+    try:
+        drifts = _drift_source(source, path).collect_drift()
+    except SourceError as exc:
+        # Same live-tool failure path as `scan` (missing binary, non-zero exit, timeout, garbage
+        # output): report it cleanly and exit non-zero -- never a raw traceback. The source raises
+        # rather than returning empty, so a fix run never silently treats a tooling failure as "no
+        # drift to remediate".
+        typer.secho(f"fix failed: {exc}", fg="red", err=True)
+        raise typer.Exit(1) from None
     items = []
-    for drift in _drift_source(source, path).collect_drift():
+    for drift in drifts:
         plan = executor.plan_for(drift)
         result = executor.remediate(drift, confirm=True) if (apply and plan.eligible) else None
         items.append((plan, result))
