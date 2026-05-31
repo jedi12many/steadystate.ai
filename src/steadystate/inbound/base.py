@@ -32,6 +32,7 @@ HELP = "help"
 PENDING = "pending"
 PROBE = "probe"
 COST = "cost"
+MUTE = "mute"
 
 # The command grammar, in the order ``help`` lists them: verb -> (usage, one-line summary).
 # ``help`` renders itself from this table, so a newly added verb is discoverable the moment it
@@ -44,12 +45,13 @@ COMMANDS: dict[str, tuple[str, str]] = {
         "scan a named target now; honors mutes (`unmute` shows all)",
     ),
     COST: ("cost [day|week]", "show LLM spend -- a rollup, or a day/week trend"),
+    MUTE: ("mute <fingerprint>", "silence a finding (e.g. a benign probe result) on future scans"),
     APPROVE: ("approve <fingerprint>", "apply a pending remediation (guardrailed)"),
     DECLINE: ("decline <fingerprint>", "dismiss a pending remediation"),
 }
-# Verbs that require an argument to mean anything (a fingerprint for approve/decline, a target
-# name for probe); help/pending take none.
-_NEEDS_ARGUMENT = frozenset({APPROVE, DECLINE, PROBE})
+# Verbs that require an argument to mean anything (a fingerprint for approve/decline/mute, a
+# target name for probe); help/pending take none.
+_NEEDS_ARGUMENT = frozenset({APPROVE, DECLINE, PROBE, MUTE})
 # The bypass flag (probe): show muted/snoozed findings too, for this one run.
 _UNMUTE_FLAGS = frozenset({"unmute", "--unmute"})
 # Verbs that take an *optional* argument (cost's period); absent it, they still dispatch.

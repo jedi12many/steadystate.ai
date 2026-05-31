@@ -50,6 +50,19 @@
     },
     {
       "type": 1,
+      "name": "mute",
+      "description": "Silence a finding (e.g. a benign probe result) on future scans",
+      "options": [
+        {
+          "type": 3,
+          "name": "fingerprint",
+          "description": "The fingerprint shown under the finding",
+          "required": true
+        }
+      ]
+    },
+    {
+      "type": 1,
       "name": "approve",
       "description": "Approve a pending remediation by fingerprint",
       "options": [

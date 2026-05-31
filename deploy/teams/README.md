@@ -54,3 +54,6 @@ default; add `unmute` (`@steadystate probe <target> unmute`) to show everything 
 
 **See spend:** `@steadystate cost` posts the LLM spend rollup, or `@steadystate cost day` / `cost week`
 for the trend.
+
+**Silence a finding:** each probe finding shows its fingerprint; `@steadystate mute <fp>` quiets a
+benign one on future scans (un-mute with the CLI: `steadystate unmute <fp>`).

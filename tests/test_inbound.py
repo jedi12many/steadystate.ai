@@ -16,6 +16,7 @@ from steadystate.inbound.base import (
     COST,
     DECLINE,
     HELP,
+    MUTE,
     PENDING,
     PROBE,
     Command,
@@ -90,6 +91,7 @@ def test_text_grammar_parses_act_and_readonly_verbs():
     assert command_from_text("probe prod-k8s", "amy") == Command(PROBE, "amy", "prod-k8s")
     assert command_from_text("cost", "amy") == Command(COST, "amy")  # optional arg absent
     assert command_from_text("cost week", "amy") == Command(COST, "amy", "week")  # optional period
+    assert command_from_text("mute fp9", "amy") == Command(MUTE, "amy", "fp9")
 
 
 def test_text_grammar_parses_the_probe_unmute_flag():
@@ -114,7 +116,7 @@ def test_text_grammar_needs_a_fingerprint_for_act_verbs_and_ignores_unknowns():
 
 def test_render_help_lists_every_command():
     text = render_help()
-    for verb in (HELP, PENDING, PROBE, COST, APPROVE, DECLINE):
+    for verb in (HELP, PENDING, PROBE, COST, MUTE, APPROVE, DECLINE):
         assert verb in text
 
 
@@ -170,6 +172,16 @@ def test_run_command_decline_marks_declined(tmp_path):
     assert "declined" in msg
     with StateStore(db) as store:
         assert store.get_pending("fp1").status == "declined"
+
+
+def test_run_command_mute_silences_a_fingerprint(tmp_path):
+    db = str(tmp_path / "s.db")
+    fp = "a" * 64
+    msg = run_command(Command(MUTE, "bob", fp), db)
+    assert f"Muted {fp}" in msg
+    # it's now suppressed in the store, so the next scan/probe honors it
+    with StateStore(db) as store:
+        assert store.is_suppressed(fp, datetime(2026, 1, 1, tzinfo=UTC))
 
 
 def test_run_command_approve_routes_to_core(monkeypatch, tmp_path):
