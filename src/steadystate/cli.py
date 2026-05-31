@@ -21,6 +21,7 @@ from .inbound.server import run_command, serve
 from .notify import SURFACES, build_surfaces
 from .notify.base import Surface
 from .notify.console import ConsoleSurface
+from .onboarding import SECTIONS, Status, audit, read_env_file, summary, write_env_file
 from .probe import PROBES
 from .reason.cost import roll_up, roll_up_by_period, scan_cost_line
 from .reason.enrich import ENRICHERS
@@ -617,6 +618,113 @@ def probe(
         name for name, on in (("verbose", verbose), ("cost", cost), ("unmute", unmute)) if on
     )
     typer.echo(run_command(Command(PROBE, _local_actor(), target, flags=flags), str(state)))
+
+
+_STATUS_STYLE = {
+    Status.READY: ("ready", "green"),
+    Status.PARTIAL: ("partial", "yellow"),
+    Status.OFF: ("off", "dim"),
+}
+
+
+def _detail(cap, status: Status, detail: str) -> str:
+    """What to show in the right-hand column: the assessor's note, or -- for an unconfigured
+    capability -- the env vars it would need (the 'what do I set?' answer)."""
+    if detail:
+        return detail
+    if status is Status.OFF:
+        return "needs " + ", ".join(s.env for s in cap.settings if s.required)
+    return "configured"
+
+
+def _render_audit(console: Console, env: dict[str, str], *, title: str) -> None:
+    rows = {row.capability: row for row in audit(env)}
+    console.print(f"\n[bold]{title}[/bold]")
+    for section, caps in SECTIONS:
+        table = Table(show_header=True, header_style="bold", title_justify="left")
+        table.add_column(section)
+        table.add_column("status")
+        table.add_column("needs / detail", overflow="fold")
+        for cap in caps:
+            row = rows[cap]
+            label, style = _STATUS_STYLE[row.status]
+            table.add_row(
+                cap.title, f"[{style}]{label}[/{style}]", _detail(cap, row.status, row.detail)
+            )
+        console.print(table)
+    counts = summary(list(rows.values()))
+    console.print(
+        f"[green]{counts[Status.READY]} ready[/green]  "
+        f"[yellow]{counts[Status.PARTIAL]} partial[/yellow]  "
+        f"[dim]{counts[Status.OFF]} off[/dim]"
+    )
+
+
+@app.command()
+def doctor(
+    env_file: Path | None = typer.Option(
+        None, "--env-file", help="Also read this .env (the live environment still wins)."
+    ),
+) -> None:
+    """Show what's configured and what each capability still needs -- a read-only preflight.
+
+    Inspects the live environment (plus an optional --env-file) and reports every capability as
+    ready / partial / off. Never prints a secret value, only whether it's set -- safe to run and
+    paste. The answer to 'if I didn't set this up, what do I need?'"""
+    env = dict(os.environ)
+    if env_file:
+        env = {**read_env_file(env_file), **env}  # live env overrides the file
+    _render_audit(Console(), env, title="Configuration")
+
+
+@app.command()
+def init(
+    env_file: Path = typer.Option(
+        Path(".env"), "--env-file", help="The .env to write (merged, gitignored)."
+    ),
+) -> None:
+    """Interactive setup wizard: walk the capabilities, prompt for what you want, write a .env.
+
+    Skips anything you decline, hides secret input, and merges into an existing .env without
+    wiping the keys you're not touching. The file is gitignored and chmod 600 -- secrets stay out
+    of the repo and off the terminal. Ends by printing the `doctor` view of the result."""
+    console = Console()
+    console.print("[bold]steadystate setup[/bold] - configure a capability, or skip it.")
+    existing = read_env_file(env_file)
+    if existing:
+        console.print(f"[dim]Merging into existing {env_file} ({len(existing)} key(s)).[/dim]")
+
+    updates: dict[str, str] = {}
+    for section, caps in SECTIONS:
+        console.print(f"\n[bold cyan]{section}[/bold cyan]")
+        for cap in caps:
+            if not typer.confirm(f"  Configure {cap.title}? - {cap.blurb}", default=False):
+                continue
+            for s in cap.settings:
+                current = existing.get(s.env, "")
+                value = typer.prompt(
+                    f"    {s.prompt}",
+                    default=current,
+                    hide_input=s.secret,
+                    show_default=not s.secret,
+                )
+                if value:
+                    updates[s.env] = value
+
+    if not updates:
+        console.print("\n[dim]Nothing configured — no file written.[/dim]")
+        raise typer.Exit()
+
+    merged = write_env_file(env_file, updates)
+    console.print(
+        f"\n[green]Wrote {len(updates)} setting(s)[/green] to {env_file} [dim](gitignored)[/dim]."
+    )
+    _render_audit(console, merged, title="Result")
+    console.print(
+        "\nLoad it:  [bold]set -a; . ./.env; set +a[/bold]  or  "
+        "[bold]docker run --env-file .env …[/bold]"
+    )
+    console.print("[dim]Secrets live only in this file. Never commit it.[/dim]")
 
 
 def main() -> None:

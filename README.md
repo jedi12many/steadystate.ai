@@ -30,6 +30,10 @@ steadystate scan ./infra --source k8s --probe auto --to slack --autonomy suggest
 
 No agent to install, no dashboard to learn. Point it at your IaC. Run `steadystate catalog` for a live overview of every plugin and command this build offers (`catalog --html` writes a browsable page).
 
+## Setup (`init` / `doctor`)
+
+Didn't write the tool and not sure what to set? **`steadystate init`** is an interactive wizard: it walks the capabilities (LLM reasoning, alert surfaces, chat-back listener secrets, source credentials, enrichment), prompts only for what you choose, hides secret input, and writes a gitignored `.env` (merging into any existing one). **`steadystate doctor`** is the read-only preflight — it shows every capability as `ready` / `partial` / `off` and what each still needs, reporting *whether* a var is set, never its value, so it's safe to run and paste. Load the result with `set -a; . ./.env; set +a` or `docker run --env-file .env …`.
+
 ## Sources — declared state in (`--source`)
 
 `terraform` · `ansible` · `kubernetes` · `rancher` (Fleet) · `argocd` · `docker-compose` · `helm`. Each rides the tool's own machine-readable output (never raw-file parsing) and declares its read-only **observe** commands vs its **potentially destructive** ones — `steadystate commands` documents both. Adding a source is a one-line registry entry.
