@@ -9,11 +9,14 @@ from __future__ import annotations
 
 import json
 import subprocess
+import urllib.error
+import urllib.request
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
+from .._http import safe_urlopen
 from ..model import Drift, Resource
 
 
@@ -71,6 +74,23 @@ def loads_json(text: str, *, tool: str) -> object:
         return json.loads(text or "")
     except json.JSONDecodeError as exc:
         raise SourceError(f"'{tool}' produced no parseable JSON output") from exc
+
+
+def fetch_json(request: urllib.request.Request | str, *, timeout: float, tool: str) -> object:
+    """GET + parse JSON from an HTTP(S) source through the gated opener, with a hard ``timeout`` and
+    every failure converted to a clean `SourceError` -- the urllib parallel to `run_tool`. Covers a
+    hung/unreachable server (no timeout = block forever), an HTTP error (401/500/...), and an
+    unparseable body. ``request`` is a urllib Request so callers keep their auth headers; the URL
+    scheme is http(s)-gated by `safe_urlopen` (a bad scheme raises ValueError before any socket)."""
+    try:
+        with safe_urlopen(request, timeout=timeout) as response:
+            body = response.read()
+    except urllib.error.HTTPError as exc:  # a subclass of URLError -- catch it FIRST for the code
+        raise SourceError(f"'{tool}' returned HTTP {exc.code} {exc.reason}") from exc
+    except (urllib.error.URLError, OSError, TimeoutError) as exc:
+        raise SourceError(f"'{tool}' unreachable: {getattr(exc, 'reason', exc)}") from exc
+    text = body.decode("utf-8", "replace") if isinstance(body, bytes) else body
+    return loads_json(text, tool=tool)
 
 
 @dataclass(frozen=True)

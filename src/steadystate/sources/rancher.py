@@ -12,13 +12,11 @@ is divergence.
 
 from __future__ import annotations
 
-import json
 import os
 import urllib.request
 
-from .._http import safe_urlopen
 from ..model import ChangeType, Drift, Provenance
-from .base import Capabilities
+from .base import Capabilities, fetch_json
 
 # state -> ChangeType. Anything absent from these sets is treated as MODIFIED.
 _ADDED_STATES = {"Missing", "NotFound"}  # declared, not in reality yet
@@ -80,12 +78,14 @@ class RancherSource:
         namespace: str = "fleet-default",
         base_url: str | None = None,
         token: str | None = None,
+        timeout: float = 30.0,  # an API read; bounded so a hung server can't block the scan
     ) -> None:
         self._gitrepo = gitrepo
         self.gitrepo_name = gitrepo_name
         self.namespace = namespace
         self.base_url = base_url or os.environ.get("RANCHER_URL")
         self.token = token or os.environ.get("RANCHER_TOKEN")
+        self.timeout = timeout
 
     def collect_drift(self) -> list[Drift]:
         gitrepo = self._gitrepo if self._gitrepo is not None else self._fetch()
@@ -101,5 +101,5 @@ class RancherSource:
         req = urllib.request.Request(url)
         if self.token:
             req.add_header("Authorization", f"Bearer {self.token}")
-        with safe_urlopen(req) as resp:
-            return json.loads(resp.read())
+        result = fetch_json(req, timeout=self.timeout, tool="rancher")
+        return result if isinstance(result, dict) else {}
