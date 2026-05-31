@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import datetime
 
 
 @dataclass(frozen=True)
@@ -121,3 +122,67 @@ def roll_up(calls: Iterable[LlmCall]) -> list[CallerSpend]:
     ]
     out.sort(key=lambda s: s.cost_usd, reverse=True)
     return out
+
+
+def scan_cost_line(calls: Iterable[LlmCall]) -> str | None:
+    """A one-line spend summary for a single scan, or None if no calls were made (so a
+    ``--no-llm`` run stays silent). What the scan footer prints so a paid call never goes
+    unseen: ``LLM: 3 call(s) - 13.2k tokens - ~$0.0420``."""
+    calls = list(calls)
+    if not calls:
+        return None
+    total = sum(cost_usd(c) for c in calls)
+    tokens = sum(
+        c.input_tokens + c.output_tokens + c.cache_creation_tokens + c.cache_read_tokens
+        for c in calls
+    )
+    failures = sum(1 for c in calls if not c.succeeded)
+    fail = f" ({failures} failed)" if failures else ""
+    return f"LLM: {len(calls)} call(s){fail} - {tokens / 1000:.1f}k tokens - ~${total:.4f}"
+
+
+@dataclass(frozen=True)
+class PeriodSpend:
+    """Spend bucketed into one time period (a day or an ISO week) -- a row of the trend."""
+
+    period: str  # "2026-05-31" (day) or "2026-W22" (ISO week)
+    calls: int
+    failures: int
+    total_tokens: int
+    cost_usd: float
+
+
+def _period_key(at: str, period: str) -> str:
+    """The bucket key for a stored ``at`` timestamp: its date (day) or ISO year-week (week)."""
+    moment = datetime.fromisoformat(at)
+    if period == "week":
+        iso = moment.isocalendar()
+        return f"{iso[0]}-W{iso[1]:02d}"
+    return moment.date().isoformat()
+
+
+def roll_up_by_period(
+    timed_calls: Iterable[tuple[str, LlmCall]], period: str = "day"
+) -> list[PeriodSpend]:
+    """Bucket ``(at, call)`` pairs into day/week periods, summing cost + tokens (priced now).
+    Oldest first, so spend reads as a trend down the column. Complements ``roll_up`` (by caller)
+    with a 'how is this growing over time' view; Prometheus/Grafana is the richer time series."""
+    acc: dict[str, dict] = {}
+    for at, call in timed_calls:
+        row = acc.setdefault(
+            _period_key(at, period), {"calls": 0, "failures": 0, "tok": 0, "usd": 0.0}
+        )
+        row["calls"] += 1
+        if not call.succeeded:
+            row["failures"] += 1
+        row["tok"] += (
+            call.input_tokens
+            + call.output_tokens
+            + call.cache_creation_tokens
+            + call.cache_read_tokens
+        )
+        row["usd"] += cost_usd(call)
+    return [
+        PeriodSpend(key, row["calls"], row["failures"], row["tok"], row["usd"])
+        for key, row in sorted(acc.items())
+    ]

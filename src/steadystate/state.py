@@ -428,6 +428,17 @@ class StateStore:
             ).fetchall()
         return [_row_to_llm_call(r) for r in rows]
 
+    def timed_llm_calls_since(self, cutoff: datetime | None = None) -> list[tuple[str, LlmCall]]:
+        """Like ``llm_calls_since``, but each call paired with its recorded ``at`` timestamp --
+        for bucketing spend over time (reason/cost.roll_up_by_period)."""
+        if cutoff is None:
+            rows = self._conn.execute("SELECT * FROM llm_calls ORDER BY at, id").fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT * FROM llm_calls WHERE at >= ? ORDER BY at, id", (_iso(cutoff),)
+            ).fetchall()
+        return [(r["at"], _row_to_llm_call(r)) for r in rows]
+
     # -- pending remediations (autonomy: suggest) -------------------------------
 
     def record_pending(self, action: PendingAction, now: datetime) -> None:
