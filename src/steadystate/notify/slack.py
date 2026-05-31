@@ -61,6 +61,8 @@ def format_slack_message(alert: Alert) -> dict:
         lines.append("   ".join(where))
     if alert.recommended_action:
         lines.append(f"*Next:* {alert.recommended_action}")
+    if alert.remediation_label:  # whether steadystate can carry out the fix, or it's manual
+        lines.append(f"_{alert.remediation_label}_")
     if alert.references:  # only when present; absent references add no line
         # Config-exposure -> technique mapping, not behavioral detection.
         chips = " ".join(f"`{ref.framework} {ref.id}`" for ref in alert.references)

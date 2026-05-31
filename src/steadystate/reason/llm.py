@@ -43,7 +43,9 @@ def _llm_enabled() -> bool:
 _INSTRUCTION = (
     "You are steadystate.ai's drift analyst. A resource has drifted from its declared "
     "state. In 1-2 plain sentences, explain why an operator should care, then suggest one "
-    "concrete next step. Be honest about uncertainty; never invent risk the data does not support."
+    "concrete next step. Be honest about uncertainty; never invent risk the data does not support. "
+    "Recommend the infrastructure fix only; do NOT speculate about what steadystate itself can or "
+    "cannot do, or whether a command is allowed -- steadystate determines that on its own."
 )
 
 _NO_PROVIDER_HINT = (
@@ -85,6 +87,8 @@ _CORRELATE_INSTRUCTION = (
     "there is a real common cause; otherwise a drift is its own group of one. For each group give "
     "a short title naming the cause, 1-2 plain sentences on why it matters, and one concrete next "
     "step (or null if you cannot act). Be honest; never invent a cause the data does not support. "
+    "Recommend the infrastructure fix only; do NOT speculate about what steadystate itself can or "
+    "cannot do, or whether a command is allowed -- steadystate determines that deterministically. "
     'Return ONLY JSON, no prose: {"groups": [{"drift_indexes": [int, ...], "title": str, '
     '"why_it_matters": str, "recommended_action": str or null}]} -- every index from 0 to N-1 '
     "must appear in exactly one group."
