@@ -19,13 +19,15 @@ from .base import Surface
 from .console import ConsoleSurface
 from .discord import DiscordSurface
 from .grafana import GrafanaSurface
+from .pagerduty import PagerDutySurface
 from .prometheus import PrometheusSurface
 from .slack import SlackSurface
 from .teams import TeamsSurface
+from .webhook import WebhookSurface
 
 # name -> zero-arg factory -> Surface. Indexed by the CLI's --to choice.
-# slack/teams read their webhook, prometheus/grafana their URL+token, from the
-# environment, so all are zero-arg.
+# slack/teams read their webhook, prometheus/grafana their URL+token, webhook/pagerduty
+# their URL+key, from the environment, so all are zero-arg.
 _BUILTIN_SURFACES: dict[str, Callable[[], Surface]] = {
     "console": ConsoleSurface,
     "slack": SlackSurface,
@@ -33,6 +35,8 @@ _BUILTIN_SURFACES: dict[str, Callable[[], Surface]] = {
     "discord": DiscordSurface,
     "prometheus": PrometheusSurface,
     "grafana": GrafanaSurface,
+    "webhook": WebhookSurface,
+    "pagerduty": PagerDutySurface,
 }
 
 # Built-ins overlaid with discovered `steadystate.surfaces` entry points.

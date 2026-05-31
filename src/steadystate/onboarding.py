@@ -144,6 +144,24 @@ _GRAFANA = Capability(
         Setting("GRAFANA_TOKEN", "Grafana API token", secret=True),
     ),
 )
+_WEBHOOK = Capability(
+    "webhook",
+    "Generic webhook",
+    "POST each alert as JSON to any endpoint -- Opsgenie/Jira/ServiceNow/a bus (--to webhook).",
+    (Setting("STEADYSTATE_WEBHOOK_URL", "Webhook URL (receives alert JSON)", secret=True),),
+)
+_PAGERDUTY = Capability(
+    "pagerduty",
+    "PagerDuty",
+    "Open an incident per alert via the Events API v2 (--to pagerduty).",
+    (
+        Setting(
+            "STEADYSTATE_PAGERDUTY_ROUTING_KEY",
+            "PagerDuty Events API v2 integration/routing key",
+            secret=True,
+        ),
+    ),
+)
 
 _SLACK_LISTEN = Capability(
     "slack-listen",
@@ -213,7 +231,7 @@ _ENRICH = Capability(
 # Ordered sections -- the order `init` walks and `doctor` prints.
 SECTIONS: tuple[tuple[str, tuple[Capability, ...]], ...] = (
     ("Reasoning", (_LLM,)),
-    ("Alerts out (--to)", (_SLACK, _TEAMS, _DISCORD, _PROM_PUSH, _GRAFANA)),
+    ("Alerts out (--to)", (_SLACK, _TEAMS, _DISCORD, _PROM_PUSH, _GRAFANA, _WEBHOOK, _PAGERDUTY)),
     ("Chat back (listen --from)", (_SLACK_LISTEN, _TEAMS_LISTEN, _DISCORD_LISTEN)),
     ("Source credentials", (_ARGOCD, _RANCHER, _ANSIBLE)),
     ("Live-health enrichment", (_ENRICH,)),
