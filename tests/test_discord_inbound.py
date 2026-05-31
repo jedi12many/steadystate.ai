@@ -11,7 +11,7 @@ import json
 import pytest
 
 from steadystate.inbound import build_inbound
-from steadystate.inbound.base import APPROVE, DECLINE, HELP, PENDING, Command
+from steadystate.inbound.base import APPROVE, DECLINE, HELP, PENDING, PROBE, Command
 from steadystate.inbound.discord import (
     DiscordInbound,
     command_from_payload,
@@ -59,6 +59,25 @@ def test_parse_approve_and_decline():
 def test_parse_readonly_help_and_pending_take_no_argument():
     assert command_from_payload(_readonly_command("help")) == Command(HELP, "jeff")
     assert command_from_payload(_readonly_command("pending", "amy")) == Command(PENDING, "amy")
+
+
+def test_parse_probe_takes_its_target_option():
+    # probe carries a `target` option (not `fingerprint`); the parser takes the first string opt.
+    payload = {
+        "type": 2,
+        "data": {
+            "name": "steadystate",
+            "options": [
+                {
+                    "name": "probe",
+                    "type": 1,
+                    "options": [{"name": "target", "type": 3, "value": "prod-k8s"}],
+                }
+            ],
+        },
+        "member": {"user": {"username": "jeff"}},
+    }
+    assert command_from_payload(payload) == Command(PROBE, "jeff", "prod-k8s")
 
 
 def test_parse_actor_falls_back_to_top_level_user_then_default():

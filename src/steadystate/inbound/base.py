@@ -30,6 +30,7 @@ APPROVE = "approve"
 DECLINE = "decline"
 HELP = "help"
 PENDING = "pending"
+PROBE = "probe"
 
 # The command grammar, in the order ``help`` lists them: verb -> (usage, one-line summary).
 # ``help`` renders itself from this table, so a newly added verb is discoverable the moment it
@@ -37,10 +38,13 @@ PENDING = "pending"
 COMMANDS: dict[str, tuple[str, str]] = {
     HELP: ("help", "list the commands this listener accepts"),
     PENDING: ("pending", "show remediations awaiting approval, with their fingerprints"),
+    PROBE: ("probe <target>", "scan a named target now and post what's wrong (read-only)"),
     APPROVE: ("approve <fingerprint>", "apply a pending remediation (guardrailed)"),
     DECLINE: ("decline <fingerprint>", "dismiss a pending remediation"),
 }
-_NEEDS_ARGUMENT = frozenset({APPROVE, DECLINE})  # verbs that require a fingerprint to mean anything
+# Verbs that require an argument to mean anything (a fingerprint for approve/decline, a target
+# name for probe); help/pending take none.
+_NEEDS_ARGUMENT = frozenset({APPROVE, DECLINE, PROBE})
 
 
 @dataclass(frozen=True)

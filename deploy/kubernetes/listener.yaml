@@ -1,0 +1,112 @@
+# The persistent inbound listener -- the long-lived counterpart to the scheduled CronJob
+# (cronjob.yaml). The CronJob *pushes* alerts out on a timer; this Deployment keeps a process
+# running so chat can talk *back*: approve/decline a remediation, ask `pending` or `help`, or
+# `probe <target>` to scan a named target on demand. Apply rbac.yaml first (it provides the
+# namespace, the read-only ServiceAccount, and the state PVC this shares).
+#
+# Chat providers POST to a PUBLIC HTTPS URL, so this needs an Ingress with TLS in front. The
+# listener itself verifies every request's signature (HMAC / Ed25519) before acting -- the
+# Ingress only terminates TLS; it is not the security boundary.
+---
+# The named-target registry the `probe <target>` verb resolves against. Edit/extend in place --
+# adding a target is a ConfigMap change, no redeploy. Each entry is the inputs a `scan` takes.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: steadystate-targets
+  namespace: steadystate
+data:
+  targets.json: |
+    {
+      "prod-k8s": { "source": "k8s",    "path": "/data/manifests.json", "label": "prod-k8s" },
+      "prod-argo": { "source": "argocd", "path": "/data/argo-app.json",  "label": "prod-argo" }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: steadystate-listener
+  namespace: steadystate
+spec:
+  replicas: 1 # one writer to the SQLite state store; scale via the store, not replicas
+  selector:
+    matchLabels: { app: steadystate-listener }
+  template:
+    metadata:
+      labels: { app: steadystate-listener }
+    spec:
+      serviceAccountName: steadystate # the read-only SA from rbac.yaml (for k8s probes)
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+      containers:
+        - name: listener
+          image: ghcr.io/jedi12many/steadystate:latest
+          args:
+            - listen
+            - --from=slack # set to your provider: slack | teams | discord
+            - --port=8723
+            - --state=/data/state.db
+          ports:
+            - containerPort: 8723
+          env:
+            # Where the `probe <target>` verb reads its target registry (mounted below).
+            - name: STEADYSTATE_TARGETS
+              value: /config/targets.json
+            # The provider's signing secret -- THE security boundary for inbound requests.
+            # Match the var to --from: STEADYSTATE_SLACK_SIGNING_SECRET / _TEAMS_SECURITY_TOKEN
+            # / _DISCORD_PUBLIC_KEY (see deploy/<provider>/README.md).
+            - name: STEADYSTATE_SLACK_SIGNING_SECRET
+              valueFrom:
+                secretKeyRef: { name: steadystate, key: slack-signing-secret }
+          volumeMounts:
+            - { name: state, mountPath: /data }
+            - { name: targets, mountPath: /config, readOnly: true }
+          # The listener answers POST only (signed webhooks), so check the socket, not a GET.
+          readinessProbe:
+            tcpSocket: { port: 8723 }
+            initialDelaySeconds: 5
+      volumes:
+        # Shares the CronJob's state PVC so chat approvals act on the same pending remediations
+        # the scheduled scans record. A ReadWriteOnce PVC must keep both pods on one node (or use
+        # a ReadWriteMany class); the listener is the only writer for approve/decline.
+        - name: state
+          persistentVolumeClaim: { claimName: steadystate-state }
+        - name: targets
+          configMap: { name: steadystate-targets }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: steadystate-listener
+  namespace: steadystate
+spec:
+  selector: { app: steadystate-listener }
+  ports:
+    - port: 80
+      targetPort: 8723
+---
+# Public HTTPS endpoint for the chat provider's interactivity / Outgoing Webhook URL. Adjust the
+# host, ingressClassName, and TLS to your cluster (cert-manager annotations shown as an example).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: steadystate-listener
+  namespace: steadystate
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [steadystate.example.com]
+      secretName: steadystate-listener-tls
+  rules:
+    - host: steadystate.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: steadystate-listener
+                port: { number: 80 }

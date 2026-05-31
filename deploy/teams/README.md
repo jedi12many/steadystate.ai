@@ -45,3 +45,7 @@ outcome. `@steadystate decline <fingerprint>` declines it.
 and `@steadystate pending` shows the remediations awaiting approval with their fingerprints — handy
 for an operator who didn't set up the deployment. (Teams needs no command registration; these work
 as soon as you upgrade.)
+
+**Summon a scan:** `@steadystate probe <target>` runs an on-demand scan of a named target and posts
+what's wrong back to the channel (read-only). Targets come from the listener's `STEADYSTATE_TARGETS`
+file (name → source + path + label) — see [deploy/kubernetes/listener.yaml](../kubernetes/listener.yaml).

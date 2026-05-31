@@ -11,10 +11,14 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 
 from ..act.approve import apply_pending, decline_pending
+from ..engine import build_report
+from ..reason.report import Report
 from ..state import StateStore
-from .base import APPROVE, DECLINE, HELP, PENDING, Command, InboundAdapter, render_help
+from ..targets import load_targets_from_env
+from .base import APPROVE, DECLINE, HELP, PENDING, PROBE, Command, InboundAdapter, render_help
 
 
 def _render_pending(state_path: str) -> str:
@@ -30,13 +34,43 @@ def _render_pending(state_path: str) -> str:
     return "\n".join(lines)
 
 
+def _summarize(report: Report, name: str) -> str:
+    """A chat summary of a summoned scan: the alerts (worst first, as the report already orders
+    them), or a clean all-clear. Read-only -- it reports, it never records or applies."""
+    if not report.alerts:
+        return f"{name}: clean -- no drift or symptoms above the bar."
+    lines = [f"{name}: {len(report.alerts)} alert(s)"]
+    lines += [f"  {a.severity.value.upper():<8} {a.title}" for a in report.alerts]
+    return "\n".join(lines)
+
+
+def _run_probe(target_name: str) -> str:
+    """Summon: scan a named target now and report what's wrong. Resolves the name against the
+    targets registry (STEADYSTATE_TARGETS), runs the SAME engine a scheduled scan runs -- but
+    read-only (observe, stateless): it surfaces drift + symptoms, it never records or applies."""
+    targets = load_targets_from_env()
+    if not targets:
+        return "No targets configured (set STEADYSTATE_TARGETS to a targets file on the listener)."
+    target = targets.get(target_name)
+    if target is None:
+        return f"Unknown target '{target_name}'. Known: {', '.join(sorted(targets))}."
+    try:
+        report = build_report(target.source, Path(target.path), probe="auto", label=target.label)
+    except Exception as exc:  # a summon must report the failure, never crash the listener
+        return f"Probe of '{target_name}' failed: {exc}"
+    return _summarize(report, target_name)
+
+
 def run_command(command: Command, state_path: str) -> str:
     """Drive a parsed Command to an outcome string the provider echoes back. The read-only verbs
-    (help, pending) answer directly; approve/decline run the SAME guardrailed core the CLI uses."""
+    (help, pending, probe) answer directly; approve/decline run the SAME guardrailed core the CLI
+    uses. probe is read-only -- it scans + reports, so chat stays a trigger, never a bypass."""
     if command.verb == HELP:
         return render_help()
     if command.verb == PENDING:
         return _render_pending(state_path)
+    if command.verb == PROBE:
+        return _run_probe(command.argument)
     with StateStore(state_path) as store:
         if command.verb == APPROVE:
             message, _result = apply_pending(store, command.argument, command.actor)
