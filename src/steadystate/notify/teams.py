@@ -78,6 +78,10 @@ def format_teams_message(alert: Alert) -> dict:
     ]
     if alert.recommended_action is not None:  # omit the block when there's no next step
         body.append({"type": "TextBlock", "text": alert.recommended_action, "wrap": True})
+    if alert.remediation_label:  # whether steadystate can carry out the fix, or it's manual
+        body.append(
+            {"type": "TextBlock", "text": alert.remediation_label, "wrap": True, "isSubtle": True}
+        )
 
     card = {
         "type": "AdaptiveCard",

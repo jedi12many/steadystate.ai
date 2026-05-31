@@ -125,6 +125,10 @@ class ConsoleSurface:
                 body += "\n\n" + "   ".join(where)
             if alert.recommended_action:
                 body += f"\n\n[bold]Next:[/bold] {alert.recommended_action}"
+            label = alert.remediation_label
+            if label:  # whether steadystate can carry out the fix, or it's manual
+                style = "green" if alert.remediable else "dim"
+                body += f"\n[{style}]{label}[/{style}]"
             chips = _reference_chips(alert)
             if chips:  # only when references exist; absent references render nothing
                 body += f"\n\n[dim]{chips}[/dim]"

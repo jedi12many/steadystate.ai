@@ -75,6 +75,25 @@ class Alert:
     # stamped from `scan --label` after the pipeline. None when unset (the pipeline stays pure),
     # so surfaces show an environment line only when the operator asked for one.
     environment: str | None = None
+    # Whether steadystate can carry out a remediation for this alert through its guardrailed
+    # executor -- stamped deterministically (engine.py) from the executor registry + apply
+    # eligibility, NEVER from the LLM. False by default: a symptom-only / policy-only alert, or a
+    # drift on an observe-only source, has no executable fix, so a surface labels its recommended
+    # action "manual" instead of implying an Approve will run it. Decouples the LLM's advice (what
+    # to do) from the tool's reach (whether it can do it).
+    remediable: bool = False
+
+    @property
+    def remediation_label(self) -> str | None:
+        """A plain-text note telling the operator whether steadystate can carry out a fix --
+        surfaces render it next to the recommended action so the model's advice isn't mistaken
+        for something the tool will run. ``None`` when there's nothing to say (no executable fix
+        and no recommendation). Wording is deterministic; the verdict came from the executor."""
+        if self.remediable:
+            return "steadystate can apply this -- approve to reconcile."
+        if self.recommended_action:
+            return "Manual -- outside what steadystate executes."
+        return None
 
     @property
     def resources(self) -> list[str]:

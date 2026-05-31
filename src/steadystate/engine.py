@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from .act import build_executor
 from .probe import Prober, auto_prober_for, build_prober
 from .reason.enrich import build_enricher
 from .reason.llm import LLMAnalyst
@@ -71,6 +72,7 @@ def build_report(
         drifts, resources, symptoms
     )
     report.llm_calls = analyst.calls  # this scan's LLM spend (prometheus surface / store)
+    _stamp_remediability(report, source, path)
     if label:  # stamp the environment on every item so each surfaced alert self-identifies
         for item in report.items:
             item.environment = label
@@ -79,3 +81,17 @@ def build_report(
     if enricher is not None:
         enricher.enrich(report)
     return report
+
+
+def _stamp_remediability(report: Report, source: str, path: Path) -> None:
+    """Mark each alert with whether steadystate can actually carry out a remediation for it --
+    deterministically, from the same executor + eligibility the suggest/approve path uses, NEVER
+    from the LLM. An observe-only source (no executor), or an alert with no eligible drift (a pure
+    symptom/policy finding, or only a REMOVED drift), is not remediable. This is the source of
+    truth a surface uses to label a recommendation 'apply' vs 'manual' -- so the model's advice and
+    the tool's reach never get conflated."""
+    executor = build_executor(source, path)
+    if executor is None:  # observe-only source -> nothing here is executable
+        return
+    for alert in report.alerts:
+        alert.remediable = any(executor.plan_for(drift).eligible for drift in alert.drifts)

@@ -67,6 +67,8 @@ def _evidence(alert: Alert) -> list[str]:
     out = [f"           why: {alert.why_it_matters}"]
     if alert.recommended_action:
         out.append(f"           fix: {alert.recommended_action}")
+    if alert.remediation_label:  # whether steadystate can carry out the fix, or it's manual
+        out.append(f"           can: {alert.remediation_label}")
     for d in alert.drifts:
         out.append(f"           drift: {d.summary()}")
         if d.declared is not None or d.observed is not None:
