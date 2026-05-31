@@ -121,3 +121,16 @@ def test_scan_reports_a_tool_failure_cleanly(monkeypatch, tmp_path):
     assert result.exit_code == 1  # a real failure, not a crash and not a false success
     assert "scan failed" in result.output and "not found on PATH" in result.output
     assert "Traceback" not in result.output  # never a raw traceback
+
+
+def test_fix_reports_a_tool_failure_cleanly(monkeypatch, tmp_path):
+    # `fix` collects drift the same way `scan` does, so the same live-tool failure must surface
+    # cleanly (not a raw traceback) -- the residual of M1/M2 on the sibling command.
+    typer_testing = pytest.importorskip("typer.testing")
+    from steadystate.cli import app
+
+    _patch_run(monkeypatch, FileNotFoundError())
+    result = typer_testing.CliRunner().invoke(app, ["fix", str(tmp_path), "--source", "terraform"])
+    assert result.exit_code == 1
+    assert "fix failed" in result.output and "not found on PATH" in result.output
+    assert "Traceback" not in result.output
