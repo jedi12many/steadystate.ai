@@ -45,5 +45,6 @@ def test_build_report_unknown_tuning_raises_valueerror(tmp_path):
 def test_build_prober_for_none_and_auto(tmp_path):
     assert build_prober_for("none", "terraform", tmp_path) is None
     # auto picks the probe matching the source -- none for terraform, the kubectl probe for k8s.
+    # The source registers as "k8s" (the --source value); auto must key on that, not "kubernetes".
     assert build_prober_for("auto", "terraform", tmp_path) is None
-    assert isinstance(build_prober_for("auto", "kubernetes", tmp_path), KubectlProbe)
+    assert isinstance(build_prober_for("auto", "k8s", tmp_path), KubectlProbe)

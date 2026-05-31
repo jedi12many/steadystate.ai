@@ -50,8 +50,12 @@ PROBE_CAPABILITIES: dict[str, Capabilities] = {
 
 # Which probe `--probe auto` picks per source -- only the sources with a real health signal
 # distinct from their drift (k8s pods, compose containers, ArgoCD's own health field).
+# Keys are the registered --source names (DRIFT_SOURCES), NOT a resource's provenance.source --
+# the Kubernetes source registers as "k8s" (it stamps provenance "kubernetes" internally, which
+# is what the kubectl probe filters on, a separate namespace). test_auto_keys_are_registered_sources
+# guards this so a key can never silently miss its source again.
 _AUTO: dict[str, str] = {
-    "kubernetes": "kubectl",
+    "k8s": "kubectl",
     "docker-compose": "docker",
     "argocd": "argocd",
 }
