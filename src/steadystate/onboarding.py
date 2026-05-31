@@ -227,6 +227,22 @@ _ENRICH = Capability(
         ),
     ),
 )
+_SENTINEL_ENRICH = Capability(
+    "sentinel",
+    "Sentinel enrichment",
+    "Escalate a drift that ALSO has an active Microsoft Sentinel incident now (--enrich sentinel).",
+    (
+        Setting("STEADYSTATE_SENTINEL_WORKSPACE_ID", "Log Analytics workspace ID (GUID)"),
+        Setting(
+            "STEADYSTATE_SENTINEL_QUERY",
+            "KQL template returning active incidents for {name}",
+            example="SecurityIncident | where Status in ('New','Active') | where Title has '{name}'",  # noqa: E501
+        ),
+        Setting("STEADYSTATE_AZURE_TENANT_ID", "Azure AD tenant ID"),
+        Setting("STEADYSTATE_AZURE_CLIENT_ID", "Azure AD app (client) ID"),
+        Setting("STEADYSTATE_AZURE_CLIENT_SECRET", "Azure AD client secret", secret=True),
+    ),
+)
 
 
 def _assess_github_pr(env: Env) -> tuple[Status, str]:
@@ -262,7 +278,7 @@ SECTIONS: tuple[tuple[str, tuple[Capability, ...]], ...] = (
     ("Alerts out (--to)", (_SLACK, _TEAMS, _DISCORD, _PROM_PUSH, _GRAFANA, _WEBHOOK, _PAGERDUTY)),
     ("Chat back (listen --from)", (_SLACK_LISTEN, _TEAMS_LISTEN, _DISCORD_LISTEN)),
     ("Source credentials", (_ARGOCD, _RANCHER, _ANSIBLE)),
-    ("Live-health enrichment", (_ENRICH,)),
+    ("Live-health enrichment", (_ENRICH, _SENTINEL_ENRICH)),
     ("Remediation delivery (--deliver)", (_GITHUB_PR,)),
 )
 
