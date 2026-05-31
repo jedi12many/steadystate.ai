@@ -29,6 +29,7 @@ from .reason.enrich import ENRICHERS
 from .reason.pipeline import CORRELATORS
 from .reconcile_state import reconcile
 from .sources import CAPABILITIES, DRIFT_SOURCES, build_drift_source
+from .sources.base import SourceError
 from .state import PendingAction, StateStore
 
 DEFAULT_STATE_PATH = ".steadystate/state.db"
@@ -271,6 +272,12 @@ def scan(
         )
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from None
+    except SourceError as exc:
+        # A live tool failed (missing binary, non-zero exit, timeout, garbage output). Report it
+        # cleanly and exit non-zero -- never a raw traceback, and never a false "no drift" (the
+        # source raises rather than returning empty), so a scheduled scan/CI sees a real failure.
+        typer.secho(f"scan failed: {exc}", fg="red", err=True)
+        raise typer.Exit(1) from None
     # The Pipeline is pure; memory is applied here, between run() and emit(). Stateless
     # scans skip the store entirely and surface exactly as before (Alerts un-annotated).
     # One `now` for the whole scan so the store's timestamps and the console's NEW-vs-age

@@ -17,13 +17,11 @@ host as it is) are populated; without it, the task name alone identifies the dri
 
 from __future__ import annotations
 
-import json
 import os
-import subprocess
 from pathlib import Path
 
 from ..model import ChangeType, Drift, Provenance
-from .base import Capabilities
+from .base import Capabilities, loads_json, run_tool
 
 
 def _diff(diff: object) -> tuple[dict | None, dict | None]:
@@ -86,11 +84,13 @@ class AnsibleSource:
         playbook: str | None = None,
         working_dir: str | Path | None = None,
         inventory: str | None = None,
+        timeout: float = 300.0,  # an ansible --check run across a fleet can take minutes
     ) -> None:
         self._result = result
         self.playbook = playbook
         self.working_dir = Path(working_dir) if working_dir else None
         self.inventory = inventory
+        self.timeout = timeout
 
     def collect_drift(self) -> list[Drift]:
         result = self._result if self._result is not None else self._run_check()
@@ -105,7 +105,15 @@ class AnsibleSource:
         cmd = ["ansible-playbook", "--check", "--diff", self.playbook]
         if self.inventory:
             cmd += ["-i", self.inventory]
-        res = subprocess.run(
-            cmd, cwd=self.working_dir, env=env, check=False, capture_output=True, text=True
+        # check=False: --check exits non-zero when it *finds* changes (the normal drift case), and
+        # we parse stdout regardless; run_tool still raises on a missing binary / timeout.
+        stdout = run_tool(
+            cmd,
+            cwd=self.working_dir,
+            env=env,
+            check=False,
+            timeout=self.timeout,
+            tool="ansible-playbook",
         )
-        return json.loads(res.stdout)
+        parsed = loads_json(stdout, tool="ansible-playbook")
+        return parsed if isinstance(parsed, dict) else {}

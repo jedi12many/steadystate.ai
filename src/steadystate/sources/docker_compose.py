@@ -17,12 +17,11 @@ locally) are compared on presence only, so a local build never shows as false dr
 from __future__ import annotations
 
 import json
-import subprocess
 from pathlib import Path
 
 from ..model import Drift, Provenance, Resource
 from ..reconcile import reconcile
-from .base import Capabilities
+from .base import Capabilities, SourceError, loads_json, run_tool
 
 
 def resources_from_compose_config(config: dict) -> list[Resource]:
@@ -110,10 +109,12 @@ class DockerComposeSource:
         working_dir: str | Path | None = None,
         config: dict | None = None,
         ps: list[dict] | None = None,
+        timeout: float = 30.0,  # `docker compose config` / `ps` are fast local reads
     ) -> None:
         self.working_dir = Path(working_dir) if working_dir else None
         self._config = config
         self._ps = ps
+        self.timeout = timeout
 
     def collect_declared(self) -> list[Resource]:
         config = self._config if self._config is not None else self._run_compose()
@@ -131,26 +132,28 @@ class DockerComposeSource:
     def _run_compose(self) -> dict:
         if self.working_dir is None:
             raise ValueError("DockerComposeSource needs working_dir or config")
-        res = subprocess.run(
+        stdout = run_tool(
             ["docker", "compose", "config", "--format", "json"],
             cwd=self.working_dir,
-            check=True,
-            capture_output=True,
-            text=True,
+            timeout=self.timeout,
+            tool="docker compose config",
         )
-        return json.loads(res.stdout)
+        parsed = loads_json(stdout, tool="docker compose config")
+        return parsed if isinstance(parsed, dict) else {}
 
     def _run_ps(self) -> list[dict]:
         if self.working_dir is None:
             raise ValueError("DockerComposeSource needs working_dir or ps")
-        res = subprocess.run(
+        stdout = run_tool(
             ["docker", "compose", "ps", "--format", "json"],
             cwd=self.working_dir,
-            check=True,
-            capture_output=True,
-            text=True,
+            timeout=self.timeout,
+            tool="docker compose ps",
         )
-        return _parse_ps_output(res.stdout)
+        try:
+            return _parse_ps_output(stdout)
+        except json.JSONDecodeError as exc:  # the NDJSON fallback can still hit a bad line
+            raise SourceError("'docker compose ps' produced no parseable JSON output") from exc
 
 
 def _parse_ps_output(stdout: str) -> list[dict]:

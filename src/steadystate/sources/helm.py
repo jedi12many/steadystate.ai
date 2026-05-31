@@ -18,11 +18,8 @@ does not.
 
 from __future__ import annotations
 
-import json
-import subprocess
-
 from ..model import ChangeType, Drift, Provenance
-from .base import Capabilities
+from .base import Capabilities, loads_json, run_tool
 
 _HEALTHY = "deployed"  # the only steady-state Helm release status
 # status -> ChangeType: a release that never landed reads as ADDED, one being torn down as
@@ -94,8 +91,6 @@ class HelmSource:
     def _run_list(self) -> list[dict]:
         cmd = ["helm", "list", "--output", "json"]
         cmd += ["--namespace", self.namespace] if self.namespace else ["--all-namespaces"]
-        result = subprocess.run(
-            cmd, check=True, capture_output=True, text=True, timeout=self.timeout
-        )
-        data = json.loads(result.stdout or "[]")
+        stdout = run_tool(cmd, timeout=self.timeout, tool="helm list")
+        data = loads_json(stdout or "[]", tool="helm list")
         return data if isinstance(data, list) else []
