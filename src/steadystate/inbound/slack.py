@@ -21,8 +21,10 @@ import json
 import os
 import time
 import urllib.parse
+import urllib.request
 from collections.abc import Mapping
 
+from .._http import safe_urlopen
 from .base import APPROVE, DECLINE, Command, command_from_text
 
 _APPROVE_ACTION = "steadystate_approve"
@@ -104,3 +106,26 @@ class SlackInbound:
     def respond(self, message: str) -> bytes:
         # replace_original=False -> post the outcome as a follow-up, keep the alert visible.
         return json.dumps({"text": message, "replace_original": False}).encode()
+
+    def defer(self, body: str) -> bytes | None:
+        """Ack a slow slash command immediately (an ephemeral "running...") so Slack doesn't time
+        out; the result is posted to its ``response_url`` by ``complete``. Returns None for a
+        button click (block_actions has no slow work here) -> the synchronous path takes over."""
+        form = urllib.parse.parse_qs(body)
+        if not form.get("response_url"):
+            return None
+        return json.dumps({"response_type": "ephemeral", "text": "running..."}).encode()
+
+    def complete(self, body: str, message: str) -> None:
+        """Post the finished result to the slash command's ``response_url`` (valid ~30 min)."""
+        response_url = urllib.parse.parse_qs(body).get("response_url", [""])[0]
+        if not response_url:
+            return
+        request = urllib.request.Request(
+            response_url,
+            data=json.dumps({"response_type": "in_channel", "text": message}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with safe_urlopen(request, timeout=15):
+            pass

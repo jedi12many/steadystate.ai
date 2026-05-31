@@ -99,6 +99,41 @@ def test_parse_cost_with_and_without_its_period_option():
     assert command_from_payload(payload) == Command(COST, "jeff", "week")
 
 
+def test_defer_acks_a_command_with_a_deferred_response_and_skips_a_ping():
+    adapter = DiscordInbound("deadbeef")
+    assert json.loads(adapter.defer(json.dumps(_command("probe", "prod")))) == {"type": 5}
+    assert adapter.defer(json.dumps({"type": 1})) is None  # a PING is handled by handshake
+    assert adapter.defer("not json") is None
+
+
+def test_complete_patches_the_original_interaction_message(monkeypatch):
+    captured = {}
+
+    def fake_open(request, timeout=None):
+        captured["url"] = request.full_url
+        captured["method"] = request.get_method()
+        captured["body"] = json.loads(request.data)
+        return _NullCtx()
+
+    monkeypatch.setattr("steadystate.inbound.discord.safe_urlopen", fake_open)
+    payload = _command("probe", "prod")
+    payload["application_id"], payload["token"] = "app123", "tok456"
+    DiscordInbound("deadbeef").complete(json.dumps(payload), "prod: 2 alert(s)")
+    assert captured["method"] == "PATCH"
+    assert (
+        captured["url"] == "https://discord.com/api/v10/webhooks/app123/tok456/messages/@original"
+    )
+    assert captured["body"] == {"content": "prod: 2 alert(s)"}
+
+
+class _NullCtx:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
 def test_parse_probe_takes_its_target_option():
     # probe carries a `target` option (not `fingerprint`); the parser takes the first string opt.
     payload = {
@@ -256,10 +291,10 @@ def test_dispatch_end_to_end_pong_and_forged(monkeypatch):
     ping = json.dumps({"type": 1})
     ts = "1700000000"
     headers = {"X-Signature-Ed25519": _sign(signing, ts + ping), "X-Signature-Timestamp": ts}
-    status, reply = dispatch(adapter, headers, ping, ":memory:")
+    status, reply, _ = dispatch(adapter, headers, ping, ":memory:")
     assert status == 200 and json.loads(reply) == {"type": 1}
     # A forged signature -> 401 before anything parses it.
-    status, _ = dispatch(
+    status, _, _ = dispatch(
         adapter, {"X-Signature-Ed25519": "00", "X-Signature-Timestamp": ts}, ping, ":memory:"
     )
     assert status == 401

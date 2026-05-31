@@ -23,8 +23,10 @@ from __future__ import annotations
 
 import json
 import os
+import urllib.request
 from collections.abc import Mapping
 
+from .._http import safe_urlopen
 from .base import (
     APPROVE,
     COST,
@@ -50,6 +52,10 @@ _PING = 1  # Discord interaction types
 _APPLICATION_COMMAND = 2
 _PONG = {"type": _PING}
 _CHANNEL_MESSAGE = 4  # CHANNEL_MESSAGE_WITH_SOURCE -- the operator sees our reply in-channel
+_DEFERRED_MESSAGE = 5  # DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE -- "thinking..."; edit in the result
+_API = "https://discord.com/api/v10"
+# Discord's Cloudflare edge bans the default Python-urllib UA (error 1010); send a real one.
+_USER_AGENT = "steadystate (+https://github.com/jedi12many/steadystate.ai)"
 
 
 def verify_ed25519(public_key_hex: str, message: str, signature_hex: str) -> bool:
@@ -165,3 +171,31 @@ class DiscordInbound:
 
     def respond(self, message: str) -> bytes:
         return json.dumps({"type": _CHANNEL_MESSAGE, "data": {"content": message}}).encode()
+
+    def defer(self, body: str) -> bytes | None:
+        """Ack a slow command with a *deferred* response (type 5) so Discord shows "thinking..."
+        and we get ~15 min to edit in the real result via ``complete``. None for a non-command
+        payload (a PING is handled by ``handshake``), so the synchronous path takes over."""
+        try:
+            payload = json.loads(body)
+        except ValueError:
+            return None
+        if not isinstance(payload, dict) or payload.get("type") != _APPLICATION_COMMAND:
+            return None
+        return json.dumps({"type": _DEFERRED_MESSAGE}).encode()
+
+    def complete(self, body: str, message: str) -> None:
+        """Edit the deferred response in place with the finished result (PATCH @original). The
+        interaction token in the URL authenticates the edit -- no bot token needed."""
+        payload = json.loads(body)
+        app_id, token = payload.get("application_id"), payload.get("token")
+        if not app_id or not token:
+            return
+        request = urllib.request.Request(
+            f"{_API}/webhooks/{app_id}/{token}/messages/@original",
+            data=json.dumps({"content": message}).encode(),
+            headers={"Content-Type": "application/json", "User-Agent": _USER_AGENT},
+            method="PATCH",
+        )
+        with safe_urlopen(request, timeout=15):
+            pass
