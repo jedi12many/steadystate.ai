@@ -11,7 +11,7 @@ import json
 import pytest
 
 from steadystate.inbound import build_inbound
-from steadystate.inbound.base import APPROVE, DECLINE, HELP, PENDING, PROBE, Command
+from steadystate.inbound.base import APPROVE, COST, DECLINE, HELP, PENDING, PROBE, Command
 from steadystate.inbound.discord import (
     DiscordInbound,
     command_from_payload,
@@ -59,6 +59,25 @@ def test_parse_approve_and_decline():
 def test_parse_readonly_help_and_pending_take_no_argument():
     assert command_from_payload(_readonly_command("help")) == Command(HELP, "jeff")
     assert command_from_payload(_readonly_command("pending", "amy")) == Command(PENDING, "amy")
+
+
+def test_parse_cost_with_and_without_its_period_option():
+    assert command_from_payload(_readonly_command("cost")) == Command(COST, "jeff")  # no period
+    payload = {
+        "type": 2,
+        "data": {
+            "name": "steadystate",
+            "options": [
+                {
+                    "name": "cost",
+                    "type": 1,
+                    "options": [{"name": "period", "type": 3, "value": "week"}],
+                }
+            ],
+        },
+        "member": {"user": {"username": "jeff"}},
+    }
+    assert command_from_payload(payload) == Command(COST, "jeff", "week")
 
 
 def test_parse_probe_takes_its_target_option():

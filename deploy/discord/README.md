@@ -60,8 +60,10 @@ subcommands for discovery — `/steadystate help` lists what the listener accept
 `register.py` after upgrading to pick them up (the subcommands ship in `command.json`).
 
 **Summon a scan:** `/steadystate probe <target>` runs an on-demand scan of a named target and
-posts what's wrong back to the channel (read-only). Targets come from the listener's
-`STEADYSTATE_TARGETS` file (name → source + path + label) — see
+posts what's wrong back to the channel (read-only), with a one-line spend footer. Targets come
+from the listener's `STEADYSTATE_TARGETS` file (name → source + path + label) — see
 [deploy/kubernetes/listener.yaml](../kubernetes/listener.yaml). It honors your mutes/snoozes by
-default; pass the `unmute: true` option to show everything for that run (re-run `register.py`
-after upgrading so the new option appears).
+default; pass the `unmute: true` option to show everything for that run.
+
+**See spend:** `/steadystate cost` posts the LLM spend rollup (or `cost period:day|week` for the
+trend). Re-run `register.py` after upgrading so the new `cost` subcommand + `unmute` option appear.
