@@ -23,12 +23,9 @@ reconcile on presence alone, so neither shows as false drift.
 
 from __future__ import annotations
 
-import json
-import subprocess
-
 from ..model import Drift, Provenance, Resource
 from ..reconcile import reconcile
-from .base import Capabilities
+from .base import Capabilities, loads_json, run_tool
 
 # Workload kinds whose containers live under spec.template.spec; a bare Pod keeps
 # them under spec directly.
@@ -239,10 +236,12 @@ class KubernetesSource:
         declared: object | None = None,
         observed: object | None = None,
         get_args: list[str] | None = None,
+        timeout: float = 30.0,  # `kubectl get` is a fast API read
     ) -> None:
         self._declared = declared
         self._observed = observed
         self._get_args = get_args
+        self.timeout = timeout
 
     def collect_declared(self) -> list[Resource]:
         if self._declared is None:
@@ -261,10 +260,9 @@ class KubernetesSource:
     def _run_kubectl(self) -> object:
         if self._get_args is None:
             raise ValueError("KubernetesSource needs observed or get_args")
-        res = subprocess.run(
+        stdout = run_tool(
             ["kubectl", "get", *self._get_args, "-o", "json"],
-            check=True,
-            capture_output=True,
-            text=True,
+            timeout=self.timeout,
+            tool="kubectl get",
         )
-        return json.loads(res.stdout)
+        return loads_json(stdout, tool="kubectl get")

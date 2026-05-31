@@ -10,12 +10,10 @@ document into Drift records.
 
 from __future__ import annotations
 
-import json
-import subprocess
 from pathlib import Path
 
 from ..model import ChangeType, Drift, Provenance
-from .base import Capabilities
+from .base import Capabilities, loads_json, run_tool
 
 # terraform plan action lists -> our ChangeType
 _ACTION_MAP = {
@@ -84,9 +82,11 @@ class TerraformSource:
         self,
         working_dir: str | Path | None = None,
         plan_json: dict | None = None,
+        timeout: float = 300.0,  # a live `terraform plan` against real cloud can take minutes
     ) -> None:
         self.working_dir = Path(working_dir) if working_dir else None
         self._plan_json = plan_json
+        self.timeout = timeout
 
     def collect_drift(self) -> list[Drift]:
         plan = self._plan_json if self._plan_json is not None else self._run_terraform()
@@ -96,17 +96,17 @@ class TerraformSource:
         if self.working_dir is None:
             raise ValueError("TerraformSource needs working_dir or plan_json")
         planfile = self.working_dir / ".steadystate.tfplan"
-        subprocess.run(
+        run_tool(
             ["terraform", "plan", "-refresh=true", "-out", str(planfile)],
             cwd=self.working_dir,
-            check=True,
-            capture_output=True,
+            timeout=self.timeout,
+            tool="terraform plan",
         )
-        res = subprocess.run(
+        stdout = run_tool(
             ["terraform", "show", "-json", str(planfile)],
             cwd=self.working_dir,
-            check=True,
-            capture_output=True,
-            text=True,
+            timeout=self.timeout,
+            tool="terraform show",
         )
-        return json.loads(res.stdout)
+        parsed = loads_json(stdout, tool="terraform show")
+        return parsed if isinstance(parsed, dict) else {}
