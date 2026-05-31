@@ -203,6 +203,13 @@ def scan(
         help="Break this scan's LLM spend down by caller (a one-line total always prints when "
         "any calls were made).",
     ),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        "-v",
+        help="Show the evidence per alert on the console: the declared->observed before/after "
+        "(and policy/symptom detail), so a scan can be audited, not just trusted.",
+    ),
 ) -> None:
     """Scan declared state for drift and surface the Alerts."""
     if autonomy not in ("observe", "suggest", "auto"):
@@ -212,6 +219,10 @@ def scan(
             "--autonomy auto needs the state store for its audit trail; remove --stateless."
         )
     surfaces = _surfaces([name.strip() for name in to.split(",") if name.strip()])
+    if verbose:  # --verbose is a console-rendering choice; flip it on any console surface
+        for surface in surfaces:
+            if isinstance(surface, ConsoleSurface):
+                surface.verbose = True
     # The reasoned report -- drift + probe symptoms, scored/correlated/enriched -- comes from
     # the shared engine, the SAME path the chat-summoned probe runs (inbound/server.py). An
     # unknown source/probe/correlator/enricher/tuning surfaces as a clean BadParameter.

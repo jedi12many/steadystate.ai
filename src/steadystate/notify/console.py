@@ -8,11 +8,13 @@ cleared since the last scan are listed once under "Resolved since last scan".
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING
 
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 
 from ..reason.alert import Alert
@@ -22,6 +24,25 @@ if TYPE_CHECKING:
     from ..reconcile_state import ResolvedFinding
 
 _SEVERITY_STYLE = {"low": "dim", "medium": "yellow", "high": "red", "critical": "bold red"}
+
+
+def _compact(value: object) -> str:
+    """A one-line, length-capped, markup-safe view of a drift's declared/observed side."""
+    return escape(json.dumps(value, default=str)[:240]) if value is not None else "(none)"
+
+
+def _evidence_lines(alert: Alert) -> list[str]:
+    """The before/after evidence (`--verbose`) so a scan can be *audited*: for each drift the
+    declared vs observed state, plus a policy finding's / symptom's specifics. The reasoning,
+    references, and recommended action already render above; this adds the raw diff."""
+    lines: list[str] = []
+    for d in alert.drifts:
+        if d.declared is not None or d.observed is not None:
+            lines.append(f"[dim]declared:[/dim] {_compact(d.declared)}")
+            lines.append(f"[dim]observed:[/dim] {_compact(d.observed)}")
+    lines += [f"[dim]finding:[/dim] {escape(f.detail)}" for f in alert.findings]
+    lines += [f"[dim]symptom:[/dim] {escape(s.detail)}" for s in alert.symptoms]
+    return lines
 
 
 def _reference_chips(alert: Alert) -> str:
@@ -63,8 +84,9 @@ def _memory_marker(alert: Alert, now: datetime | None) -> str | None:
 class ConsoleSurface:
     name = "console"
 
-    def __init__(self) -> None:
+    def __init__(self, verbose: bool = False) -> None:
         self._console = Console()
+        self.verbose = verbose  # --verbose: render the declared->observed evidence per alert
 
     def emit(
         self,
@@ -108,6 +130,10 @@ class ConsoleSurface:
                 body += f"\n\n[dim]{chips}[/dim]"
             if alert.runtime_context:  # live-health note from enrichment; absent -> nothing
                 body += f"\n[dim]{alert.runtime_context}[/dim]"
+            if self.verbose:  # the raw before/after evidence, to audit the finding
+                evidence = _evidence_lines(alert)
+                if evidence:
+                    body += "\n\n" + "\n".join(evidence)
             self._console.print(Panel(body, title=title, title_align="left"))
 
         if resolved:
