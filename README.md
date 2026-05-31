@@ -35,7 +35,7 @@ Everything here runs with **no model**: fully deterministic, fully testable.
 - **Domain packs** — security (AWS · GCP · Azure, mapped to ATT&CK), Docker CIS, Kubernetes Pod Security. Severity rises only for *recognized* exposure; compliance baselines flag standing violations, not just drift.
 - **Enrichment** (`--enrich prometheus`) — a drift on a resource breaching a PromQL bar *right now* pages louder.
 - **Surfaces** (`--to`) — `console · slack · teams · discord · prometheus · grafana`. An unconfigured surface says so and skips; it never pretends it delivered.
-- **Guardrailed remediation** (`--autonomy observe|suggest|auto`) — apply-eligibility → snapshot → verify → revert. Approve from the terminal or a chat button (Slack/Teams/Discord). A `REMOVED` drift is never auto-eligible, so it reconciles *toward* declared config and never destroys; each alert is tagged **`can apply`** vs **`manual`** so you know what the tool can actually carry out.
+- **Guardrailed remediation** (`--autonomy observe|suggest|auto`) — apply-eligibility → snapshot → verify, with **advisory revert** guidance (Terraform/Ansible aren't transactional, so rollback is steps to run, not an automatic undo). Approve from the terminal or a chat button (Slack/Teams/Discord). A `REMOVED` drift is never auto-eligible, so it reconciles *toward* declared config and never destroys. **Applying is per-source: only `terraform` and `ansible` have executors** — the other five are *detect-only* (drift is surfaced, not applied), and each alert is tagged **`can apply`** vs **`manual`** so you know which is which.
 - **Extensible** — sources, packs, surfaces, and probes are plugins; a third-party package adds one via an entry point, no fork.
 
 Self-describing: `steadystate catalog` and `steadystate commands` print exactly what this build can do and run.
@@ -79,7 +79,7 @@ Python, stdlib-only at the core (HTTP/LLM via `urllib`; `typer` + `rich` for the
 
 ## Security
 
-A tool that can change live infrastructure should hold itself to the bar it enforces. Every PR is scanned — **CodeQL** (SAST), **pip-audit** (dependency CVEs), and **bandit** (Python SAST), plus Dependabot — and every outbound request goes through one http(s)-allow-listed gate. The remediation **guardrails** (apply-eligibility → snapshot → verify → revert; chat is a trigger, never a bypass) are the highest-severity area: see **[SECURITY.md](./SECURITY.md)** for what's in scope and how to report a vulnerability privately.
+A tool that can change live infrastructure should hold itself to the bar it enforces. Every PR is scanned — **CodeQL** (SAST), **pip-audit** (dependency CVEs), and **bandit** (Python SAST), plus Dependabot — and every outbound request goes through one http(s)-allow-listed gate. The remediation **guardrails** (apply-eligibility → snapshot → verify, with advisory revert guidance; chat is a trigger, never a bypass) are the highest-severity area: see **[SECURITY.md](./SECURITY.md)** for what's in scope and how to report a vulnerability privately.
 
 ## License
 
