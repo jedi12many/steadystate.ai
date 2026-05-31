@@ -77,7 +77,8 @@ CREATE TABLE IF NOT EXISTS pending_actions (
     status         TEXT NOT NULL,
     created_at     TEXT NOT NULL,
     actor          TEXT,
-    environment    TEXT
+    environment    TEXT,
+    patch          TEXT
 )
 """
 
@@ -132,17 +133,23 @@ class Finding:
 
 @dataclass(frozen=True)
 class PendingAction:
-    """A remediation offered for approval -- the gated command an `approve` would run."""
+    """A remediation offered for approval. A suggestion can carry either or both directions: the
+    *enforce* command an ``approve`` would run (when apply-eligible), and an *accept-reality*
+    ``patch`` -- a reviewable code change for the same drift (e.g. a REMOVED drift, where enforcing
+    would destroy the resource, so the only safe fix is to restore its declaration in code)."""
 
     fingerprint: str  # the drift's fingerprint -- the same key the findings table uses
     source: str  # so approve can rebuild the source + executor
     path: str  # the scan input (terraform dir, captured file, ...) approve re-reads
     drift_identity: str
-    command: str  # display: the eligible remediation command
+    command: str  # display: the eligible remediation command ("" when there's no eligible apply)
     status: str = PENDING  # overwritten by the store on read; default eases construction
     created_at: str = ""  # the store stamps this on record
     actor: str | None = None
     environment: str | None = None  # the scan's --label, so the audit log can record the env
+    # The accept-reality code change for this drift (a unified diff a human reviews + applies), or
+    # None when there's no code-change form. Surfaced by `pending`; the tool never auto-applies it.
+    patch: str | None = None
 
 
 @dataclass(frozen=True)
@@ -194,6 +201,8 @@ class StateStore:
         cols = {row["name"] for row in self._conn.execute("PRAGMA table_info(pending_actions)")}
         if "environment" not in cols:
             self._conn.execute("ALTER TABLE pending_actions ADD COLUMN environment TEXT")
+        if "patch" not in cols:
+            self._conn.execute("ALTER TABLE pending_actions ADD COLUMN patch TEXT")
 
     def close(self) -> None:
         self._conn.close()
@@ -460,7 +469,8 @@ class StateStore:
         created = existing.created_at if existing is not None else _iso(now)
         self._conn.execute(
             "INSERT OR REPLACE INTO pending_actions (fingerprint, source, path, drift_identity, "
-            "command, status, created_at, actor, environment) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "command, status, created_at, actor, environment, patch) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 action.fingerprint,
                 action.source,
@@ -471,6 +481,7 @@ class StateStore:
                 created,
                 None,
                 action.environment,
+                action.patch,
             ),
         )
 
@@ -581,6 +592,7 @@ def _row_to_pending(row: sqlite3.Row) -> PendingAction:
         created_at=row["created_at"],
         actor=row["actor"],
         environment=row["environment"],
+        patch=row["patch"],
     )
 
 
