@@ -22,6 +22,12 @@
           "name": "target",
           "description": "The named target to scan (from the listener's targets file)",
           "required": true
+        },
+        {
+          "type": 5,
+          "name": "unmute",
+          "description": "Show muted/snoozed findings too (bypass suppression for this run)",
+          "required": false
         }
       ]
     },

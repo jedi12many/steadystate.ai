@@ -89,6 +89,16 @@ def test_text_grammar_parses_act_and_readonly_verbs():
     assert command_from_text("probe prod-k8s", "amy") == Command(PROBE, "amy", "prod-k8s")
 
 
+def test_text_grammar_parses_the_probe_unmute_flag():
+    assert command_from_text("probe prod unmute", "amy") == Command(
+        PROBE, "amy", "prod", bypass=True
+    )
+    assert command_from_text("probe prod --unmute", "amy") == Command(
+        PROBE, "amy", "prod", bypass=True
+    )
+    assert command_from_text("probe prod", "amy") == Command(PROBE, "amy", "prod", bypass=False)
+
+
 def test_text_grammar_is_case_insensitive_and_skips_leading_noise():
     assert command_from_text("hey  PENDING please", "amy") == Command(PENDING, "amy")
 
@@ -238,6 +248,57 @@ def test_run_command_probe_unknown_target_lists_the_known_ones(monkeypatch, tmp_
 def test_run_command_probe_with_no_targets_configured(monkeypatch):
     monkeypatch.delenv("STEADYSTATE_TARGETS", raising=False)
     assert "No targets configured" in run_command(Command(PROBE, "amy", "prod"), ":memory:")
+
+
+def test_run_command_probe_honors_mutes_and_unmute_bypasses(tmp_path, monkeypatch):
+    # A terraform target with one (security-relevant) drift -- read from a plan.json, no subprocess.
+    from datetime import UTC, datetime
+
+    from steadystate.engine import build_report
+    from steadystate.reconcile_state import _fingerprints
+    from steadystate.state import StateStore
+
+    plan = tmp_path / "plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "resource_changes": [
+                    {
+                        "address": "aws_s3_bucket.logs",
+                        "type": "aws_s3_bucket",
+                        "name": "logs",
+                        "change": {
+                            "actions": ["update"],
+                            "before": {"acl": "private"},
+                            "after": {"acl": "public-read"},
+                        },
+                    }
+                ]
+            }
+        )
+    )
+    monkeypatch.setenv(
+        "STEADYSTATE_TARGETS",
+        _targets_file(
+            tmp_path, {"demo": {"source": "terraform", "path": str(plan), "label": "demo"}}
+        ),
+    )
+    db = str(tmp_path / "s.db")
+
+    # before mute: the drift surfaces
+    assert "1 alert" in run_command(Command(PROBE, "me", "demo"), db)
+
+    # mute its fingerprint in the same store the listener uses
+    fp = _fingerprints(build_report("terraform", plan, label="demo").alerts[0])[0]
+    with StateStore(db) as store:
+        store.mute(fp, None, "me", datetime.now(UTC))
+
+    # after mute: honored by default, but transparently (count shown, never silent)
+    muted = run_command(Command(PROBE, "me", "demo"), db)
+    assert "clean except 1 muted" in muted and "unmute" in muted
+
+    # unmute bypasses suppression for this run
+    assert "1 alert" in run_command(Command(PROBE, "me", "demo", bypass=True), db)
 
 
 def test_run_command_probe_reports_an_engine_failure_without_crashing(monkeypatch, tmp_path):

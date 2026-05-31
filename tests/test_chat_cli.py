@@ -57,6 +57,53 @@ def test_probe_with_no_targets_configured(runner, tmp_path, monkeypatch):
     assert "No targets configured" in result.stdout
 
 
+def test_probe_honors_mutes_and_unmute_flag(runner, tmp_path, monkeypatch):
+    from datetime import UTC, datetime
+
+    from steadystate.cli import app
+    from steadystate.engine import build_report
+    from steadystate.reconcile_state import _fingerprints
+    from steadystate.state import StateStore
+
+    plan = tmp_path / "plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "resource_changes": [
+                    {
+                        "address": "aws_s3_bucket.logs",
+                        "type": "aws_s3_bucket",
+                        "name": "logs",
+                        "change": {
+                            "actions": ["update"],
+                            "before": {"acl": "private"},
+                            "after": {"acl": "public-read"},
+                        },
+                    }
+                ]
+            }
+        )
+    )
+    _targets(
+        tmp_path, monkeypatch, {"demo": {"source": "terraform", "path": str(plan), "label": "demo"}}
+    )
+    db = str(tmp_path / "s.db")
+    with StateStore(db) as store:
+        store.mute(
+            _fingerprints(build_report("terraform", plan).alerts[0])[0],
+            None,
+            "me",
+            datetime.now(UTC),
+        )
+
+    # default honors the mute
+    hidden = runner.invoke(app, ["probe", "demo", "--state", db])
+    assert "clean except 1 muted" in hidden.stdout
+    # --unmute bypasses it
+    shown = runner.invoke(app, ["probe", "demo", "--unmute", "--state", db])
+    assert "1 alert" in shown.stdout
+
+
 # -- chat (interactive REPL) ----------------------------------------------------
 
 
