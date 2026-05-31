@@ -22,7 +22,7 @@ from .notify import SURFACES, build_surfaces
 from .notify.base import Surface
 from .notify.console import ConsoleSurface
 from .probe import PROBES
-from .reason.cost import roll_up
+from .reason.cost import roll_up, roll_up_by_period, scan_cost_line
 from .reason.enrich import ENRICHERS
 from .reason.pipeline import CORRELATORS
 from .reconcile_state import reconcile
@@ -197,6 +197,12 @@ def scan(
         help="Environment label for this scan (e.g. prod-aws, staging) -- shown on every alert "
         "so an operator knows which environment it came from. Omit for none.",
     ),
+    cost: bool = typer.Option(
+        False,
+        "--cost",
+        help="Break this scan's LLM spend down by caller (a one-line total always prints when "
+        "any calls were made).",
+    ),
 ) -> None:
     """Scan declared state for drift and surface the Alerts."""
     if autonomy not in ("observe", "suggest", "auto"):
@@ -243,6 +249,14 @@ def scan(
                     _auto_apply(store, recorded)
     for surface in surfaces:
         surface.emit(report, resolved=resolved)
+    # A paid call should never go unseen: print this scan's spend (silent on a --no-llm run).
+    # --cost adds the per-caller breakdown of this scan. Cumulative spend lives in `cost`.
+    spend = scan_cost_line(report.llm_calls)
+    if spend:
+        typer.echo(spend)
+        if cost:
+            for r in roll_up(report.llm_calls):
+                typer.echo(f"  {r.caller:<12} ~${r.cost_usd:.4f}  {r.calls} call(s)")
 
 
 @app.command()
@@ -347,9 +361,16 @@ def cost(
         help="Spend window: all | 24h | 60m (60m is the fastest signal a caller has "
         "gone wild on retries).",
     ),
+    by: str = typer.Option(
+        "",
+        "--by",
+        help="Bucket spend over time into a trend: day | week (vs the default per-caller "
+        "rollup). Composes with --window. For a richer time series, surface to Prometheus.",
+    ),
 ) -> None:
-    """Estimated LLM spend by caller. Raw tokens are recorded per call (incl. failures);
-    dollars are priced at read time, so history re-prices when rates change."""
+    """Estimated LLM spend, by caller (default) or over time (--by day|week). Raw tokens are
+    recorded per call (incl. failures); dollars are priced at read time, so history re-prices
+    when rates change."""
     cutoff: datetime | None = None
     if window == "24h":
         cutoff = datetime.now(UTC) - timedelta(hours=24)
@@ -357,7 +378,24 @@ def cost(
         cutoff = datetime.now(UTC) - timedelta(hours=1)
     elif window != "all":
         raise typer.BadParameter("window must be: all | 24h | 60m")
+    if by and by not in ("day", "week"):
+        raise typer.BadParameter("--by must be: day | week")
+
     with _open_store(state) as store:
+        if by:
+            periods = roll_up_by_period(store.timed_llm_calls_since(cutoff), by)
+            if not periods:
+                typer.echo("no LLM calls recorded yet.")
+                return
+            total = sum(p.cost_usd for p in periods)
+            typer.echo(f"LLM spend ({window}, by {by}): ~${total:.4f} total")
+            for p in periods:
+                fail = f"  {p.failures} failed" if p.failures else ""
+                typer.echo(
+                    f"  {p.period:<11} ~${p.cost_usd:.4f}  {p.calls} call(s){fail}  "
+                    f"{p.total_tokens / 1000:.1f}k tokens"
+                )
+            return
         rows = roll_up(store.llm_calls_since(cutoff))
     if not rows:
         typer.echo("no LLM calls recorded yet.")

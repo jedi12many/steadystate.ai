@@ -90,7 +90,7 @@ The drift core is **deterministic** — detection, scoring, the security/complia
 - **Anthropic** — `pip install steadystate[llm]`, set `ANTHROPIC_API_KEY`.
 - **Any OpenAI-compatible endpoint** (OpenAI, Azure OpenAI, GitHub Models, a gateway) — set `STEADYSTATE_LLM_BASE_URL` / `_API_KEY` / `_MODEL`. No extra install.
 
-Kill switch: `--no-llm` (or `STEADYSTATE_LLM_ENABLED=false`) makes zero model calls. Spend visibility: `steadystate cost` rolls up token spend by caller over all / 24h / 60m (priced at read time, cache-aware).
+Kill switch: `--no-llm` (or `STEADYSTATE_LLM_ENABLED=false`) makes zero model calls. Spend visibility: every scan prints a one-line **`LLM: N calls · ~$X`** footer (so a paid call never goes unseen; `--cost` breaks it down by caller). `steadystate cost` rolls up token spend by caller over all / 24h / 60m, or as a trend with **`--by day|week`** (priced at read time, cache-aware). For a richer time series, surface to **Prometheus → Grafana** (`steadystate_llm_cost_usd_total`).
 
 ## Deploying
 
