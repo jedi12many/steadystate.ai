@@ -157,8 +157,10 @@ def test_auto_applies_an_eligible_drift_without_a_human(tmp_path):
 
 
 def test_auto_never_applies_a_removed_drift(tmp_path):
-    # A delete is never eligible (it would destroy a live resource), so auto records nothing
-    # and applies nothing -- the deterministic guardrail, not the LLM, is the floor.
+    # A delete is never eligible (it would destroy a live resource), so auto applies nothing --
+    # the deterministic guardrail, not the LLM, is the floor. It IS now recorded as a patch-only
+    # *accept-reality* suggestion (restore the declaration) for later human review, but with no
+    # enforce command, so it can never reach the auto-apply path.
     removed = {
         "resource_changes": [
             {
@@ -172,7 +174,9 @@ def test_auto_never_applies_a_removed_drift(tmp_path):
     assert result.exit_code == 0
     assert "nothing eligible to apply" in result.stdout
     with StateStore(db) as store:
-        assert store.all_pending() == []
+        [pending] = store.all_pending()
+        assert pending.command == ""  # no enforce direction -> never auto-applied
+        assert pending.patch is not None and "import {" not in pending.patch  # restore, not import
 
 
 def test_auto_rejects_stateless(tmp_path):

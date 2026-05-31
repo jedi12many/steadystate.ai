@@ -1,8 +1,10 @@
 """Remediation artifacts: the deterministic codify renderer + a git-apply-able patch.
 
-A remediation expressed as a *code change* (act/artifact.py, act/codify.py). The patch must be a
-real unified diff `git apply` accepts, and the Terraform adopt renderer must turn a not-in-state
-(REMOVED) drift into a non-destructive import -- never a destroy -- and decline everything else.
+A remediation expressed as an *accept-reality* code change (act/artifact.py, act/codify.py). The
+patch must be a real unified diff `git apply` accepts. For steadystate's terraform `REMOVED`
+(config deleted while the resource is still in state, so apply would destroy it), the renderer
+must **re-add the resource block with NO `import` block** -- importing an in-state address is a
+hard terraform error -- and must decline addresses whose blocks can't be reconstructed safely.
 """
 
 from __future__ import annotations
@@ -13,7 +15,7 @@ import subprocess
 import pytest
 
 from steadystate.act.artifact import new_file_patch
-from steadystate.act.codify import terraform_adopt
+from steadystate.act.codify import terraform_restore
 from steadystate.act.terraform import TerraformExecutor
 from steadystate.model import ChangeType, Drift, Provenance
 
@@ -39,7 +41,6 @@ def test_new_file_patch_shape():
 
 
 def test_new_file_patch_normalizes_missing_trailing_newline():
-    # No trailing newline in content -> still a clean patch (one normalized newline, no marker).
     patch = new_file_patch("x", "only-line")
     assert patch.endswith("@@ -0,0 +1,1 @@\n+only-line\n")
     assert "No newline" not in patch
@@ -47,52 +48,49 @@ def test_new_file_patch_normalizes_missing_trailing_newline():
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
 def test_patch_applies_cleanly_with_git(tmp_path):
-    # The real proof: git must accept and apply the generated diff in a fresh repo.
+    # Proves the diff is valid git (NOT that `terraform apply` of it is a no-op -- that needs a
+    # provider + state, an integration concern; see the module docstring's generate-config caveat).
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
-    artifact = terraform_adopt(_removed())
-    patch_file = tmp_path / "fix.patch"
-    patch_file.write_text(artifact.patch, encoding="utf-8")
+    artifact = terraform_restore(_removed())
+    (tmp_path / "fix.patch").write_text(artifact.patch, encoding="utf-8")
 
     subprocess.run(["git", "apply", "--check", "fix.patch"], cwd=tmp_path, check=True)
     subprocess.run(["git", "apply", "fix.patch"], cwd=tmp_path, check=True)
     written = (tmp_path / artifact.path).read_text(encoding="utf-8")
     assert 'resource "aws_s3_bucket" "logs"' in written
-    assert "import {" in written
 
 
-# -- terraform_adopt: only the not-in-state case, and always non-destructive -----
+# -- terraform_restore: re-add the block, never an import, never a destroy -------
 
 
-def test_adopt_renders_import_and_resource_blocks():
-    artifact = terraform_adopt(_removed())
+def test_restore_renders_a_resource_block_and_no_import():
+    artifact = terraform_restore(_removed())
     assert artifact is not None
-    assert artifact.path == "steadystate-adopted/aws_s3_bucket.logs.tf"
+    assert artifact.path == "steadystate-restored/aws_s3_bucket.logs.tf"
     assert artifact.change_type is ChangeType.REMOVED
-    assert artifact.destructive is False  # adopt imports; it never destroys
+    assert artifact.destructive is False  # edits files only -- never live infra
     body = artifact.patch
-    assert "import {" in body and "to = aws_s3_bucket.logs" in body
-    assert 'id = "my-logs-bucket"' in body  # taken from observed.id, not a placeholder
     assert 'resource "aws_s3_bucket" "logs" {' in body
-    assert 'acl = "private"' in body  # a scalar observed attr is rendered
-    assert any("imports" in op for op in artifact.state_ops)
+    assert "import {" not in body  # the bug this fixes: in-state import is a hard tf error
+    assert 'acl = "private"' in body  # a scalar observed attr, as a starting point
+    assert "id =" not in body  # id is read-only -- never emitted as config
+    assert any("does NOT destroy" in op or "destroy" in op for op in artifact.state_ops)
 
 
-def test_adopt_flags_unknown_import_id():
-    artifact = terraform_adopt(_removed(observed={"acl": "private"}))  # no id in observed
+def test_restore_omits_nested_attrs_and_points_at_generate_config():
+    artifact = terraform_restore(_removed(observed={"id": "b", "tags": {"team": "infra"}}))
     assert artifact is not None
-    assert "REPLACE_WITH_IMPORT_ID" in artifact.patch
-    assert any("Set the import `id`" in op for op in artifact.state_ops)
-    assert "Set the import `id`" in artifact.body
+    assert "tags" not in artifact.patch  # the nested dict is not rendered
+    assert "generate-config-out" in artifact.patch  # the honest way to complete the block
 
 
-def test_adopt_omits_nested_attrs_with_a_pointer_to_generate_config():
-    artifact = terraform_adopt(_removed(observed={"id": "b", "tags": {"team": "infra"}}))
+def test_restore_escapes_hcl_interpolation():
+    artifact = terraform_restore(_removed(observed={"name": "live-${env}-bkt"}))
     assert artifact is not None
-    assert "generate-config-out" in artifact.patch  # nested attr omitted, pointer left
-    assert "tags" not in artifact.patch  # the nested dict itself is not rendered
+    assert "$${env}" in artifact.patch  # not interpreted as terraform interpolation
 
 
-def test_adopt_declines_non_removed_drift():
+def test_restore_declines_non_removed_drift():
     for change in (ChangeType.MODIFIED, ChangeType.ADDED):
         drift = Drift(
             identity="aws_s3_bucket.logs",
@@ -101,11 +99,20 @@ def test_adopt_declines_non_removed_drift():
             provenance=Provenance(source="terraform"),
             observed={"id": "b"},
         )
-        assert terraform_adopt(drift) is None  # apply direction / HCL edit -- out of this slice
+        assert terraform_restore(drift) is None  # accept-change needs an HCL edit -- out of slice
 
 
-def test_adopt_declines_malformed_address():
-    assert terraform_adopt(_removed(identity="not-an-address")) is None
+@pytest.mark.parametrize(
+    "address",
+    [
+        "not-an-address",  # no dot
+        "module.foo.aws_s3_bucket.bar",  # module-nested
+        "aws_instance.web[0]",  # count index
+        'aws_instance.web["k"]',  # for_each key
+    ],
+)
+def test_restore_declines_addresses_it_cannot_reconstruct(address):
+    assert terraform_restore(_removed(identity=address)) is None
 
 
 # -- the executor exposes it as the optional Proposer capability -----------------

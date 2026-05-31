@@ -15,7 +15,6 @@ from rich.table import Table
 from .act import EXECUTORS, build_executor
 from .act.approve import apply_pending, decline_pending
 from .act.base import Proposer
-from .act.deliver import build_deliveries
 from .catalog import gather_catalog, render_console, render_html
 from .engine import build_report
 from .inbound import INBOUND, build_inbound
@@ -89,72 +88,41 @@ def _open_store(state: Path) -> StateStore:
 def _record_suggestions(
     store: StateStore, source: str, path: Path, report, now: datetime, environment: str | None
 ) -> list[str]:
-    """Under `--autonomy suggest`/`auto`, offer an eligible remediation per drift. Returns the
-    fingerprints recorded (what `auto` then applies). An observe-only source (no executor) has
-    nothing to suggest. Only `plan.eligible` drifts are recorded -- a REMOVED drift, which would
-    destroy a live resource, is never eligible, so it can never reach the auto-apply path."""
+    """Under `--autonomy suggest`/`auto`, record a suggestion per drift. A suggestion carries
+    whichever directions exist: the *enforce* command (when apply-eligible) and/or an
+    *accept-reality* patch (a code change for the same drift, when the executor can render one).
+
+    Returns only the **apply-eligible** fingerprints -- the set `auto` then applies. A patch-only
+    suggestion (e.g. a REMOVED drift, where enforcing would destroy the resource) is recorded for
+    review but never returned, so it can never reach the auto-apply path: the model is still not
+    in the loop and `auto` still never destroys. An observe-only source has nothing to record."""
     executor = build_executor(source, path)
     if executor is None:
         return []
-    recorded: list[str] = []
+    eligible: list[str] = []
     for alert in report.alerts:
         for drift in alert.drifts:
             plan = executor.plan_for(drift)
+            # isinstance inline (not a saved bool) so the type checker narrows `executor` to
+            # Proposer for the call -- an executor without the optional capability yields no patch.
+            artifact = executor.propose(drift) if isinstance(executor, Proposer) else None
+            if not plan.eligible and artifact is None:
+                continue  # nothing to enforce and nothing to accept -- not a suggestion
+            store.record_pending(
+                PendingAction(
+                    fingerprint=drift.fingerprint,
+                    source=source,
+                    path=str(path),
+                    drift_identity=drift.identity,
+                    command=" ".join(plan.command) if plan.eligible else "",
+                    environment=environment,
+                    patch=artifact.patch if artifact is not None else None,
+                ),
+                now,
+            )
             if plan.eligible:
-                store.record_pending(
-                    PendingAction(
-                        fingerprint=drift.fingerprint,
-                        source=source,
-                        path=str(path),
-                        drift_identity=drift.identity,
-                        command=" ".join(plan.command),
-                        environment=environment,
-                    ),
-                    now,
-                )
-                recorded.append(drift.fingerprint)
-    return recorded
-
-
-def _propose(source: str, path: Path, report, deliver_names: list[str]) -> None:
-    """Under `--autonomy propose`, render each drift as a reviewable *code change* and ship it
-    through the chosen delivery adapter(s). The patch is deterministic (the LLM is never in it);
-    delivery holds any auth, and the default `patch-file` needs none. A source whose executor
-    can't express a fix as code (observe-only, or apply-only like Ansible) has nothing to propose
-    and says so. An unconfigured adapter is skipped honestly, never silently dropped."""
-    executor = build_executor(source, path)
-    if not isinstance(executor, Proposer):
-        typer.echo(f"autonomy=propose: source '{source}' has no code-change remediations.")
-        return
-    try:
-        adapters = build_deliveries(deliver_names)
-    except ValueError as exc:
-        raise typer.BadParameter(str(exc)) from None
-    ready = []
-    for adapter in adapters:
-        if adapter.ready():
-            ready.append(adapter)
-        else:
-            typer.echo(f"  delivery '{adapter.name}' is not configured; skipping.")
-    artifacts = [
-        artifact
-        for alert in report.alerts
-        for drift in alert.drifts
-        if (artifact := executor.propose(drift)) is not None
-    ]
-    if not artifacts:
-        typer.echo("autonomy=propose: no code-change remediations for this scan.")
-        return
-    typer.echo(f"autonomy=propose: {len(artifacts)} code-change artifact(s).")
-    for artifact in artifacts:
-        marker = " [DESTRUCTIVE]" if artifact.destructive else ""
-        typer.echo(f"  {artifact.title}{marker}")
-        for adapter in ready:
-            receipt = adapter.deliver(artifact)
-            verb = "delivered" if receipt.delivered else "skipped"
-            typer.echo(f"    {verb} via {adapter.name} -> {receipt.ref}")
-        for op in artifact.state_ops:
-            typer.echo(f"    state: {op}")
+                eligible.append(drift.fingerprint)
+    return eligible
 
 
 def _auto_apply(store: StateStore, fingerprints: list[str]) -> None:
@@ -252,18 +220,11 @@ def scan(
     autonomy: str = typer.Option(
         "observe",
         "--autonomy",
-        help="observe (alert only, default) | suggest (record an eligible remediation per "
-        "drift to approve/decline later) | propose (emit each fix as a reviewable code change "
-        "via --deliver; deterministic patch, never a live apply) | auto (apply every eligible "
-        "remediation now -- guardrailed, never destroys, LLM not in the decision). Acting is "
-        "always behind the executor guardrails.",
-    ),
-    deliver: str = typer.Option(
-        "patch-file",
-        "--deliver",
-        help="Where `--autonomy propose` ships each code-change artifact: patch-file (default; "
-        "writes a .patch under STEADYSTATE_PATCH_DIR, no auth -- apply with `git apply`). "
-        "Comma-separated for several. Ignored unless --autonomy propose.",
+        help="observe (alert only, default) | suggest (record a suggestion per drift to "
+        "approve/decline later -- the eligible apply command and/or an accept-reality code-change "
+        "patch, shown by `pending`) | auto (apply every eligible remediation now -- guardrailed, "
+        "never destroys, LLM not in the decision). Acting is always behind the executor "
+        "guardrails.",
     ),
     label: str = typer.Option(
         "",
@@ -286,8 +247,8 @@ def scan(
     ),
 ) -> None:
     """Scan declared state for drift and surface the Alerts."""
-    if autonomy not in ("observe", "suggest", "propose", "auto"):
-        raise typer.BadParameter("autonomy must be: observe | suggest | propose | auto")
+    if autonomy not in ("observe", "suggest", "auto"):
+        raise typer.BadParameter("autonomy must be: observe | suggest | auto")
     if autonomy == "auto" and stateless:
         raise typer.BadParameter(
             "--autonomy auto needs the state store for its audit trail; remove --stateless."
@@ -350,8 +311,6 @@ def scan(
                     _auto_apply(store, recorded)
     for surface in surfaces:
         surface.emit(report, resolved=resolved)
-    if autonomy == "propose":  # render each drift as a reviewable code change and deliver it
-        _propose(source, path, report, [d.strip() for d in deliver.split(",") if d.strip()])
     # A paid call should never go unseen: print this scan's spend (silent on a --no-llm run).
     # --cost adds the per-caller breakdown of this scan. Cumulative spend lives in `cost`.
     spend = scan_cost_line(report.llm_calls)
@@ -584,7 +543,14 @@ def pending(state: Path = _STATE_OPTION) -> None:
         return
     for p in rows:
         typer.echo(f"{p.fingerprint}  {p.source}  {p.drift_identity}")
-        typer.echo(f"    would run: {p.command}")
+        if p.command:
+            typer.echo(f"    enforce (approve to run): {p.command}")
+        if p.patch:
+            typer.echo("    accept reality (review + `git apply`, the tool won't apply it):")
+            for line in p.patch.splitlines():
+                typer.echo(f"      {line}")
+        if not p.command and not p.patch:  # defensive: a recorded suggestion always has one
+            typer.echo("    (no remediation recorded)")
 
 
 @app.command()
