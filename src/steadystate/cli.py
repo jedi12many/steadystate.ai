@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -15,7 +16,8 @@ from .act.approve import apply_pending, decline_pending
 from .catalog import gather_catalog, render_console, render_html
 from .engine import build_report
 from .inbound import INBOUND, build_inbound
-from .inbound.server import serve
+from .inbound.base import PROBE, Command, command_from_text
+from .inbound.server import run_command, serve
 from .notify import SURFACES, build_surfaces
 from .notify.base import Surface
 from .notify.console import ConsoleSurface
@@ -508,6 +510,51 @@ def listen(
     state.parent.mkdir(parents=True, exist_ok=True)
     typer.echo(f"steadystate: listening for {adapter.name} commands on :{port}")
     serve(adapter, port, str(state))
+
+
+def _local_actor() -> str:
+    """Who's at the terminal -- recorded on a chat command's audit trail, like a chat username."""
+    return os.environ.get("USER") or os.environ.get("USERNAME") or "cli"
+
+
+@app.command()
+def chat(state: Path = _STATE_OPTION) -> None:
+    """A local chat client: drive the listener's command grammar from your terminal -- no Slack /
+    Teams / Discord, no signing (a local shell is already trusted). It runs the SAME parser
+    (command_from_text) and dispatch (run_command) the chat adapters use, so it's a faithful way to
+    exercise the chat mechanism. Commands: `help`, `pending`, `probe <target>` (needs
+    STEADYSTATE_TARGETS), `approve <fp>`, `decline <fp>`. Ctrl-D or `exit` to quit."""
+    state.parent.mkdir(parents=True, exist_ok=True)
+    actor = _local_actor()
+    typer.echo("steadystate chat -- type `help`, or a command. Ctrl-D (or `exit`) to quit.")
+    while True:
+        try:
+            line = input("steadystate> ").strip()
+        except EOFError:
+            typer.echo("")
+            break
+        if not line:
+            continue
+        if line in ("exit", "quit"):
+            break
+        command = command_from_text(line, actor)
+        if command is None:
+            typer.echo("unrecognized -- type `help` for the commands this accepts.")
+            continue
+        typer.echo(run_command(command, str(state)))
+
+
+@app.command()
+def probe(
+    target: str = typer.Argument(..., help="A named target from STEADYSTATE_TARGETS to scan now."),
+    state: Path = _STATE_OPTION,
+) -> None:
+    """Summon a scan of a named target now -- the one-shot, scriptable form of the chat
+    `probe <target>` verb. Resolves the target from STEADYSTATE_TARGETS, runs the read-only engine
+    (drift + health), and prints what's wrong. The SAME path the listener runs, so it's a faithful
+    local test of Summon -- and easy to drop into cron/CI."""
+    state.parent.mkdir(parents=True, exist_ok=True)
+    typer.echo(run_command(Command(PROBE, _local_actor(), target), str(state)))
 
 
 def main() -> None:
