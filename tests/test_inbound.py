@@ -157,6 +157,50 @@ def test_slack_adapter_parse_decodes_a_button_body():
     assert SlackInbound(_SECRET).parse("not-form-data") is None
 
 
+def test_slack_defer_acks_a_slash_command_but_not_a_button():
+    # a slash command carries a response_url -> ack now, post the result later
+    slash = urllib.parse.urlencode(
+        {
+            "command": "/steadystate",
+            "text": "probe prod",
+            "response_url": "https://hooks.slack.com/x",
+        }
+    )
+    ack = SlackInbound(_SECRET).defer(slash)
+    assert json.loads(ack) == {"response_type": "ephemeral", "text": "running..."}
+    # a button click (block_actions) has no slow work -> no defer (synchronous)
+    assert SlackInbound(_SECRET).defer(_slack_button("steadystate_approve", "fp1")) is None
+
+
+def test_slack_complete_posts_the_result_to_the_response_url(monkeypatch):
+    captured = {}
+
+    def fake_open(request, timeout=None):
+        captured["url"] = request.full_url
+        captured["body"] = json.loads(request.data)
+
+        class _Ctx:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        return _Ctx()
+
+    monkeypatch.setattr("steadystate.inbound.slack.safe_urlopen", fake_open)
+    body = urllib.parse.urlencode(
+        {
+            "command": "/steadystate",
+            "text": "probe prod",
+            "response_url": "https://hooks.slack.com/x",
+        }
+    )
+    SlackInbound(_SECRET).complete(body, "prod: clean")
+    assert captured["url"] == "https://hooks.slack.com/x"
+    assert captured["body"] == {"response_type": "in_channel", "text": "prod: clean"}
+
+
 def test_slack_adapter_parse_handles_a_slash_command():
     assert SlackInbound(_SECRET).parse(_slack_slash("help")) == Command(HELP, "carol")
     assert SlackInbound(_SECRET).parse(_slack_slash("pending", "dora")) == Command(PENDING, "dora")
@@ -487,13 +531,19 @@ def test_run_command_cost_says_so_when_nothing_recorded(tmp_path):
 
 
 class _FakeAdapter:
-    """A minimal adapter to exercise dispatch's control flow without a real provider."""
+    """A minimal adapter to exercise dispatch's control flow without a real provider. When
+    ``defer_ack`` is set it also supports deferral (defer/complete), capturing posts in
+    ``completed`` -- like Discord/Slack; without it, it's a synchronous provider (Teams)."""
 
     name = "fake"
     content_type = "application/json"
 
-    def __init__(self, ok=True, handshake_reply=None, command=None):
+    def __init__(self, ok=True, handshake_reply=None, command=None, defer_ack=None):
         self._ok, self._handshake, self._command = ok, handshake_reply, command
+        self.completed: list[str] = []
+        if defer_ack is not None:
+            self.defer = lambda body: defer_ack
+            self.complete = lambda body, message: self.completed.append(message)
 
     def ready(self):
         return None
@@ -512,26 +562,54 @@ class _FakeAdapter:
 
 
 def test_dispatch_401s_a_forged_request_before_parsing():
-    status, body = dispatch(_FakeAdapter(ok=False), {}, "anything", ":memory:")
-    assert status == 401 and body == b""
+    status, body, deferred = dispatch(_FakeAdapter(ok=False), {}, "anything", ":memory:")
+    assert status == 401 and body == b"" and deferred is None
 
 
 def test_dispatch_answers_a_handshake_without_touching_the_core():
     # Discord's PING -> PONG: a verified non-command reply, returned as-is.
-    status, body = dispatch(_FakeAdapter(handshake_reply=b'{"type":1}'), {}, "ping", ":memory:")
+    status, body, _ = dispatch(_FakeAdapter(handshake_reply=b'{"type":1}'), {}, "ping", ":memory:")
     assert status == 200 and body == b'{"type":1}'
 
 
 def test_dispatch_runs_a_parsed_command(monkeypatch):
     monkeypatch.setattr("steadystate.inbound.server.run_command", lambda command, path: "done")
     adapter = _FakeAdapter(command=Command(APPROVE, "x", "fp1"))
-    status, body = dispatch(adapter, {}, "body", ":memory:")
-    assert status == 200 and body == b"done"
+    status, body, deferred = dispatch(adapter, {}, "body", ":memory:")
+    assert status == 200 and body == b"done" and deferred is None  # fast verb -> synchronous
 
 
 def test_dispatch_noops_an_unrecognized_payload():
-    status, body = dispatch(_FakeAdapter(command=None), {}, "body", ":memory:")
+    status, body, _ = dispatch(_FakeAdapter(command=None), {}, "body", ":memory:")
     assert status == 200 and body == b"Nothing to do."
+
+
+# -- async deferral: slow commands ACK now, post the result later ---------------
+
+
+def test_dispatch_defers_a_probe_when_the_adapter_supports_it(monkeypatch):
+    monkeypatch.setattr("steadystate.inbound.server.run_command", lambda command, path: "scan done")
+    adapter = _FakeAdapter(command=Command(PROBE, "x", "prod"), defer_ack=b'{"type":5}')
+    status, ack, deferred = dispatch(adapter, {}, "body", ":memory:")
+    # the immediate reply is the ACK; the real work is handed back to run in the background
+    assert status == 200 and ack == b'{"type":5}' and deferred is not None
+    assert adapter.completed == []  # not run yet
+    deferred()  # the handler would run this in a thread
+    assert adapter.completed == ["scan done"]  # the result was posted back via the provider
+
+
+def test_dispatch_runs_a_probe_synchronously_when_the_adapter_cannot_defer(monkeypatch):
+    monkeypatch.setattr("steadystate.inbound.server.run_command", lambda command, path: "scan done")
+    adapter = _FakeAdapter(command=Command(PROBE, "x", "prod"))  # no defer (Teams-like)
+    status, body, deferred = dispatch(adapter, {}, "body", ":memory:")
+    assert status == 200 and body == b"scan done" and deferred is None
+
+
+def test_dispatch_does_not_defer_a_fast_verb_even_when_supported(monkeypatch):
+    monkeypatch.setattr("steadystate.inbound.server.run_command", lambda command, path: "open fps")
+    adapter = _FakeAdapter(command=Command(PENDING, "x"), defer_ack=b'{"type":5}')
+    status, body, deferred = dispatch(adapter, {}, "body", ":memory:")
+    assert status == 200 and body == b"open fps" and deferred is None  # pending isn't slow
 
 
 # -- the registry ---------------------------------------------------------------

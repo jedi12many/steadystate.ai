@@ -10,7 +10,9 @@ control flow are testable without standing up a socket.
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+import logging
+import threading
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -37,6 +39,8 @@ from .base import (
     InboundAdapter,
     render_help,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _render_pending(state_path: str) -> str:
@@ -250,20 +254,60 @@ def run_command(command: Command, state_path: str) -> str:
     return "Nothing to do."
 
 
+# Verbs whose work can exceed a chat provider's ~3s interaction window (a probe runs a full
+# scan). For these, if the provider supports deferral, we ACK immediately and post the result
+# back when it's ready; everything else answers synchronously.
+_DEFERRABLE = frozenset({PROBE})
+
+
+def _try_defer(adapter: InboundAdapter, body: str) -> bytes | None:
+    """The provider's immediate ACK bytes if it supports deferral (Discord/Slack), else None
+    (Teams -> synchronous). An optional capability, probed by attribute like the rest of the
+    seam -- so a provider without it conforms unchanged."""
+    defer = getattr(adapter, "defer", None)
+    return defer(body) if defer is not None else None
+
+
+def _complete(adapter: InboundAdapter, body: str, message: str) -> None:
+    """Post the finished result back through the provider's deferral channel (PATCH the deferred
+    Discord message / POST a Slack response_url). Best-effort -- a failed post must never crash
+    the background worker."""
+    complete = getattr(adapter, "complete", None)
+    if complete is None:
+        return
+    try:
+        complete(body, message)
+    except Exception as exc:  # the worker must never crash the listener on a flaky post
+        logger.warning("failed to post deferred result: %s", exc)
+
+
 def dispatch(
     adapter: InboundAdapter, headers: Mapping[str, str], body: str, state_path: str
-) -> tuple[int, bytes]:
-    """One inbound POST -> (HTTP status, reply body). The order is the security order:
-    verify FIRST (a forged request is 401 before anything else looks at it), then answer a
-    protocol handshake, then parse + run the operator's command."""
+) -> tuple[int, bytes, Callable[[], None] | None]:
+    """One inbound POST -> (HTTP status, immediate reply bytes, optional deferred work). The order
+    is the security order: verify FIRST (a forged request is 401 before anything else looks at it),
+    then answer a protocol handshake, then parse + run the command.
+
+    When the command is slow (a probe) and the adapter supports deferral, the reply is an immediate
+    ACK and the third element is a callable the handler runs in the background -- it does the scan
+    and posts the result back via the provider. Otherwise the reply IS the result and it's None."""
     if not adapter.verify(headers, body):
-        return 401, b""
+        return 401, b"", None
     reply = adapter.handshake(body)
     if reply is not None:
-        return 200, reply
+        return 200, reply, None
     command = adapter.parse(body)
-    message = "Nothing to do." if command is None else run_command(command, state_path)
-    return 200, adapter.respond(message)
+    if command is None:
+        return 200, adapter.respond("Nothing to do."), None
+    if command.verb in _DEFERRABLE:
+        ack = _try_defer(adapter, body)
+        if ack is not None:  # ACK now; do the slow scan + post the result in the background
+
+            def _work() -> None:
+                _complete(adapter, body, run_command(command, state_path))
+
+            return 200, ack, _work
+    return 200, adapter.respond(run_command(command, state_path)), None
 
 
 def make_handler(adapter: InboundAdapter, state_path: str) -> type[BaseHTTPRequestHandler]:
@@ -276,12 +320,16 @@ def make_handler(adapter: InboundAdapter, state_path: str) -> type[BaseHTTPReque
             # self.headers is an email.message.Message; flatten to a plain mapping for the
             # adapter (provider header names arrive with stable casing, e.g. X-Slack-Signature).
             headers = dict(self.headers.items())
-            status, reply = dispatch(adapter, headers, body, state_path)
+            status, reply, deferred = dispatch(adapter, headers, body, state_path)
             self.send_response(status)
             if reply:
                 self.send_header("Content-Type", adapter.content_type)
             self.end_headers()
             self.wfile.write(reply)
+            # Run any deferred work AFTER the ACK is flushed, off the request path, so the handler
+            # returns immediately (within the provider's window) and the scan posts back when done.
+            if deferred is not None:
+                threading.Thread(target=deferred, daemon=True).start()
 
         def log_message(self, *args: object) -> None:  # keep the listener quiet
             pass

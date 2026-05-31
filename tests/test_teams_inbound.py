@@ -118,7 +118,7 @@ def test_dispatch_runs_a_verified_command_and_rejects_a_forged_one(monkeypatch):
     adapter = TeamsInbound(_TOKEN)
     body = json.dumps(_activity("approve fp1"))
     monkeypatch.setattr("steadystate.inbound.server.run_command", lambda c, p: "approved!")
-    status, reply = dispatch(adapter, {"Authorization": _sign(_TOKEN, body)}, body, ":memory:")
+    status, reply, _ = dispatch(adapter, {"Authorization": _sign(_TOKEN, body)}, body, ":memory:")
     assert status == 200 and json.loads(reply) == {"type": "message", "text": "approved!"}
-    status, _ = dispatch(adapter, {"Authorization": "HMAC forged"}, body, ":memory:")
+    status, _, _ = dispatch(adapter, {"Authorization": "HMAC forged"}, body, ":memory:")
     assert status == 401  # the forged request never reaches the approval core
