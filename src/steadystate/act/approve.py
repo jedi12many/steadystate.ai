@@ -57,14 +57,17 @@ def apply_pending(
     executor = build_executor(action.source, Path(action.path))
     if executor is None:
         return f"source '{action.source}' is observe-only; cannot remediate.", None
+    # Atomically claim the action (pending -> approved) BEFORE anything irreversible. Two approvers
+    # racing the same fingerprint (two chat users) both read PENDING above; the conditional UPDATE
+    # lets exactly one win -- the loser bails here, so the remediation runs at most once.
+    if not store.claim_pending(fingerprint, PENDING, APPROVED, actor):
+        return "no pending remediation for that fingerprint.", None
     drifts = build_drift_source(action.source, Path(action.path)).collect_drift()
     drift = next((d for d in drifts if d.fingerprint == fingerprint), None)
     if drift is None:
-        store.set_pending_status(fingerprint, APPROVED, actor)
         store.record_audit(_audit(action, actor, APPROVED, NOOP, "drift no longer present"), now)
         return "drift no longer present; nothing to do.", None
     result = executor.remediate(drift, confirm=True)
-    store.set_pending_status(fingerprint, APPROVED, actor)
     outcome = VERIFIED if result.verified else APPLIED if result.applied else FAILED
     store.record_audit(_audit(action, actor, APPROVED, outcome, result.detail), now)
     return result.detail, result
