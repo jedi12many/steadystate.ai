@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import sys
 from datetime import UTC, datetime, timedelta
@@ -18,6 +19,9 @@ from .act.base import Proposer
 from .act.deliver import build_deliveries
 from .catalog import gather_catalog, render_console, render_html
 from .discover import (
+    as_dict as discovery_as_dict,
+)
+from .discover import (
     deep_inspect,
     deep_targets,
     emit_github_actions,
@@ -25,6 +29,7 @@ from .discover import (
     probe_environment,
     proposed_targets,
     render_inspections,
+    scannable_now,
 )
 from .discover import render as render_discovery
 from .engine import build_report
@@ -962,6 +967,18 @@ def discover(
         "here -- tailored capture + scan per source, auth left as TODO. Pipe it: "
         "`discover --emit-ci > .github/workflows/steadystate-drift.yml`.",
     ),
+    json_out: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit the report as JSON (sources/probes, the --deep facts, and a top-level "
+        "`scannable` flag) instead of text -- for other tooling to consume.",
+    ),
+    check: bool = typer.Option(
+        False,
+        "--check",
+        help="Exit non-zero if nothing is scannable here (no READY source, no snapshot) -- a "
+        "branchable signal for a CI/preflight gate. Composes with the normal or --json output.",
+    ),
 ) -> None:
     """Show what `scan`/`probe` can do *here* -- in the current directory and on this machine.
 
@@ -970,8 +987,16 @@ def discover(
     its backend reachable, whether a usable input is in the cwd, and the exact command to run.
     `--deep` goes further -- it interrogates the live backends (read-only) and tailors the advice
     to what's actually there. `--create` turns the hits into named targets. `--emit-ci` prints a
-    tailored GitHub Actions workflow instead of the report. Run it from the directory you intend to
+    tailored GitHub Actions workflow instead of the report. `--json` emits the report for tooling;
+    `--check` exits non-zero when nothing is scannable. Run it from the directory you intend to
     scan."""
+    # --emit-ci and --json are mutually-exclusive *output formats*; --create mutates the targets
+    # registry and prints a human summary, so it can't ride a clean machine-output stream.
+    if emit_ci and json_out:
+        raise typer.BadParameter("--emit-ci and --json are different output formats; pick one.")
+    if create and (emit_ci or json_out):
+        raise typer.BadParameter("--create can't combine with --emit-ci/--json (a pure output).")
+
     findings = probe_environment()
     # --emit-ci is a scripting mode: stdout is *only* the workflow YAML (for `> drift.yml`), so the
     # human report is suppressed and progress notes go to stderr.
@@ -983,14 +1008,23 @@ def discover(
         for line in emit_github_actions(findings, cwd):
             typer.echo(line)
         return
-    lines = render_discovery(findings)
+
     inspections = deep_inspect() if deep else []
-    if deep:
-        lines += render_inspections(inspections)
-    for line in lines:
-        typer.echo(line)
-    if create:
-        _create_targets(findings, extra=deep_targets(inspections))
+    if json_out:
+        typer.echo(json.dumps(discovery_as_dict(findings, inspections if deep else None), indent=2))
+    else:
+        lines = render_discovery(findings)
+        if deep:
+            lines += render_inspections(inspections)
+        for line in lines:
+            typer.echo(line)
+        if create:
+            _create_targets(findings, extra=deep_targets(inspections))
+
+    # --check turns "nothing to scan here" into a non-zero exit, AFTER the report/create so the
+    # output (and any target writes) still happen -- it only gates the exit code.
+    if check and not scannable_now(findings):
+        raise typer.Exit(1)
 
 
 @app.command()
