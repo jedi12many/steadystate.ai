@@ -411,6 +411,67 @@ def backend_from_state(doc: object) -> str | None:
     return None
 
 
+def summarize_containers(containers: object) -> list[str]:
+    """`docker ps --format {{json .}}` (one object per line, parsed to a list) -> a count line and,
+    when present, the running names/images. Pure."""
+    items = [c for c in (containers if isinstance(containers, list) else []) if isinstance(c, dict)]
+    facts = [f"{len(items)} running container(s)"]
+    names = [name for c in items if (name := c.get("Names") or c.get("Image"))][:8]
+    if names:
+        facts.append("running: " + ", ".join(names))
+    return facts
+
+
+def compose_scan_commands(projects: object) -> list[str]:
+    """`docker compose ls --format json` -> a `scan <dir> --source docker-compose` per project,
+    pointed at the directory of the project's compose file. Pure."""
+    out: list[str] = []
+    for p in projects if isinstance(projects, list) else []:
+        if not isinstance(p, dict):
+            continue
+        config = p.get("ConfigFiles")
+        first = config.split(",")[0].strip() if isinstance(config, str) else ""
+        # The compose path comes from the docker host, so its separator may differ from ours --
+        # slice on either rather than pathlib (which would mangle a POSIX path on Windows).
+        cut = max(first.rfind("/"), first.rfind("\\"))
+        directory = first[:cut] if cut > 0 else "."
+        out.append(
+            f"steadystate scan {directory} --source docker-compose --probe docker"
+            f"  # project {p.get('Name', '?')}"
+        )
+    return out
+
+
+def summarize_argocd_apps(apps: object) -> list[str]:
+    """`argocd app list -o json` (or a `kubectl get applications` List) -> one
+    "name (sync=…, health=…)" line per app. Pure."""
+    items = apps if isinstance(apps, list) else apps.get("items") if isinstance(apps, dict) else []
+    out: list[str] = []
+    for a in items or []:
+        if not isinstance(a, dict):
+            continue
+        name = (a.get("metadata") or {}).get("name", "?")
+        status = a.get("status") or {}
+        sync = (status.get("sync") or {}).get("status", "?")
+        health = (status.get("health") or {}).get("status", "?")
+        out.append(f"{name} (sync={sync}, health={health})")
+    return out
+
+
+def argocd_capture_commands(apps: object) -> list[str]:
+    """A `argocd app get <name> -o json > <name>.json` capture per real app, so `--source argocd`
+    advice names the env's actual applications. Pure."""
+    items = apps if isinstance(apps, list) else apps.get("items") if isinstance(apps, dict) else []
+    out: list[str] = []
+    for a in items or []:
+        if isinstance(a, dict) and (name := (a.get("metadata") or {}).get("name")):
+            out.append(
+                f"argocd app get {name} -o json > {name}.json"
+                f" && steadystate scan {name}.json --source argocd --probe argocd"
+            )
+    return out
+
+
 # -- I/O: run the read-only commands ----------------------------------------------------------
 
 
@@ -430,6 +491,25 @@ def _run_json(argv: list[str]) -> object | None:
         return json.loads(out)
     except ValueError:
         return None
+
+
+def _run_ndjson(argv: list[str]) -> list[dict] | None:
+    """For tools that emit one JSON object per line (e.g. `docker ps --format {{json .}}`). None on
+    a failed run; bad lines are skipped, not fatal."""
+    ok, out = _run(argv)
+    if not ok:
+        return None
+    docs: list[dict] = []
+    for line in out.splitlines():
+        if not line.strip():
+            continue
+        try:
+            parsed = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(parsed, dict):
+            docs.append(parsed)
+    return docs
 
 
 def inspect_kubectl() -> Inspection:
@@ -492,10 +572,54 @@ def inspect_terraform(cwd: Path) -> Inspection:
     return Inspection("terraform", ok=True, facts=tuple(facts), recommendations=recommendations)
 
 
+def inspect_docker() -> Inspection:
+    if shutil.which("docker") is None:
+        return Inspection("docker", ok=False, note="docker not installed")
+    containers = _run_ndjson(["docker", "ps", "--format", "{{json .}}"])
+    if containers is None:
+        return Inspection("docker", ok=False, note="installed, but daemon unreachable")
+    facts = summarize_containers(containers)
+    projects = _run_json(["docker", "compose", "ls", "--format", "json"])
+    recommendations: tuple[str, ...] = ()
+    if isinstance(projects, list) and projects:
+        facts.extend(
+            f"compose project: {p.get('Name', '?')} ({p.get('Status', '?')})"
+            for p in projects
+            if isinstance(p, dict)
+        )
+        if commands := compose_scan_commands(projects):
+            recommendations = ("scan each running compose project:", *commands)
+    return Inspection("docker", ok=True, facts=tuple(facts), recommendations=recommendations)
+
+
+def inspect_argocd() -> Inspection:
+    if shutil.which("argocd") is None:
+        return Inspection("argocd", ok=False, note="argocd CLI not installed")
+    apps = _run_json(["argocd", "app", "list", "-o", "json"])
+    if apps is None:
+        return Inspection(
+            "argocd", ok=False, note="installed, but not logged in / server unreachable"
+        )
+    summaries = summarize_argocd_apps(apps)
+    if not summaries:
+        return Inspection("argocd", ok=True, facts=("no Argo CD applications",))
+    commands = argocd_capture_commands(apps)
+    recs = ("capture each app for --source argocd:", *commands) if commands else ()
+    return Inspection(
+        "argocd", ok=True, facts=tuple(f"app: {s}" for s in summaries), recommendations=recs
+    )
+
+
 def deep_inspect(cwd: Path | None = None) -> list[Inspection]:
     """Run the read-only live reads for the supported tools and return one Inspection each."""
     cwd = cwd or Path.cwd()
-    return [inspect_kubectl(), inspect_helm(), inspect_terraform(cwd)]
+    return [
+        inspect_kubectl(),
+        inspect_helm(),
+        inspect_terraform(cwd),
+        inspect_docker(),
+        inspect_argocd(),
+    ]
 
 
 def render_inspections(results: list[Inspection]) -> list[str]:
