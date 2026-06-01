@@ -224,3 +224,178 @@ def test_discover_cli_runs(monkeypatch):
     assert result.exit_code == 0
     assert "steadystate discovery" in result.stdout
     assert "SOURCES (--source):" in result.stdout
+    assert "DEEP INSPECTION" not in result.stdout  # opt-in only
+
+
+# -- deep inspection: pure summarizers --------------------------------------------------------
+
+
+def test_summarize_nodes_counts_ready_and_versions():
+    doc = {
+        "items": [
+            {
+                "status": {
+                    "conditions": [{"type": "Ready", "status": "True"}],
+                    "nodeInfo": {"kubeletVersion": "v1.29.4"},
+                }
+            },
+            {
+                "status": {
+                    "conditions": [{"type": "Ready", "status": "False"}],
+                    "nodeInfo": {"kubeletVersion": "v1.29.4"},
+                }
+            },
+        ]
+    }
+    from steadystate.discover import summarize_nodes
+
+    assert summarize_nodes(doc) == "2 node(s), 1 Ready; kubelet v1.29.4"
+
+
+def test_summarize_nodes_handles_garbage():
+    from steadystate.discover import summarize_nodes
+
+    assert summarize_nodes(None) == "0 node(s), 0 Ready; kubelet unknown"
+
+
+def test_namespace_names():
+    from steadystate.discover import namespace_names
+
+    doc = {"items": [{"metadata": {"name": "default"}}, {"metadata": {"name": "prod"}}]}
+    assert namespace_names(doc) == ["default", "prod"]
+    assert namespace_names("nope") == []
+
+
+def test_summarize_releases():
+    from steadystate.discover import summarize_releases
+
+    releases = [{"name": "web", "namespace": "prod", "chart": "web-1.2.3", "status": "deployed"}]
+    assert summarize_releases(releases) == ["web (ns=prod, chart=web-1.2.3, deployed)"]
+
+
+def test_helm_snapshot_commands_uses_real_names():
+    from steadystate.discover import helm_snapshot_commands
+
+    releases = [
+        {"name": "web", "namespace": "prod"},
+        {"name": "api", "namespace": "staging"},
+        {"missing": "name"},  # skipped
+    ]
+    cmds = helm_snapshot_commands(releases)
+    assert cmds[0].startswith("helm get manifest web -n prod | kubectl create --dry-run=client")
+    assert "api -n staging" in cmds[1]
+    assert len(cmds) == 2
+
+
+def test_backend_from_state():
+    from steadystate.discover import backend_from_state
+
+    assert backend_from_state({"backend": {"type": "s3"}}) == "s3"
+    assert backend_from_state({"backend": {}}) is None
+    assert backend_from_state({}) is None
+    assert backend_from_state("nope") is None
+
+
+# -- deep inspection: I/O probes (faked shell-outs) -------------------------------------------
+
+
+def test_inspect_kubectl_skips_when_not_installed(monkeypatch):
+    from steadystate import discover as disc
+
+    monkeypatch.setattr(disc.shutil, "which", lambda _b: None)
+    result = disc.inspect_kubectl()
+    assert result.ok is False
+    assert "not installed" in result.note
+
+
+def test_inspect_kubectl_skips_when_cluster_unreachable(monkeypatch):
+    from steadystate import discover as disc
+
+    monkeypatch.setattr(disc.shutil, "which", lambda _b: "/usr/bin/kubectl")
+    monkeypatch.setattr(disc, "_run_json", lambda _argv: None)  # nodes read fails
+    result = disc.inspect_kubectl()
+    assert result.ok is False
+    assert "no reachable cluster" in result.note
+
+
+def test_inspect_kubectl_reports_facts(monkeypatch):
+    from steadystate import discover as disc
+
+    nodes = {"items": [{"status": {"conditions": [{"type": "Ready", "status": "True"}]}}]}
+    namespaces = {"items": [{"metadata": {"name": "default"}}]}
+    monkeypatch.setattr(disc.shutil, "which", lambda _b: "/usr/bin/kubectl")
+    monkeypatch.setattr(disc, "_run_json", lambda argv: nodes if "nodes" in argv else namespaces)
+    monkeypatch.setattr(disc, "_run", lambda _argv: (True, "rancher-prod\n"))
+    result = disc.inspect_kubectl()
+    assert result.ok is True
+    assert "context: rancher-prod" in result.facts[0]
+    assert "1 node(s), 1 Ready" in result.facts[1]
+    assert "namespaces (1): default" in result.facts[2]
+
+
+def test_inspect_helm_tailors_commands_to_real_releases(monkeypatch):
+    from steadystate import discover as disc
+
+    releases = [{"name": "web", "namespace": "prod", "chart": "web-1", "status": "deployed"}]
+    monkeypatch.setattr(disc.shutil, "which", lambda _b: "/usr/bin/helm")
+    monkeypatch.setattr(disc, "_run_json", lambda _argv: releases)
+    result = disc.inspect_helm()
+    assert result.ok is True
+    assert result.facts == ("release: web (ns=prod, chart=web-1, deployed)",)
+    assert any("helm get manifest web -n prod" in rec for rec in result.recommendations)
+
+
+def test_inspect_helm_no_releases(monkeypatch):
+    from steadystate import discover as disc
+
+    monkeypatch.setattr(disc.shutil, "which", lambda _b: "/usr/bin/helm")
+    monkeypatch.setattr(disc, "_run_json", lambda _argv: [])
+    result = disc.inspect_helm()
+    assert result.ok is True
+    assert result.facts == ("no Helm releases in any namespace",)
+
+
+def test_inspect_terraform_reads_backend(tmp_path):
+    from steadystate.discover import inspect_terraform
+
+    (tmp_path / "main.tf").write_text("resource {}")
+    dot = tmp_path / ".terraform"
+    dot.mkdir()
+    (dot / "terraform.tfstate").write_text(json.dumps({"backend": {"type": "s3"}}))
+    result = inspect_terraform(tmp_path)
+    assert result.ok is True
+    assert "initialized: yes" in result.facts
+    assert "backend: s3" in result.facts
+    assert any("don't use -backend=false" in rec for rec in result.recommendations)
+
+
+def test_inspect_terraform_skips_without_tf_files(tmp_path):
+    from steadystate.discover import inspect_terraform
+
+    assert inspect_terraform(tmp_path).ok is False
+
+
+def test_render_inspections_skips_and_reports():
+    from steadystate.discover import Inspection, render_inspections
+
+    results = [
+        Inspection("kubectl", ok=True, facts=("nodes: 3 node(s), 3 Ready; kubelet v1.29",)),
+        Inspection("helm", ok=False, note="not installed"),
+    ]
+    out = "\n".join(render_inspections(results))
+    assert "DEEP INSPECTION (live, read-only):" in out
+    assert "nodes: 3 node(s), 3 Ready" in out
+    assert "helm: skipped -- not installed" in out
+
+
+def test_discover_deep_cli_path(monkeypatch):
+    from typer.testing import CliRunner
+
+    from steadystate import discover as disc
+    from steadystate.cli import app
+
+    monkeypatch.setattr(disc.shutil, "which", lambda _binary: None)  # everything skips cleanly
+    result = CliRunner().invoke(app, ["discover", "--deep"])
+    assert result.exit_code == 0
+    assert "DEEP INSPECTION (live, read-only):" in result.stdout
+    assert "kubectl: skipped" in result.stdout

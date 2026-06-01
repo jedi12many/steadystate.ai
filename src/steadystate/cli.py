@@ -17,7 +17,7 @@ from .act.approve import apply_pending, decline_pending
 from .act.base import Proposer
 from .act.deliver import build_deliveries
 from .catalog import gather_catalog, render_console, render_html
-from .discover import probe_environment
+from .discover import deep_inspect, probe_environment, render_inspections
 from .discover import render as render_discovery
 from .engine import build_report
 from .inbound import INBOUND, build_inbound
@@ -804,14 +804,25 @@ def doctor(
 
 
 @app.command()
-def discover() -> None:
+def discover(
+    deep: bool = typer.Option(
+        False,
+        "--deep",
+        help="Also run read-only live reads (kubectl get nodes, helm list, ...) against reachable "
+        "backends and report concrete facts + commands carrying your real release/namespace names.",
+    ),
+) -> None:
     """Show what `scan`/`probe` can do *here* -- in the current directory and on this machine.
 
     Where `doctor` checks credentials and `catalog` lists what the build offers, this is the
     environment preflight: per `--source` and `--probe`, whether the CLI it needs is installed and
     its backend reachable, whether a usable input is in the cwd, and the exact command to run.
-    Read-only. Run it from the directory you intend to scan."""
-    for line in render_discovery(probe_environment()):
+    `--deep` goes further -- it interrogates the live backends (read-only) and tailors the advice
+    to what's actually there. Run it from the directory you intend to scan."""
+    lines = render_discovery(probe_environment())
+    if deep:
+        lines += render_inspections(deep_inspect())
+    for line in lines:
         typer.echo(line)
 
 
