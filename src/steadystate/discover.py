@@ -314,3 +314,198 @@ def render(findings: list[Finding], cwd: Path | None = None) -> list[str]:
 
     lines.append("legend: [+] ready  [~] installed but backend unreachable  [x] not installed")
     return lines
+
+
+# -- deep inspection: actually interrogate the live env (opt-in, read-only) -------------------
+#
+# The base report says whether a tool *could* run; deep inspection runs read-only `get`/`list`
+# reads against reachable backends and reports concrete facts -- and, crucially, turns the generic
+# hints into commands carrying the env's *real* release/namespace names. Called "inspect" (not
+# "probe") to keep the health-probe seam's vocabulary distinct. Every read degrades to "skipped"
+# on failure; it never invents a fact and never blocks the base report.
+
+_DEEP_TIMEOUT = 10.0
+
+
+@dataclass(frozen=True)
+class Inspection:
+    """One tool's live read: concrete facts and (when we can name them) tailored commands. ``ok``
+    is False with a ``note`` when the read was skipped (tool absent / backend unreachable)."""
+
+    tool: str
+    ok: bool
+    facts: tuple[str, ...] = ()
+    recommendations: tuple[str, ...] = ()
+    note: str = ""
+
+
+# -- pure summarizers (parse a read into facts/commands) --------------------------------------
+
+
+def _node_ready(node: dict) -> bool:
+    conditions = (node.get("status") or {}).get("conditions") or []
+    return any(
+        isinstance(c, dict) and c.get("type") == "Ready" and c.get("status") == "True"
+        for c in conditions
+    )
+
+
+def summarize_nodes(doc: object) -> str:
+    """`kubectl get nodes -o json` -> "N node(s), M Ready; kubelet v1.x". Pure."""
+    items = doc.get("items") if isinstance(doc, dict) else None
+    nodes = [n for n in (items or []) if isinstance(n, dict)]
+    ready = sum(1 for n in nodes if _node_ready(n))
+    versions = sorted(
+        {((n.get("status") or {}).get("nodeInfo") or {}).get("kubeletVersion", "") for n in nodes}
+        - {""}
+    )
+    kubelet = ", ".join(versions) if versions else "unknown"
+    return f"{len(nodes)} node(s), {ready} Ready; kubelet {kubelet}"
+
+
+def namespace_names(doc: object) -> list[str]:
+    """`kubectl get namespaces -o json` -> the namespace names. Pure."""
+    if not isinstance(doc, dict):
+        return []
+    return [
+        name
+        for n in (doc.get("items") or [])
+        if isinstance(n, dict) and (name := (n.get("metadata") or {}).get("name"))
+    ]
+
+
+def summarize_releases(releases: object) -> list[str]:
+    """`helm list -A -o json` -> one "name (ns=…, chart=…, status)" line per release. Pure."""
+    if not isinstance(releases, list):
+        return []
+    return [
+        f"{r.get('name', '?')} (ns={r.get('namespace', '?')}, "
+        f"chart={r.get('chart', '?')}, {r.get('status', '?')})"
+        for r in releases
+        if isinstance(r, dict)
+    ]
+
+
+def helm_snapshot_commands(releases: object) -> list[str]:
+    """The payoff: a concrete `helm get manifest <name> -n <ns>` declared-side render per real
+    release, so `--source k8s` advice names the env's actual releases instead of placeholders.
+    Pure -- consumes parsed `helm list -A -o json`."""
+    out: list[str] = []
+    for r in releases if isinstance(releases, list) else []:
+        if not isinstance(r, dict):
+            continue
+        name, namespace = r.get("name"), r.get("namespace")
+        if name and namespace:
+            out.append(
+                f"helm get manifest {name} -n {namespace} "
+                f"| kubectl create --dry-run=client -o json -f - > {name}.declared.json"
+            )
+    return out
+
+
+def backend_from_state(doc: object) -> str | None:
+    """The backend type recorded in `.terraform/terraform.tfstate` (e.g. "s3"), or None. Pure."""
+    if isinstance(doc, dict) and isinstance(backend := doc.get("backend"), dict):
+        type_ = backend.get("type")
+        return type_ if isinstance(type_, str) else None
+    return None
+
+
+# -- I/O: run the read-only commands ----------------------------------------------------------
+
+
+def _run(argv: list[str]) -> tuple[bool, str]:
+    try:
+        result = subprocess.run(argv, capture_output=True, text=True, timeout=_DEEP_TIMEOUT)
+        return result.returncode == 0, result.stdout
+    except (OSError, subprocess.SubprocessError):
+        return False, ""
+
+
+def _run_json(argv: list[str]) -> object | None:
+    ok, out = _run(argv)
+    if not ok:
+        return None
+    try:
+        return json.loads(out)
+    except ValueError:
+        return None
+
+
+def inspect_kubectl() -> Inspection:
+    if shutil.which("kubectl") is None:
+        return Inspection("kubectl", ok=False, note="kubectl not installed")
+    nodes = _run_json(["kubectl", "get", "nodes", "-o", "json", "--request-timeout=8s"])
+    if nodes is None:
+        return Inspection(
+            "kubectl", ok=False, note="installed, but no reachable cluster (kubeconfig/context?)"
+        )
+    _, context = _run(["kubectl", "config", "current-context"])
+    namespaces = namespace_names(_run_json(["kubectl", "get", "namespaces", "-o", "json"]))
+    facts = [f"context: {context.strip() or 'unknown'}", f"nodes: {summarize_nodes(nodes)}"]
+    if namespaces:
+        facts.append(f"namespaces ({len(namespaces)}): {', '.join(namespaces[:12])}")
+    return Inspection("kubectl", ok=True, facts=tuple(facts))
+
+
+def inspect_helm() -> Inspection:
+    if shutil.which("helm") is None:
+        return Inspection("helm", ok=False, note="helm not installed")
+    releases = _run_json(["helm", "list", "-A", "-o", "json"])
+    if releases is None:
+        return Inspection(
+            "helm", ok=False, note="installed, but couldn't list releases (cluster unreachable?)"
+        )
+    summaries = summarize_releases(releases)
+    if not summaries:
+        return Inspection("helm", ok=True, facts=("no Helm releases in any namespace",))
+    commands = helm_snapshot_commands(releases)
+    recs = ("render each release's declared side for --source k8s:", *commands) if commands else ()
+    return Inspection(
+        "helm", ok=True, facts=tuple(f"release: {s}" for s in summaries), recommendations=recs
+    )
+
+
+def inspect_terraform(cwd: Path) -> Inspection:
+    tf_files = sorted(cwd.glob("*.tf"))
+    if not tf_files:
+        return Inspection("terraform", ok=False, note="no *.tf files in cwd")
+    initialized = (cwd / ".terraform").is_dir()
+    facts = [
+        f"{len(tf_files)} *.tf file(s) in cwd",
+        "initialized: yes" if initialized else "initialized: no (run `terraform init`)",
+    ]
+    recommendations: tuple[str, ...] = ()
+    state = cwd / ".terraform" / "terraform.tfstate"
+    if state.exists():
+        try:
+            backend = backend_from_state(json.loads(state.read_text()))
+        except (OSError, ValueError):
+            backend = None
+        if backend:
+            facts.append(f"backend: {backend}")
+            recommendations = (
+                f"state lives in the {backend} backend; if you can't read it, generate plan.json "
+                "where you can (CI) and scan that file -- don't use -backend=false (no state = "
+                "every resource reads as ADDED)",
+            )
+    return Inspection("terraform", ok=True, facts=tuple(facts), recommendations=recommendations)
+
+
+def deep_inspect(cwd: Path | None = None) -> list[Inspection]:
+    """Run the read-only live reads for the supported tools and return one Inspection each."""
+    cwd = cwd or Path.cwd()
+    return [inspect_kubectl(), inspect_helm(), inspect_terraform(cwd)]
+
+
+def render_inspections(results: list[Inspection]) -> list[str]:
+    """The deep-inspection section as lines, appended after the base report. Pure."""
+    lines = ["", "DEEP INSPECTION (live, read-only):"]
+    for r in results:
+        if not r.ok:
+            lines.append(f"  {r.tool}: skipped -- {r.note}")
+            continue
+        lines.append(f"  {r.tool}:")
+        lines.extend(f"      - {fact}" for fact in r.facts)
+        lines.extend(f"      -> {rec}" for rec in r.recommendations)
+    return lines
