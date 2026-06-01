@@ -58,3 +58,38 @@ def load_targets_from_env() -> dict[str, Target]:
     listener with no targets configured answers a probe request cleanly instead of erroring."""
     path = os.environ.get(TARGETS_ENV)
     return load_targets(path) if path else {}
+
+
+def target_to_spec(target: Target) -> dict[str, str]:
+    """A Target as the minimal JSON spec ``load_targets`` reads back: ``label`` and ``probe`` are
+    omitted when they hold their defaults (the name, and ``auto``), so a generated file stays terse.
+    Pure -- inverse of the per-entry parse in ``load_targets``."""
+    spec = {"source": target.source, "path": target.path}
+    if target.label != target.name:
+        spec["label"] = target.label
+    if target.probe != "auto":
+        spec["probe"] = target.probe
+    return spec
+
+
+def merge_targets(
+    existing: dict[str, Target], proposed: list[Target]
+) -> tuple[dict[str, Target], list[str], list[str]]:
+    """Overlay ``proposed`` onto ``existing`` WITHOUT clobbering: a proposed target whose name is
+    already taken is skipped (the operator's hand-edits win). Returns (merged map, names added,
+    names skipped). Pure -- the caller decides whether to persist the result."""
+    added: dict[str, Target] = {}
+    skipped: list[str] = []
+    for target in proposed:
+        if target.name in existing or target.name in added:
+            skipped.append(target.name)
+        else:
+            added[target.name] = target
+    return {**existing, **added}, list(added), skipped
+
+
+def save_targets(path: str | Path, targets: dict[str, Target]) -> None:
+    """Write the targets map to ``path`` as the JSON document ``load_targets`` reads. Overwrites the
+    file wholesale, so callers preserving existing entries merge first (``merge_targets``)."""
+    doc = {name: target_to_spec(target) for name, target in targets.items()}
+    Path(path).write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")

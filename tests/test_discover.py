@@ -509,3 +509,129 @@ def test_deep_inspect_covers_all_five_tools(monkeypatch):
     monkeypatch.setattr(disc.shutil, "which", lambda _b: None)
     tools = {i.tool for i in disc.deep_inspect(cwd=disc.Path("/nonexistent"))}
     assert tools == {"kubectl", "helm", "terraform", "docker", "argocd"}
+
+
+# -- target creation (--create) ---------------------------------------------------------------
+
+
+def test_slug_sanitizes_names():
+    from steadystate.discover import _slug
+
+    assert _slug("Shop.API v2") == "shop-api-v2"
+    assert _slug("steadystate.ai") == "steadystate-ai"
+    assert _slug("__weird__") == "weird"
+
+
+def _source_finding(name, *, inputs=(), snapshots=()):
+    from steadystate.discover import assess_source
+
+    observe = ("GET /api",) if name in ("argocd", "rancher") else (f"{name} do",)
+    return assess_source(name, observe, set(), {}, inputs, snapshots)
+
+
+def test_proposed_targets_single_hit_uses_bare_cwd_name():
+    from pathlib import Path
+
+    from steadystate.discover import proposed_targets
+
+    findings = [_source_finding("terraform", inputs=("main.tf",))]
+    targets = proposed_targets(findings, Path("/work/myapp"))
+    assert len(targets) == 1
+    assert targets[0].name == "myapp"  # single hit -> no suffix
+    assert targets[0].source == "terraform"
+    assert targets[0].path == str(Path("/work/myapp"))  # live dir source -> the dir
+
+
+def test_proposed_targets_multiple_hits_get_source_suffix():
+    from pathlib import Path
+
+    from steadystate.discover import proposed_targets
+
+    findings = [
+        _source_finding("terraform", inputs=("main.tf",)),
+        _source_finding("k8s", snapshots=("snap.json",)),
+    ]
+    targets = {t.name: t for t in proposed_targets(findings, Path("/work/myapp"))}
+    assert set(targets) == {"myapp-terraform", "myapp-k8s"}
+    assert targets["myapp-k8s"].path == str(Path("/work/myapp") / "snap.json")  # snapshot file
+
+
+def test_proposed_targets_skips_sources_with_no_input():
+    from pathlib import Path
+
+    from steadystate.discover import proposed_targets
+
+    # terraform with no *.tf and no snapshot -> not scannable here -> not proposed
+    assert proposed_targets([_source_finding("terraform")], Path("/work/myapp")) == []
+
+
+def test_merge_targets_does_not_clobber_existing():
+    from steadystate.targets import Target, merge_targets
+
+    existing = {"myapp": Target("myapp", "terraform", "/old", "myapp")}
+    proposed = [
+        Target("myapp", "k8s", "/new", "myapp"),  # name taken -> skipped
+        Target("myapp-helm", "helm", "/h.json", "myapp-helm"),  # new -> added
+    ]
+    merged, added, skipped = merge_targets(existing, proposed)
+    assert added == ["myapp-helm"]
+    assert skipped == ["myapp"]
+    assert merged["myapp"].source == "terraform"  # original kept
+    assert "myapp-helm" in merged
+
+
+def test_save_and_load_targets_round_trip(tmp_path):
+    from steadystate.targets import Target, load_targets, save_targets
+
+    path = tmp_path / "targets.json"
+    save_targets(
+        path,
+        {
+            "web": Target("web", "terraform", "/infra", "web"),  # defaults omitted
+            "api": Target("api", "k8s", "/snap.json", "prod", probe="kubectl"),  # custom kept
+        },
+    )
+    reloaded = load_targets(path)
+    assert reloaded["web"].label == "web" and reloaded["web"].probe == "auto"
+    assert reloaded["api"].label == "prod" and reloaded["api"].probe == "kubectl"
+
+
+def test_discover_create_cli_writes_targets_file(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from steadystate import discover as disc
+    from steadystate.cli import app
+    from steadystate.targets import load_targets
+
+    # A terraform dir: a *.tf file present so the source is a usable target.
+    (tmp_path / "main.tf").write_text("resource {}")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(disc.shutil, "which", lambda _b: None)
+    monkeypatch.delenv("STEADYSTATE_TARGETS", raising=False)
+
+    result = CliRunner().invoke(app, ["discover", "--create"])
+    assert result.exit_code == 0
+    assert "TARGETS ->" in result.stdout
+
+    from steadystate.discover import _slug
+
+    name = _slug(tmp_path.name)  # named after the cwd (sanitized)
+    written = load_targets(tmp_path / "targets.json")
+    assert name in written
+    assert written[name].source == "terraform"
+
+
+def test_discover_create_reports_when_nothing_scannable(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from steadystate import discover as disc
+    from steadystate.cli import app
+
+    monkeypatch.chdir(tmp_path)  # empty dir
+    monkeypatch.setattr(disc.shutil, "which", lambda _b: None)
+    monkeypatch.delenv("STEADYSTATE_TARGETS", raising=False)
+
+    result = CliRunner().invoke(app, ["discover", "--create"])
+    assert result.exit_code == 0
+    assert "nothing to create" in result.stdout
+    assert not (tmp_path / "targets.json").exists()
