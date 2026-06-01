@@ -35,7 +35,14 @@ from .reconcile_state import reconcile
 from .sources import CAPABILITIES, DRIFT_SOURCES, build_drift_source
 from .sources.base import SourceError
 from .state import PendingAction, StateStore
-from .targets import TARGETS_ENV, load_targets, merge_targets, save_targets
+from .targets import (
+    TARGETS_ENV,
+    Target,
+    load_targets,
+    merge_targets,
+    save_targets,
+    target_issues,
+)
 
 DEFAULT_STATE_PATH = ".steadystate/state.db"
 
@@ -185,17 +192,49 @@ def _auto_apply(store: StateStore, fingerprints: list[str]) -> None:
         ConsoleSurface().emit_remediations(results)
 
 
+def _targets_file() -> Path:
+    """Where the targets registry lives: STEADYSTATE_TARGETS if set, else ./targets.json."""
+    return Path(os.environ.get(TARGETS_ENV) or "targets.json")
+
+
+def _resolve_target(name: str) -> Target:
+    """Look up a named target in the registry, or raise a clean BadParameter (missing file,
+    malformed file, or unknown name -- listing what's known)."""
+    target_file = _targets_file()
+    if not target_file.exists():
+        raise typer.BadParameter(
+            f"--target needs a targets file; none at {target_file}. "
+            "Create one with `discover --create`."
+        )
+    try:
+        registry = load_targets(target_file)
+    except (OSError, ValueError) as exc:
+        raise typer.BadParameter(f"targets file {target_file} is malformed: {exc}") from exc
+    resolved = registry.get(name)
+    if resolved is None:
+        known = ", ".join(sorted(registry)) or "(none)"
+        raise typer.BadParameter(f"unknown target '{name}'. Known: {known}.")
+    return resolved
+
+
 @app.command()
 def scan(
-    path: Path = typer.Argument(
-        ...,
+    path: Path | None = typer.Argument(
+        None,
         help="Source input: a Terraform dir / `terraform show -json` plan file, "
-        "or an ArgoCD Application JSON file (with --source argocd).",
+        "or an ArgoCD Application JSON file (with --source argocd). Omit when using --target.",
     ),
     source: str = typer.Option(
         "terraform",
         "--source",
         help=f"Declared-state source: {' | '.join(sorted(DRIFT_SOURCES))}.",
+    ),
+    target: str = typer.Option(
+        "",
+        "--target",
+        help="Run a named target from the registry (STEADYSTATE_TARGETS, else ./targets.json) -- "
+        "the one `discover --create` writes and chat resolves. Supplies source/path/label/probe; "
+        "an explicit --label/--probe still wins. Mutually exclusive with the positional path.",
     ),
     to: str = typer.Option(
         "console",
@@ -296,6 +335,20 @@ def scan(
     ),
 ) -> None:
     """Scan declared state for drift and surface the Alerts."""
+    # --target resolves source/path/label/probe from the registry (the same one chat uses), so a
+    # `discover --create`'d target runs from the CLI by name. Explicit --label/--probe still win;
+    # --source is the target's (the path it points at must match it).
+    if target:
+        if path is not None:
+            raise typer.BadParameter("pass a path or --target, not both.")
+        tgt = _resolve_target(target)
+        source = tgt.source
+        path = Path(tgt.path)
+        label = label or tgt.label
+        if probe == "none":
+            probe = tgt.probe
+    elif path is None:
+        raise typer.BadParameter("give a path to scan, or --target <name>.")
     if autonomy not in ("observe", "suggest", "auto"):
         raise typer.BadParameter("autonomy must be: observe | suggest | auto")
     if autonomy == "auto" and stateless:
@@ -564,6 +617,50 @@ def commands(
             typer.echo("  observe (pre-approved):")
             for cmd in PROBE_CAPABILITIES[name].observe or ("(reads a captured snapshot)",):
                 typer.echo(f"    {cmd}")
+
+
+@app.command()
+def targets(
+    check: bool = typer.Option(
+        False,
+        "--check",
+        help="Validate each target: its source is registered, its probe is real, and its path "
+        "still resolves. Exits non-zero if any target has a problem.",
+    ),
+) -> None:
+    """List the named scan/probe targets (STEADYSTATE_TARGETS, else ./targets.json).
+
+    This is the registry `discover --create` writes, `scan --target` runs, and the chat listener
+    resolves -- so `targets` lets you see and validate it from the CLI without opening the JSON."""
+    target_file = _targets_file()
+    if not target_file.exists():
+        typer.echo(f"no targets file ({target_file}). Create one with `discover --create`.")
+        return
+    try:
+        registry = load_targets(target_file)
+    except (OSError, ValueError) as exc:
+        typer.echo(f"targets file {target_file} is malformed: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    if not registry:
+        typer.echo(f"{target_file} has no targets.")
+        return
+    known_sources = set(DRIFT_SOURCES)
+    known_probes = {"auto", "none", *PROBES}
+    typer.echo(f"{len(registry)} target(s) in {target_file}:")
+    problems = 0
+    for name, entry in sorted(registry.items()):
+        line = f"  {name:<26} {entry.source:<14} {entry.path}"
+        if check:
+            issues = target_issues(entry, known_sources, known_probes, lambda p: Path(p).exists())
+            if issues:
+                problems += 1
+                line += "  [" + "; ".join(issues) + "]"
+            else:
+                line += "  [ok]"
+        typer.echo(line)
+    if check and problems:
+        typer.echo(f"{problems} target(s) with problems.", err=True)
+        raise typer.Exit(1)
 
 
 @app.command()
