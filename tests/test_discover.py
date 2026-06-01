@@ -399,3 +399,113 @@ def test_discover_deep_cli_path(monkeypatch):
     assert result.exit_code == 0
     assert "DEEP INSPECTION (live, read-only):" in result.stdout
     assert "kubectl: skipped" in result.stdout
+    assert "docker: skipped" in result.stdout
+    assert "argocd: skipped" in result.stdout
+
+
+# -- deep inspection: docker + argocd ---------------------------------------------------------
+
+
+def test_summarize_containers():
+    from steadystate.discover import summarize_containers
+
+    facts = summarize_containers([{"Names": "web", "Image": "nginx"}, {"Image": "redis"}])
+    assert facts[0] == "2 running container(s)"
+    assert facts[1] == "running: web, redis"  # Names preferred, falls back to Image
+
+
+def test_summarize_containers_empty():
+    from steadystate.discover import summarize_containers
+
+    assert summarize_containers([]) == ["0 running container(s)"]
+
+
+def test_compose_scan_commands_points_at_config_dir():
+    from steadystate.discover import compose_scan_commands
+
+    projects = [{"Name": "shop", "ConfigFiles": "/srv/shop/docker-compose.yml"}]
+    cmds = compose_scan_commands(projects)
+    assert "scan /srv/shop --source docker-compose --probe docker" in cmds[0]
+    assert "# project shop" in cmds[0]
+
+
+def test_summarize_argocd_apps():
+    from steadystate.discover import summarize_argocd_apps
+
+    apps = [
+        {
+            "metadata": {"name": "web"},
+            "status": {"sync": {"status": "Synced"}, "health": {"status": "Healthy"}},
+        }
+    ]
+    assert summarize_argocd_apps(apps) == ["web (sync=Synced, health=Healthy)"]
+    # also accepts a kubectl List shape
+    assert summarize_argocd_apps({"items": apps}) == ["web (sync=Synced, health=Healthy)"]
+
+
+def test_argocd_capture_commands_names_real_apps():
+    from steadystate.discover import argocd_capture_commands
+
+    cmds = argocd_capture_commands([{"metadata": {"name": "web"}}, {"metadata": {}}])
+    assert len(cmds) == 1
+    assert cmds[0].startswith("argocd app get web -o json > web.json")
+    assert "scan web.json --source argocd --probe argocd" in cmds[0]
+
+
+def test_inspect_docker_reports_containers_and_compose(monkeypatch):
+    from steadystate import discover as disc
+
+    monkeypatch.setattr(disc.shutil, "which", lambda _b: "/usr/bin/docker")
+    monkeypatch.setattr(disc, "_run_ndjson", lambda _argv: [{"Names": "web", "Image": "nginx"}])
+    monkeypatch.setattr(
+        disc,
+        "_run_json",
+        lambda _argv: [
+            {"Name": "shop", "Status": "running(2)", "ConfigFiles": "/srv/shop/compose.yml"}
+        ],
+    )
+    result = disc.inspect_docker()
+    assert result.ok is True
+    assert "1 running container(s)" in result.facts
+    assert any("compose project: shop" in f for f in result.facts)
+    assert any("scan /srv/shop --source docker-compose" in rec for rec in result.recommendations)
+
+
+def test_inspect_docker_skips_when_daemon_down(monkeypatch):
+    from steadystate import discover as disc
+
+    monkeypatch.setattr(disc.shutil, "which", lambda _b: "/usr/bin/docker")
+    monkeypatch.setattr(disc, "_run_ndjson", lambda _argv: None)
+    result = disc.inspect_docker()
+    assert result.ok is False
+    assert "daemon unreachable" in result.note
+
+
+def test_inspect_argocd_tailors_to_real_apps(monkeypatch):
+    from steadystate import discover as disc
+
+    apps = [{"metadata": {"name": "web"}, "status": {"sync": {"status": "OutOfSync"}}}]
+    monkeypatch.setattr(disc.shutil, "which", lambda _b: "/usr/bin/argocd")
+    monkeypatch.setattr(disc, "_run_json", lambda _argv: apps)
+    result = disc.inspect_argocd()
+    assert result.ok is True
+    assert result.facts == ("app: web (sync=OutOfSync, health=?)",)
+    assert any("argocd app get web" in rec for rec in result.recommendations)
+
+
+def test_inspect_argocd_skips_when_not_logged_in(monkeypatch):
+    from steadystate import discover as disc
+
+    monkeypatch.setattr(disc.shutil, "which", lambda _b: "/usr/bin/argocd")
+    monkeypatch.setattr(disc, "_run_json", lambda _argv: None)
+    result = disc.inspect_argocd()
+    assert result.ok is False
+    assert "not logged in" in result.note
+
+
+def test_deep_inspect_covers_all_five_tools(monkeypatch):
+    from steadystate import discover as disc
+
+    monkeypatch.setattr(disc.shutil, "which", lambda _b: None)
+    tools = {i.tool for i in disc.deep_inspect(cwd=disc.Path("/nonexistent"))}
+    assert tools == {"kubectl", "helm", "terraform", "docker", "argocd"}
