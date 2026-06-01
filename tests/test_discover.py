@@ -635,3 +635,29 @@ def test_discover_create_reports_when_nothing_scannable(tmp_path, monkeypatch):
     assert result.exit_code == 0
     assert "nothing to create" in result.stdout
     assert not (tmp_path / "targets.json").exists()
+
+
+def test_discover_deep_and_create_stack(tmp_path, monkeypatch):
+    # The flags are orthogonal: one pass prints the base report + DEEP INSPECTION and writes the
+    # targets file, all from the same findings. This is the one-shot "inspect and register" path.
+    from typer.testing import CliRunner
+
+    from steadystate import discover as disc
+    from steadystate.cli import app
+    from steadystate.discover import _slug
+    from steadystate.targets import load_targets
+
+    (tmp_path / "main.tf").write_text("resource {}")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(disc.shutil, "which", lambda _b: None)  # tools skip, file still written
+    monkeypatch.delenv("STEADYSTATE_TARGETS", raising=False)
+
+    result = CliRunner().invoke(app, ["discover", "--deep", "--create"])
+    assert result.exit_code == 0
+    # all three sections present, in order
+    assert "SOURCES (--source):" in result.stdout
+    assert "DEEP INSPECTION (live, read-only):" in result.stdout
+    assert "TARGETS ->" in result.stdout
+    # and the targets file was actually written from that same pass
+    written = load_targets(tmp_path / "targets.json")
+    assert written[_slug(tmp_path.name)].source == "terraform"
