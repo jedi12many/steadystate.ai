@@ -42,12 +42,15 @@ steadystate discover
 #    with commands carrying your real release/namespace names.
 steadystate discover --deep
 
-# 3. Register what it found as named targets (name -> source + path), so a scheduled job or a
-#    chat-summoned `@steadystate probe <name>` resolves without hand-writing JSON. Named after
-#    the directory; suffixed per source when several are found. Merges, never clobbers.
+# 3. Register what it found as named targets (name -> source + path), so the CLI, a scheduled
+#    job, and a chat-summoned `@steadystate probe <name>` all resolve it without hand-writing
+#    JSON. Named after the directory; suffixed per source when several are found. Merges, never
+#    clobbers. `steadystate targets [--check]` lists and validates the registry.
 steadystate discover --create        # writes ./targets.json (or $STEADYSTATE_TARGETS)
 
-# 4. Scan — with the command discover handed you.
+# 4. Scan — by target name (source/path/label/probe come from the registry) ...
+steadystate scan --target your-infra
+#    ... or spell it out with the command discover handed you:
 steadystate scan . --source terraform
 ```
 

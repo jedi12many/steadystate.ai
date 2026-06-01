@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -93,3 +94,22 @@ def save_targets(path: str | Path, targets: dict[str, Target]) -> None:
     file wholesale, so callers preserving existing entries merge first (``merge_targets``)."""
     doc = {name: target_to_spec(target) for name, target in targets.items()}
     Path(path).write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+
+
+def target_issues(
+    target: Target,
+    known_sources: set[str],
+    known_probes: set[str],
+    path_exists: Callable[[str], bool],
+) -> list[str]:
+    """Validate one target against the running build: its source is registered, its probe is a real
+    one (or ``auto``/``none``), and its path resolves. Returns a list of human-readable problems --
+    empty means healthy. Pure: ``path_exists`` is injected, so it's testable without a disk."""
+    issues: list[str] = []
+    if target.source not in known_sources:
+        issues.append(f"unknown source '{target.source}'")
+    if target.probe not in known_probes:
+        issues.append(f"unknown probe '{target.probe}'")
+    if not path_exists(target.path):
+        issues.append("path not found")
+    return issues
