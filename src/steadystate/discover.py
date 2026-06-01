@@ -338,6 +338,15 @@ class Inspection:
     facts: tuple[str, ...] = ()
     recommendations: tuple[str, ...] = ()
     note: str = ""
+    targets: tuple[Target, ...] = ()  # live resources here that map to a valid scan target
+
+
+def deep_targets(inspections: list[Inspection]) -> list[Target]:
+    """The live-discovered resources that map to a scannable target (an existing path), flattened
+    across inspections -- what `--deep --create` adds beyond the cwd-local ``proposed_targets``.
+    Only sources whose target path is a live directory (docker-compose) qualify; argocd/helm would
+    need a captured snapshot file, so they stay advice-only. Pure."""
+    return [target for inspection in inspections for target in inspection.targets]
 
 
 # -- pure summarizers (parse a read into facts/commands) --------------------------------------
@@ -423,6 +432,15 @@ def summarize_containers(containers: object) -> list[str]:
     return facts
 
 
+def _compose_dir(config: object) -> str | None:
+    """The directory of a compose project's first config file, or None when it can't be resolved.
+    The path comes from the docker host, so its separator may differ from ours -- slice on either
+    rather than pathlib (which would mangle a POSIX path on Windows). Pure."""
+    first = config.split(",")[0].strip() if isinstance(config, str) else ""
+    cut = max(first.rfind("/"), first.rfind("\\"))
+    return first[:cut] if cut > 0 else None
+
+
 def compose_scan_commands(projects: object) -> list[str]:
     """`docker compose ls --format json` -> a `scan <dir> --source docker-compose` per project,
     pointed at the directory of the project's compose file. Pure."""
@@ -430,16 +448,32 @@ def compose_scan_commands(projects: object) -> list[str]:
     for p in projects if isinstance(projects, list) else []:
         if not isinstance(p, dict):
             continue
-        config = p.get("ConfigFiles")
-        first = config.split(",")[0].strip() if isinstance(config, str) else ""
-        # The compose path comes from the docker host, so its separator may differ from ours --
-        # slice on either rather than pathlib (which would mangle a POSIX path on Windows).
-        cut = max(first.rfind("/"), first.rfind("\\"))
-        directory = first[:cut] if cut > 0 else "."
+        directory = _compose_dir(p.get("ConfigFiles")) or "."
         out.append(
             f"steadystate scan {directory} --source docker-compose --probe docker"
             f"  # project {p.get('Name', '?')}"
         )
+    return out
+
+
+def compose_targets(projects: object) -> list[Target]:
+    """`docker compose ls --format json` -> a `docker-compose` Target per project, pointed at the
+    project's own directory. Unlike argocd/helm -- whose targets would need a captured snapshot file
+    that doesn't exist yet -- a compose project's directory is real on disk, so the target is
+    scannable now. This is what `--deep --create` registers beyond the cwd-local pass: running
+    projects rooted *elsewhere*. Names come from the project. Pure."""
+    out: list[Target] = []
+    for p in projects if isinstance(projects, list) else []:
+        if not isinstance(p, dict):
+            continue
+        directory = _compose_dir(p.get("ConfigFiles"))
+        name = _slug(str(p.get("Name") or ""))
+        if directory and name:
+            out.append(
+                Target(
+                    name=name, source="docker-compose", path=directory, label=name, probe="docker"
+                )
+            )
     return out
 
 
@@ -582,6 +616,7 @@ def inspect_docker() -> Inspection:
     facts = summarize_containers(containers)
     projects = _run_json(["docker", "compose", "ls", "--format", "json"])
     recommendations: tuple[str, ...] = ()
+    targets: tuple[Target, ...] = ()
     if isinstance(projects, list) and projects:
         facts.extend(
             f"compose project: {p.get('Name', '?')} ({p.get('Status', '?')})"
@@ -590,7 +625,10 @@ def inspect_docker() -> Inspection:
         )
         if commands := compose_scan_commands(projects):
             recommendations = ("scan each running compose project:", *commands)
-    return Inspection("docker", ok=True, facts=tuple(facts), recommendations=recommendations)
+        targets = tuple(compose_targets(projects))
+    return Inspection(
+        "docker", ok=True, facts=tuple(facts), recommendations=recommendations, targets=targets
+    )
 
 
 def inspect_argocd() -> Inspection:

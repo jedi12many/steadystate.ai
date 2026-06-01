@@ -429,6 +429,37 @@ def test_compose_scan_commands_points_at_config_dir():
     assert "# project shop" in cmds[0]
 
 
+def test_compose_targets_point_at_real_project_dirs():
+    from steadystate.discover import compose_targets
+
+    targets = compose_targets([{"Name": "Shop API", "ConfigFiles": "/srv/shop/compose.yml"}])
+    assert len(targets) == 1
+    assert targets[0].name == "shop-api"  # slugified project name
+    assert targets[0].source == "docker-compose"
+    assert targets[0].path == "/srv/shop"  # the project's own dir (exists on disk)
+    assert targets[0].probe == "docker"
+
+
+def test_compose_targets_skips_unresolvable_or_unnamed():
+    from steadystate.discover import compose_targets
+
+    assert compose_targets([{"Name": "x", "ConfigFiles": "compose.yml"}]) == []  # no dir part
+    assert compose_targets([{"ConfigFiles": "/srv/x/compose.yml"}]) == []  # no name
+    assert compose_targets("garbage") == []
+
+
+def test_deep_targets_flattens_inspection_targets():
+    from steadystate.discover import Inspection, deep_targets
+    from steadystate.targets import Target
+
+    shop = Target("shop", "docker-compose", "/srv/shop", "shop", "docker")
+    inspections = [
+        Inspection("kubectl", ok=False, note="skipped"),  # no targets
+        Inspection("docker", ok=True, targets=(shop,)),
+    ]
+    assert deep_targets(inspections) == [shop]
+
+
 def test_summarize_argocd_apps():
     from steadystate.discover import summarize_argocd_apps
 
@@ -469,6 +500,9 @@ def test_inspect_docker_reports_containers_and_compose(monkeypatch):
     assert "1 running container(s)" in result.facts
     assert any("compose project: shop" in f for f in result.facts)
     assert any("scan /srv/shop --source docker-compose" in rec for rec in result.recommendations)
+    # the structured counterpart of the rendered command: a target --create can register
+    assert [t.name for t in result.targets] == ["shop"]
+    assert result.targets[0].source == "docker-compose" and result.targets[0].path == "/srv/shop"
 
 
 def test_inspect_docker_skips_when_daemon_down(monkeypatch):
@@ -661,3 +695,68 @@ def test_discover_deep_and_create_stack(tmp_path, monkeypatch):
     # and the targets file was actually written from that same pass
     written = load_targets(tmp_path / "targets.json")
     assert written[_slug(tmp_path.name)].source == "terraform"
+
+
+def test_discover_deep_create_registers_live_compose_project(tmp_path, monkeypatch):
+    # --deep finds a running compose project rooted OUTSIDE the cwd; --create registers it (its dir
+    # exists on disk). The cwd has nothing scannable, so this target is purely from the deep pass --
+    # the value the base --create alone couldn't deliver.
+    from typer.testing import CliRunner
+
+    from steadystate import discover as disc
+    from steadystate.cli import app
+    from steadystate.targets import load_targets
+
+    proj = tmp_path / "shop"
+    proj.mkdir()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        disc.shutil, "which", lambda b: "/usr/bin/docker" if b == "docker" else None
+    )
+    monkeypatch.setattr(disc, "_check_reachable", lambda _b: False)  # no real `docker info`
+    monkeypatch.setattr(disc, "_run_ndjson", lambda _argv: [])  # docker ps: no containers
+    monkeypatch.setattr(
+        disc,
+        "_run_json",
+        lambda _argv: [
+            {"Name": "shop", "Status": "running(1)", "ConfigFiles": str(proj / "c.yml")}
+        ],
+    )
+    monkeypatch.delenv("STEADYSTATE_TARGETS", raising=False)
+
+    result = CliRunner().invoke(app, ["discover", "--deep", "--create"])
+    assert result.exit_code == 0
+    written = load_targets(tmp_path / "targets.json")
+    assert "shop" in written
+    assert written["shop"].source == "docker-compose" and written["shop"].path == str(proj)
+
+
+def test_discover_deep_create_dedupes_cwd_compose_project(tmp_path, monkeypatch):
+    # A compose project IN the cwd is seen by both passes (base + deep). It must be written once,
+    # under one name -- not registered twice via two different naming schemes.
+    from typer.testing import CliRunner
+
+    from steadystate import discover as disc
+    from steadystate.cli import app
+    from steadystate.targets import load_targets
+
+    (tmp_path / "compose.yml").write_text("services: {}")  # a compose file in the cwd
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        disc.shutil, "which", lambda b: "/usr/bin/docker" if b == "docker" else None
+    )
+    monkeypatch.setattr(disc, "_check_reachable", lambda _b: False)
+    monkeypatch.setattr(disc, "_run_ndjson", lambda _argv: [])
+    monkeypatch.setattr(
+        disc,
+        "_run_json",
+        lambda _argv: [{"Name": "proj", "ConfigFiles": str(tmp_path / "compose.yml")}],
+    )
+    monkeypatch.delenv("STEADYSTATE_TARGETS", raising=False)
+
+    result = CliRunner().invoke(app, ["discover", "--deep", "--create"])
+    assert result.exit_code == 0
+    written = load_targets(tmp_path / "targets.json")
+    assert len(written) == 1  # the cwd project, once -- not base + deep duplicated
+    (only,) = written.values()
+    assert only.source == "docker-compose" and only.path == str(tmp_path)

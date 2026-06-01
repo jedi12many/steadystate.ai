@@ -17,7 +17,13 @@ from .act.approve import apply_pending, decline_pending
 from .act.base import Proposer
 from .act.deliver import build_deliveries
 from .catalog import gather_catalog, render_console, render_html
-from .discover import deep_inspect, probe_environment, proposed_targets, render_inspections
+from .discover import (
+    deep_inspect,
+    deep_targets,
+    probe_environment,
+    proposed_targets,
+    render_inspections,
+)
 from .discover import render as render_discovery
 from .engine import build_report
 from .inbound import INBOUND, build_inbound
@@ -901,11 +907,19 @@ def doctor(
     _render_audit(Console(), env, title="Configuration")
 
 
-def _create_targets(findings: list) -> None:
+def _create_targets(findings: list, extra: list | None = None) -> None:
     """`--create`: write the discovered sources into the targets registry (the name -> target map
-    the chat listener resolves), merging without clobbering existing entries."""
+    the chat listener resolves), merging without clobbering existing entries. ``extra`` carries the
+    live-discovered targets from a paired ``--deep`` (compose projects rooted outside the cwd)."""
     target_file = Path(os.environ.get(TARGETS_ENV) or "targets.json")
     proposed = proposed_targets(findings, Path.cwd())
+    # Fold in the deep-discovered targets, but drop any whose (source, path) the cwd-local pass
+    # already covers -- so a compose project *in* the cwd isn't registered twice under two names.
+    seen = {(t.source, t.path) for t in proposed}
+    for target in extra or []:
+        if (target.source, target.path) not in seen:
+            proposed.append(target)
+            seen.add((target.source, target.path))
     if not proposed:
         typer.echo("\nno scannable source found here -- nothing to create.")
         return
@@ -936,7 +950,8 @@ def discover(
         "--create",
         help="Write the discovered sources into the targets registry (STEADYSTATE_TARGETS, else "
         "./targets.json) as named scan/probe targets -- named after the cwd, suffixed per source "
-        "when several are found. Merges without overwriting existing entries.",
+        "when several are found. With --deep, also registers live compose projects rooted outside "
+        "the cwd. Merges without overwriting existing entries.",
     ),
 ) -> None:
     """Show what `scan`/`probe` can do *here* -- in the current directory and on this machine.
@@ -949,12 +964,13 @@ def discover(
     directory you intend to scan."""
     findings = probe_environment()
     lines = render_discovery(findings)
+    inspections = deep_inspect() if deep else []
     if deep:
-        lines += render_inspections(deep_inspect())
+        lines += render_inspections(inspections)
     for line in lines:
         typer.echo(line)
     if create:
-        _create_targets(findings)
+        _create_targets(findings, extra=deep_targets(inspections))
 
 
 @app.command()
