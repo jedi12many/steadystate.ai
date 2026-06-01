@@ -17,7 +17,7 @@ from .act.approve import apply_pending, decline_pending
 from .act.base import Proposer
 from .act.deliver import build_deliveries
 from .catalog import gather_catalog, render_console, render_html
-from .discover import deep_inspect, probe_environment, render_inspections
+from .discover import deep_inspect, probe_environment, proposed_targets, render_inspections
 from .discover import render as render_discovery
 from .engine import build_report
 from .inbound import INBOUND, build_inbound
@@ -35,6 +35,7 @@ from .reconcile_state import reconcile
 from .sources import CAPABILITIES, DRIFT_SOURCES, build_drift_source
 from .sources.base import SourceError
 from .state import PendingAction, StateStore
+from .targets import TARGETS_ENV, load_targets, merge_targets, save_targets
 
 DEFAULT_STATE_PATH = ".steadystate/state.db"
 
@@ -803,6 +804,28 @@ def doctor(
     _render_audit(Console(), env, title="Configuration")
 
 
+def _create_targets(findings: list) -> None:
+    """`--create`: write the discovered sources into the targets registry (the name -> target map
+    the chat listener resolves), merging without clobbering existing entries."""
+    target_file = Path(os.environ.get(TARGETS_ENV) or "targets.json")
+    proposed = proposed_targets(findings, Path.cwd())
+    if not proposed:
+        typer.echo("\nno scannable source found here -- nothing to create.")
+        return
+    try:
+        existing = load_targets(target_file) if target_file.exists() else {}
+    except (OSError, ValueError) as exc:
+        typer.echo(f"\nexisting targets file {target_file} is malformed: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    merged, added, _ = merge_targets(existing, proposed)
+    save_targets(target_file, merged)
+    typer.echo(f"\nTARGETS -> {target_file}")
+    for target in proposed:
+        mark = "added" if target.name in added else "exists (kept)"
+        typer.echo(f"  {target.name:<26} {target.source} @ {target.path}  [{mark}]")
+    typer.echo(f"point the listener at it:  export {TARGETS_ENV}={target_file}")
+
+
 @app.command()
 def discover(
     deep: bool = typer.Option(
@@ -811,6 +834,13 @@ def discover(
         help="Also run read-only live reads (kubectl get nodes, helm list, ...) against reachable "
         "backends and report concrete facts + commands carrying your real release/namespace names.",
     ),
+    create: bool = typer.Option(
+        False,
+        "--create",
+        help="Write the discovered sources into the targets registry (STEADYSTATE_TARGETS, else "
+        "./targets.json) as named scan/probe targets -- named after the cwd, suffixed per source "
+        "when several are found. Merges without overwriting existing entries.",
+    ),
 ) -> None:
     """Show what `scan`/`probe` can do *here* -- in the current directory and on this machine.
 
@@ -818,12 +848,16 @@ def discover(
     environment preflight: per `--source` and `--probe`, whether the CLI it needs is installed and
     its backend reachable, whether a usable input is in the cwd, and the exact command to run.
     `--deep` goes further -- it interrogates the live backends (read-only) and tailors the advice
-    to what's actually there. Run it from the directory you intend to scan."""
-    lines = render_discovery(probe_environment())
+    to what's actually there. `--create` turns the hits into named targets. Run it from the
+    directory you intend to scan."""
+    findings = probe_environment()
+    lines = render_discovery(findings)
     if deep:
         lines += render_inspections(deep_inspect())
     for line in lines:
         typer.echo(line)
+    if create:
+        _create_targets(findings)
 
 
 @app.command()

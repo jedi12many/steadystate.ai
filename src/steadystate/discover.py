@@ -23,6 +23,7 @@ from pathlib import Path
 
 from .probe import PROBE_CAPABILITIES, auto_prober_for
 from .sources import CAPABILITIES
+from .targets import Target
 
 # A cheap, read-only "is the backend reachable?" probe per CLI: binary -> argv. Only CLIs whose
 # check genuinely contacts the backend belong here -- `terraform version` / `helm version` are
@@ -633,3 +634,51 @@ def render_inspections(results: list[Inspection]) -> list[str]:
         lines.extend(f"      - {fact}" for fact in r.facts)
         lines.extend(f"      -> {rec}" for rec in r.recommendations)
     return lines
+
+
+# -- target creation: turn what's here into named scan targets ---------------------------------
+#
+# `--create` writes the discovered sources into the targets registry (the name -> {source, path}
+# map the chat listener resolves). The base name comes from the cwd; when more than one source is
+# scannable here, each gets a `-<source>` suffix so the names stay unique and self-describing.
+
+
+def _slug(name: str) -> str:
+    """A filesystem/CLI-friendly target name: lowercased, non-alphanumerics collapsed to single
+    dashes, edges trimmed. "Shop.API v2" -> "shop-api-v2". Pure."""
+    out = []
+    for ch in name.lower():
+        out.append(ch if ch.isalnum() else "-")
+    slug = "".join(out)
+    while "--" in slug:
+        slug = slug.replace("--", "-")
+    return slug.strip("-")
+
+
+def _target_path(finding: Finding, cwd: Path) -> str | None:
+    """The concrete path a target for this source would scan: the working dir when the source has a
+    live dir signal present (terraform's *.tf, a compose file), else a detected snapshot file, else
+    None (nothing scannable here). Pure."""
+    if _HINTS.get(finding.name, {}).get("live") and finding.inputs:
+        return str(cwd)
+    if finding.snapshots:
+        return str(cwd / finding.snapshots[0])
+    return None
+
+
+def proposed_targets(findings: list[Finding], cwd: Path) -> list[Target]:
+    """The targets `--create` would write: one per source with a usable input in ``cwd``. The base
+    name is the cwd's; with a single hit it's used bare, with several each is suffixed `-<source>`
+    so the names are unique and say what they scan. Pure -- the caller persists them."""
+    base = _slug(cwd.name) or "target"
+    hits = [
+        (f, path)
+        for f in findings
+        if f.kind == "source" and (path := _target_path(f, cwd)) is not None
+    ]
+    multiple = len(hits) > 1
+    targets: list[Target] = []
+    for finding, path in hits:
+        name = f"{base}-{finding.name}" if multiple else base
+        targets.append(Target(name=name, source=finding.name, path=path, label=name, probe="auto"))
+    return targets
