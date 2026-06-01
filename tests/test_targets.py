@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 
@@ -88,6 +89,16 @@ def _targets_dir(tmp_path):
     return tmp_path
 
 
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _clean(output: str) -> str:
+    """Strip ANSI styling so message assertions don't depend on whether rich colorized the output
+    (it does on a color terminal / CI, not on a plain one) -- a BadParameter panel highlights
+    `--target`, which otherwise breaks the substring match."""
+    return _ANSI.sub("", output)
+
+
 def _run(monkeypatch, tmp_path, args):
     from typer.testing import CliRunner
 
@@ -95,7 +106,8 @@ def _run(monkeypatch, tmp_path, args):
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv(TARGETS_ENV, raising=False)
-    return CliRunner().invoke(app, args)
+    # Wide + no-color so rich neither wraps the error message across the panel nor styles it.
+    return CliRunner().invoke(app, args, env={"COLUMNS": "200", "NO_COLOR": "1"})
 
 
 def test_scan_target_resolves_and_runs(monkeypatch, tmp_path):
@@ -106,7 +118,7 @@ def test_scan_target_resolves_and_runs(monkeypatch, tmp_path):
 def test_scan_target_unknown_name(monkeypatch, tmp_path):
     result = _run(monkeypatch, _targets_dir(tmp_path), ["scan", "--target", "ghost", "--stateless"])
     assert result.exit_code != 0
-    assert "unknown target 'ghost'" in result.output
+    assert "unknown target 'ghost'" in _clean(result.output)
 
 
 def test_scan_target_and_path_are_mutually_exclusive(monkeypatch, tmp_path):
@@ -114,13 +126,13 @@ def test_scan_target_and_path_are_mutually_exclusive(monkeypatch, tmp_path):
         monkeypatch, _targets_dir(tmp_path), ["scan", "x.json", "--target", "demo", "--stateless"]
     )
     assert result.exit_code != 0
-    assert "not both" in result.output
+    assert "not both" in _clean(result.output)
 
 
 def test_scan_needs_a_path_or_target(monkeypatch, tmp_path):
     result = _run(monkeypatch, _targets_dir(tmp_path), ["scan", "--stateless"])
     assert result.exit_code != 0
-    assert "give a path to scan, or --target" in result.output
+    assert "give a path to scan, or --target" in _clean(result.output)
 
 
 def test_targets_command_lists(monkeypatch, tmp_path):
