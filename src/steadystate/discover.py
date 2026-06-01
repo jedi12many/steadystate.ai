@@ -507,6 +507,60 @@ def argocd_capture_commands(apps: object) -> list[str]:
     return out
 
 
+# Common Ansible inventory / playbook filenames -- used to find a real input to name in the
+# tailored capture command (we can't parse YAML stdlib-only, so detection is filename-based).
+_ANSIBLE_PLAYBOOKS = ("site.yml", "site.yaml", "playbook.yml", "playbook.yaml", "main.yml")
+
+
+def inventory_hosts(doc: object) -> list[str]:
+    """The distinct host names in an `ansible-inventory --list` doc, in first-seen order.
+    `_meta.hostvars` is the authoritative host set; we also fold in any host listed under a group,
+    so a sparse inventory (no gathered vars) still counts. Pure."""
+    if not isinstance(doc, dict):
+        return []
+    hosts: dict[str, None] = {}
+    hostvars = (doc.get("_meta") or {}).get("hostvars")
+    if isinstance(hostvars, dict):
+        for host in hostvars:
+            hosts.setdefault(host, None)
+    for key, group in doc.items():
+        if key == "_meta" or not isinstance(group, dict):
+            continue
+        for host in group.get("hosts") or []:
+            if isinstance(host, str):
+                hosts.setdefault(host, None)
+    return list(hosts)
+
+
+def summarize_inventory(doc: object) -> str:
+    """`ansible-inventory --list` (JSON) -> "N host(s) in M group(s)". Groups are the top-level
+    keys minus Ansible's synthetic `_meta` / `all` / `ungrouped`. Pure."""
+    hosts = inventory_hosts(doc)
+    groups = (
+        [k for k in doc if k not in ("_meta", "all", "ungrouped")] if isinstance(doc, dict) else []
+    )
+    return f"{len(hosts)} host(s) in {len(groups)} group(s)"
+
+
+def _ansible_playbook(cwd: Path) -> str | None:
+    """A real playbook filename in ``cwd`` to name in the capture command, or None. Filename-based
+    (the project is stdlib-only, so a playbook's YAML can't be parsed to confirm it). Pure given
+    the dir."""
+    return next((name for name in _ANSIBLE_PLAYBOOKS if (cwd / name).is_file()), None)
+
+
+def ansible_capture_command(cwd: Path) -> str:
+    """The `--check` capture for `--source ansible`, naming a real playbook from ``cwd`` when one is
+    present (else a `<playbook>` placeholder). The check run IS the reconcile, so -- unlike the
+    other inspectors' live reads -- it's too heavy to run in a preflight; we tailor the command and
+    let the operator run it. Pure given the dir."""
+    playbook = _ansible_playbook(cwd) or "<playbook>"
+    return (
+        f"ANSIBLE_STDOUT_CALLBACK=json ansible-playbook --check --diff {playbook} > play.json"
+        " && steadystate scan play.json --source ansible"
+    )
+
+
 # -- I/O: run the read-only commands ----------------------------------------------------------
 
 
@@ -649,6 +703,27 @@ def inspect_argocd() -> Inspection:
     )
 
 
+def inspect_ansible(cwd: Path) -> Inspection:
+    """The live read for `--source ansible`: `ansible-inventory --list` (read-only JSON) reports the
+    fleet the playbooks target -- host + group counts -- and the advice names a real playbook from
+    the cwd. The `--check` run that yields drift is the reconcile itself, too heavy for a preflight,
+    so we never run it here; we surface the fleet and tailor the capture command. Skips honestly
+    when ansible isn't installed or no inventory resolves."""
+    if shutil.which("ansible-inventory") is None:
+        return Inspection("ansible", ok=False, note="ansible not installed")
+    inventory = _run_json(["ansible-inventory", "--list"])
+    if inventory is None:
+        return Inspection(
+            "ansible", ok=False, note="installed, but no inventory resolved (ansible.cfg / -i?)"
+        )
+    hosts = inventory_hosts(inventory)
+    facts = [f"inventory: {summarize_inventory(inventory)}"]
+    if hosts:
+        facts.append(f"hosts: {', '.join(hosts[:12])}")
+    recs = ("capture --check drift for --source ansible:", ansible_capture_command(cwd))
+    return Inspection("ansible", ok=True, facts=tuple(facts), recommendations=recs)
+
+
 def deep_inspect(cwd: Path | None = None) -> list[Inspection]:
     """Run the read-only live reads for the supported tools and return one Inspection each."""
     cwd = cwd or Path.cwd()
@@ -658,6 +733,7 @@ def deep_inspect(cwd: Path | None = None) -> list[Inspection]:
         inspect_terraform(cwd),
         inspect_docker(),
         inspect_argocd(),
+        inspect_ansible(cwd),
     ]
 
 

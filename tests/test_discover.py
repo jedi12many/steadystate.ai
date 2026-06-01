@@ -537,12 +537,84 @@ def test_inspect_argocd_skips_when_not_logged_in(monkeypatch):
     assert "not logged in" in result.note
 
 
-def test_deep_inspect_covers_all_five_tools(monkeypatch):
+def test_deep_inspect_covers_every_inspectable_tool(monkeypatch):
     from steadystate import discover as disc
 
     monkeypatch.setattr(disc.shutil, "which", lambda _b: None)
     tools = {i.tool for i in disc.deep_inspect(cwd=disc.Path("/nonexistent"))}
-    assert tools == {"kubectl", "helm", "terraform", "docker", "argocd"}
+    assert tools == {"kubectl", "helm", "terraform", "docker", "argocd", "ansible"}
+
+
+# -- deep inspection: ansible -----------------------------------------------------------------
+
+
+def test_inventory_hosts_from_meta_and_groups():
+    from steadystate.discover import inventory_hosts
+
+    doc = {
+        "_meta": {"hostvars": {"web1": {}, "web2": {}}},
+        "web": {"hosts": ["web1", "web2"]},
+        "db": {"hosts": ["db1"]},  # a host only under a group, not in hostvars
+    }
+    assert inventory_hosts(doc) == ["web1", "web2", "db1"]
+    assert inventory_hosts("garbage") == []
+
+
+def test_summarize_inventory_counts_hosts_and_real_groups():
+    from steadystate.discover import summarize_inventory
+
+    doc = {
+        "_meta": {"hostvars": {"web1": {}}},
+        "all": {"children": ["web"]},  # synthetic -- not counted
+        "ungrouped": {},  # synthetic -- not counted
+        "web": {"hosts": ["web1"]},
+    }
+    assert summarize_inventory(doc) == "1 host(s) in 1 group(s)"
+
+
+def test_ansible_capture_command_names_a_real_playbook(tmp_path):
+    from steadystate.discover import ansible_capture_command
+
+    assert "<playbook>" in ansible_capture_command(tmp_path)  # none present -> placeholder
+    (tmp_path / "site.yml").write_text("- hosts: all")
+    cmd = ansible_capture_command(tmp_path)
+    assert "ansible-playbook --check --diff site.yml" in cmd
+    assert "scan play.json --source ansible" in cmd
+
+
+def test_inspect_ansible_reports_inventory(monkeypatch, tmp_path):
+    from steadystate import discover as disc
+
+    monkeypatch.setattr(disc.shutil, "which", lambda _b: "/usr/bin/ansible-inventory")
+    monkeypatch.setattr(
+        disc,
+        "_run_json",
+        lambda _argv: {"_meta": {"hostvars": {"web1": {}}}, "web": {"hosts": ["web1"]}},
+    )
+    result = disc.inspect_ansible(tmp_path)
+    assert result.ok is True
+    assert result.facts[0] == "inventory: 1 host(s) in 1 group(s)"
+    assert "hosts: web1" in result.facts
+    assert any("--source ansible" in rec for rec in result.recommendations)
+
+
+def test_inspect_ansible_skips_when_not_installed(monkeypatch, tmp_path):
+    from steadystate import discover as disc
+
+    monkeypatch.setattr(disc.shutil, "which", lambda _b: None)
+    result = disc.inspect_ansible(tmp_path)
+    assert result.ok is False
+    assert "not installed" in result.note
+
+
+def test_inspect_ansible_skips_when_no_inventory(monkeypatch, tmp_path):
+    from steadystate import discover as disc
+
+    monkeypatch.setattr(disc.shutil, "which", lambda _b: "/usr/bin/ansible-inventory")
+    monkeypatch.setattr(disc, "_run_json", lambda _argv: None)  # ansible-inventory failed
+    result = disc.inspect_ansible(tmp_path)
+    assert result.ok is False
+    assert "no inventory resolved" in result.note
 
 
 # -- target creation (--create) ---------------------------------------------------------------
