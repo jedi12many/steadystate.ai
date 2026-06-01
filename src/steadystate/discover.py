@@ -1,0 +1,316 @@
+"""Environment discovery -- "what can `scan`/`probe` actually do *here*?"
+
+Three different questions get three commands. `doctor` answers "what credentials/config are
+set?"; `catalog`/`commands` show what this build *statically* offers. This is the third: given
+the **current directory** and **this machine** -- which CLIs are installed, which backends are
+reachable, which inputs are lying around -- can I run each `--source`/`--probe` right now, what's
+missing, and what's the exact command?
+
+Registry-driven: the sources/probes and the CLI each one needs are read live from the registries
+(the required binary is the first real token of a declared ``observe`` command), so this never
+drifts from what's installed. The pure assessment (``assess_source`` / ``assess_probe``) is split
+from the I/O that gathers the facts (``probe_environment``) so the verdict logic is testable
+without a real shell or filesystem.
+"""
+
+from __future__ import annotations
+
+import json
+import shutil
+import subprocess
+from dataclasses import dataclass
+from pathlib import Path
+
+from .probe import PROBE_CAPABILITIES, auto_prober_for
+from .sources import CAPABILITIES
+
+# A cheap, read-only "is the backend reachable?" probe per CLI: binary -> argv. Only CLIs whose
+# check genuinely contacts the backend belong here -- `terraform version` / `helm version` are
+# client-only and prove nothing about state/cluster reachability, so they're omitted (those just
+# report "installed"). kubectl/docker reads do hit the cluster/daemon.
+_REACHABILITY: dict[str, list[str]] = {
+    "kubectl": ["kubectl", "cluster-info", "--request-timeout=3s"],
+    "docker": ["docker", "info", "--format", "{{.ServerVersion}}"],
+}
+
+# observe commands that name no local CLI: HTTP API reads (`GET /api/...`) hit a remote API, not a
+# binary on PATH, so they carry no tool requirement -- those sources read a captured snapshot.
+_HTTP_VERBS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"})
+
+# Per-source input hints: a comma-separated glob that signals a live working dir, plus the example
+# commands. Hand-maintained -- the registry knows *tools*, not what a valid *input* looks like.
+_HINTS: dict[str, dict[str, str]] = {
+    "terraform": {
+        "globs": "*.tf",
+        "live": "steadystate scan . --source terraform",
+        "capture": "terraform show -json tfplan > plan.json"
+        " && steadystate scan plan.json --source terraform",
+    },
+    "docker-compose": {
+        "globs": "docker-compose.yml,docker-compose.yaml,compose.yml,compose.yaml",
+        "live": "steadystate scan . --source docker-compose --probe docker",
+        "capture": "steadystate scan compose-snapshot.json --source docker-compose",
+    },
+    "k8s": {
+        # No live CLI path is wired into `--source k8s`; it consumes a {declared,observed} snapshot.
+        "capture": "build {declared,observed} (helm get manifest | kubectl get -o json),"
+        " then steadystate scan snapshot.json --source k8s --probe kubectl",
+    },
+    "helm": {
+        "globs": "Chart.yaml",
+        "capture": "helm list -o json > releases.json"
+        " && steadystate scan releases.json --source helm",
+    },
+    "argocd": {
+        "capture": "steadystate scan app.json --source argocd --probe argocd"
+        "  (app.json = an Application JSON)",
+    },
+    "ansible": {
+        "capture": "ANSIBLE_STDOUT_CALLBACK=json ansible-playbook --check --diff ... > play.json"
+        " && steadystate scan play.json --source ansible",
+    },
+    "rancher": {
+        "capture": "steadystate scan gitrepo.json --source rancher"
+        "  (a captured Fleet GitRepo JSON)",
+    },
+}
+
+_REACHABILITY_TIMEOUT = 5.0
+
+
+def required_bins(observe: tuple[str, ...]) -> list[str]:
+    """The CLIs a capability needs = the first real token of each declared observe command, deduped
+    in first-seen order. Leading ``VAR=value`` env assignments are skipped
+    (``ANSIBLE_...=json ansible-playbook ...`` -> ``["ansible-playbook"]``); HTTP-verb reads
+    (``GET /api/...``) name no local CLI and yield nothing. ``("kubectl get -o json",)`` ->
+    ``["kubectl"]``; ``("docker compose ...",)`` -> ``["docker"]``. Pure."""
+    seen: dict[str, None] = {}
+    for cmd in observe:
+        binary = ""
+        for token in cmd.split():
+            if "=" in token and not token.startswith("-"):
+                continue  # leading env assignment, e.g. ANSIBLE_STDOUT_CALLBACK=json
+            binary = token
+            break
+        if not binary or binary in _HTTP_VERBS:
+            continue
+        seen.setdefault(binary, None)
+    return list(seen)
+
+
+def snapshot_source(doc: object) -> str | None:
+    """The source name whose captured-snapshot shape ``doc`` matches, or None. Cheap structural
+    heuristics only -- a hint, never authoritative. Pure."""
+    if isinstance(doc, dict):
+        if {"declared", "observed"} & doc.keys():
+            return "k8s"
+        if doc.get("kind") == "Application":
+            return "argocd"
+        if {"resource_changes", "resource_drift"} & doc.keys():
+            return "terraform"
+    if isinstance(doc, list) and doc and isinstance(doc[0], dict) and "chart" in doc[0]:
+        return "helm"
+    return None
+
+
+@dataclass(frozen=True)
+class ToolStatus:
+    """One CLI a capability needs: is it on PATH, and (where we can cheaply check) is its backend
+    reachable? ``reachable`` is None when un-checked -- either no reachability probe is defined for
+    it, or it isn't installed."""
+
+    name: str
+    installed: bool
+    reachable: bool | None
+
+
+@dataclass(frozen=True)
+class Finding:
+    """A single source or probe's readiness in this environment."""
+
+    name: str
+    kind: str  # "source" | "probe"
+    headline: str
+    tools: tuple[ToolStatus, ...]
+    inputs: tuple[str, ...] = ()  # matched input files in the cwd
+    snapshots: tuple[str, ...] = ()  # detected captured snapshots for this source
+    auto_probe: str | None = None  # source: the `--probe auto` pick
+    auto_for: tuple[str, ...] = ()  # probe: the sources it's auto for
+
+
+def _tool_statuses(
+    bins: list[str], present: set[str], reachable: dict[str, bool]
+) -> tuple[ToolStatus, ...]:
+    return tuple(
+        ToolStatus(name=b, installed=b in present, reachable=reachable.get(b)) for b in bins
+    )
+
+
+def _headline(tools: tuple[ToolStatus, ...], has_signal: bool, *, needs_input: bool) -> str:
+    if not tools:
+        return "n/a -- reads a captured snapshot only"
+    missing = [t.name for t in tools if not t.installed]
+    if missing:
+        return f"blocked -- install: {', '.join(missing)}"
+    unreachable = [t.name for t in tools if t.reachable is False]
+    if unreachable:
+        return f"installed, but backend unreachable: {', '.join(unreachable)}"
+    if needs_input and not has_signal:
+        return "tools ready -- no input found in cwd"
+    return "READY"
+
+
+def assess_source(
+    name: str,
+    observe: tuple[str, ...],
+    present: set[str],
+    reachable: dict[str, bool],
+    inputs: tuple[str, ...],
+    snapshots: tuple[str, ...],
+) -> Finding:
+    """Build the Finding for one ``--source``. Pure -- all environment facts are passed in."""
+    tools = _tool_statuses(required_bins(observe), present, reachable)
+    headline = _headline(tools, bool(inputs or snapshots), needs_input=True)
+    return Finding(
+        name=name,
+        kind="source",
+        headline=headline,
+        tools=tools,
+        inputs=inputs,
+        snapshots=snapshots,
+        auto_probe=auto_prober_for(name),
+    )
+
+
+def assess_probe(
+    name: str,
+    observe: tuple[str, ...],
+    present: set[str],
+    reachable: dict[str, bool],
+    auto_for: tuple[str, ...],
+) -> Finding:
+    """Build the Finding for one ``--probe``. Pure. A probe needs no cwd input -- it reads live
+    health or the same snapshot its source does -- so readiness is purely tool availability."""
+    tools = _tool_statuses(required_bins(observe), present, reachable)
+    headline = _headline(tools, has_signal=True, needs_input=False)
+    return Finding(name=name, kind="probe", headline=headline, tools=tools, auto_for=auto_for)
+
+
+# -- I/O: gather the facts the pure assessors consume ----------------------------------------
+
+
+def _installed(bins: set[str]) -> set[str]:
+    return {b for b in bins if shutil.which(b) is not None}
+
+
+def _check_reachable(binary: str) -> bool:
+    argv = _REACHABILITY[binary]
+    try:
+        return (
+            subprocess.run(argv, capture_output=True, timeout=_REACHABILITY_TIMEOUT).returncode == 0
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def _present_inputs(globs: str, cwd: Path) -> tuple[str, ...]:
+    found: list[str] = []
+    for pattern in (g.strip() for g in globs.split(",") if g.strip()):
+        found.extend(sorted(p.name for p in cwd.glob(pattern)))
+    return tuple(found)
+
+
+def _classify_snapshots(cwd: Path) -> dict[str, list[str]]:
+    """Bucket small ``*.json`` files in ``cwd`` by the source whose snapshot shape they match."""
+    buckets: dict[str, list[str]] = {}
+    for path in sorted(cwd.glob("*.json")):
+        try:
+            if path.stat().st_size > 2_000_000:
+                continue
+            doc = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        if (source := snapshot_source(doc)) is not None:
+            buckets.setdefault(source, []).append(path.name)
+    return buckets
+
+
+def probe_environment(cwd: Path | None = None) -> list[Finding]:
+    """Inspect ``cwd`` (default: the process cwd) and this machine, returning a Finding per source
+    then per probe. This is the I/O seam -- it gathers PATH/reachability/inputs and hands them to
+    the pure assessors."""
+    cwd = cwd or Path.cwd()
+
+    # All CLIs any source or probe could need, looked up once.
+    all_bins: set[str] = set()
+    for caps in (*CAPABILITIES.values(), *PROBE_CAPABILITIES.values()):
+        all_bins.update(required_bins(caps.observe))
+    present = _installed(all_bins)
+    reachable = {b: _check_reachable(b) for b in present if b in _REACHABILITY}
+
+    snapshots = _classify_snapshots(cwd)
+    findings: list[Finding] = []
+    for name in sorted(CAPABILITIES):
+        inputs = _present_inputs(_HINTS.get(name, {}).get("globs", ""), cwd)
+        findings.append(
+            assess_source(
+                name,
+                CAPABILITIES[name].observe,
+                present,
+                reachable,
+                inputs,
+                tuple(snapshots.get(name, ())),
+            )
+        )
+    for name in sorted(PROBE_CAPABILITIES):
+        auto_for = tuple(s for s in sorted(CAPABILITIES) if auto_prober_for(s) == name)
+        findings.append(
+            assess_probe(name, PROBE_CAPABILITIES[name].observe, present, reachable, auto_for)
+        )
+    return findings
+
+
+# -- rendering --------------------------------------------------------------------------------
+
+
+def _tool_line(tool: ToolStatus) -> str:
+    if not tool.installed:
+        return f"      [x] {tool.name}: not installed"
+    if tool.reachable is False:
+        return f"      [~] {tool.name}: installed, backend NOT reachable"
+    return f"      [+] {tool.name}: installed"
+
+
+def render(findings: list[Finding], cwd: Path | None = None) -> list[str]:
+    """The discovery report as lines. Pure given ``findings`` -- the CLI just echoes them."""
+    cwd = cwd or Path.cwd()
+    lines = [f"steadystate discovery -- {cwd}", ""]
+    sources = [f for f in findings if f.kind == "source"]
+    probes = [f for f in findings if f.kind == "probe"]
+
+    lines.append("SOURCES (--source):")
+    for f in sources:
+        lines.append(f"  * {f.name:<16} {f.headline}")
+        lines.extend(_tool_line(t) for t in f.tools)
+        if f.inputs:
+            lines.append(f"      found in cwd: {', '.join(f.inputs[:4])}")
+        if f.snapshots:
+            lines.append(f"      snapshot(s): {', '.join(f.snapshots[:4])}")
+        hint = _HINTS.get(f.name, {})
+        if hint.get("live"):
+            lines.append(f"      live:    {hint['live']}")
+        if hint.get("capture"):
+            lines.append(f"      capture: {hint['capture']}")
+        lines.append("")
+
+    lines.append("PROBES (--probe):")
+    for f in probes:
+        auto = f"  (auto for --source {', '.join(f.auto_for)})" if f.auto_for else ""
+        lines.append(f"  ~ {f.name:<16} {f.headline}{auto}")
+        lines.extend(_tool_line(t) for t in f.tools)
+        if not f.tools:
+            lines.append("      [+] reads a captured snapshot")
+        lines.append("")
+
+    lines.append("legend: [+] ready  [~] installed but backend unreachable  [x] not installed")
+    return lines
