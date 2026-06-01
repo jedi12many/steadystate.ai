@@ -20,6 +20,8 @@ from .catalog import gather_catalog, render_console, render_html
 from .discover import (
     deep_inspect,
     deep_targets,
+    emit_github_actions,
+    emittable_sources,
     probe_environment,
     proposed_targets,
     render_inspections,
@@ -953,6 +955,13 @@ def discover(
         "when several are found. With --deep, also registers live compose projects rooted outside "
         "the cwd. Merges without overwriting existing entries.",
     ),
+    emit_ci: bool = typer.Option(
+        False,
+        "--emit-ci",
+        help="Instead of the report, print a GitHub Actions workflow that scans the sources found "
+        "here -- tailored capture + scan per source, auth left as TODO. Pipe it: "
+        "`discover --emit-ci > .github/workflows/steadystate-drift.yml`.",
+    ),
 ) -> None:
     """Show what `scan`/`probe` can do *here* -- in the current directory and on this machine.
 
@@ -960,9 +969,20 @@ def discover(
     environment preflight: per `--source` and `--probe`, whether the CLI it needs is installed and
     its backend reachable, whether a usable input is in the cwd, and the exact command to run.
     `--deep` goes further -- it interrogates the live backends (read-only) and tailors the advice
-    to what's actually there. `--create` turns the hits into named targets. Run it from the
-    directory you intend to scan."""
+    to what's actually there. `--create` turns the hits into named targets. `--emit-ci` prints a
+    tailored GitHub Actions workflow instead of the report. Run it from the directory you intend to
+    scan."""
     findings = probe_environment()
+    # --emit-ci is a scripting mode: stdout is *only* the workflow YAML (for `> drift.yml`), so the
+    # human report is suppressed and progress notes go to stderr.
+    if emit_ci:
+        cwd = Path.cwd()
+        if not emittable_sources(findings):
+            typer.echo("no scannable source discovered here -- nothing to emit.", err=True)
+            return
+        for line in emit_github_actions(findings, cwd):
+            typer.echo(line)
+        return
     lines = render_discovery(findings)
     inspections = deep_inspect() if deep else []
     if deep:
