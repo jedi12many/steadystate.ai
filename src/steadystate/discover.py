@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from .probe import PROBE_CAPABILITIES, auto_prober_for
@@ -77,6 +77,10 @@ _HINTS: dict[str, dict[str, str]] = {
 }
 
 _REACHABILITY_TIMEOUT = 5.0
+
+# The one headline that means "scan would work here right now" -- a single constant so the exit
+# signal (`scannable_now`) and the report can't drift on the literal.
+_READY = "READY"
 
 
 def required_bins(observe: tuple[str, ...]) -> list[str]:
@@ -158,7 +162,7 @@ def _headline(tools: tuple[ToolStatus, ...], has_signal: bool, *, needs_input: b
         return f"installed, but backend unreachable: {', '.join(unreachable)}"
     if needs_input and not has_signal:
         return "tools ready -- no input found in cwd"
-    return "READY"
+    return _READY
 
 
 def assess_source(
@@ -229,7 +233,7 @@ def _classify_snapshots(cwd: Path) -> dict[str, list[str]]:
             if path.stat().st_size > 2_000_000:
                 continue
             doc = json.loads(path.read_text())
-        except (OSError, ValueError):
+        except (OSError, ValueError, RecursionError):  # RecursionError: deeply-nested JSON
             continue
         if (source := snapshot_source(doc)) is not None:
             buckets.setdefault(source, []).append(path.name)
@@ -269,6 +273,34 @@ def probe_environment(cwd: Path | None = None) -> list[Finding]:
             assess_probe(name, PROBE_CAPABILITIES[name].observe, present, reachable, auto_for)
         )
     return findings
+
+
+def scannable_now(findings: list[Finding]) -> bool:
+    """True iff at least one ``--source`` can be scanned in this cwd right now -- a tool-backed
+    source that's READY, or a snapshot-only source (k8s/argocd/rancher) with a matching snapshot
+    file present (it needs no local CLI). This is the signal ``discover --check`` exits non-zero
+    on, so a CI/preflight step can branch on "is there anything to scan here?". Pure."""
+    return any(f.kind == "source" and (f.headline == _READY or bool(f.snapshots)) for f in findings)
+
+
+def as_dict(
+    findings: list[Finding],
+    inspections: list[Inspection] | None = None,
+    cwd: Path | None = None,
+) -> dict:
+    """The discovery report as a JSON-serializable dict (`discover --json`): every Finding (and,
+    when ``--deep`` ran, every Inspection) as a plain dict, plus the top-level ``scannable`` signal.
+    Lets other tooling consume discovery without scraping the human report. Pure."""
+    cwd = cwd or Path.cwd()
+    payload: dict = {
+        "cwd": str(cwd),
+        "scannable": scannable_now(findings),
+        "sources": [asdict(f) for f in findings if f.kind == "source"],
+        "probes": [asdict(f) for f in findings if f.kind == "probe"],
+    }
+    if inspections is not None:
+        payload["deep"] = [asdict(i) for i in inspections]
+    return payload
 
 
 # -- rendering --------------------------------------------------------------------------------
@@ -578,7 +610,7 @@ def _run_json(argv: list[str]) -> object | None:
         return None
     try:
         return json.loads(out)
-    except ValueError:
+    except (ValueError, RecursionError):  # RecursionError: deeply-nested JSON
         return None
 
 
@@ -594,7 +626,7 @@ def _run_ndjson(argv: list[str]) -> list[dict] | None:
             continue
         try:
             parsed = json.loads(line)
-        except ValueError:
+        except (ValueError, RecursionError):  # RecursionError: deeply-nested JSON
             continue
         if isinstance(parsed, dict):
             docs.append(parsed)
@@ -649,7 +681,7 @@ def inspect_terraform(cwd: Path) -> Inspection:
     if state.exists():
         try:
             backend = backend_from_state(json.loads(state.read_text()))
-        except (OSError, ValueError):
+        except (OSError, ValueError, RecursionError):  # RecursionError: deeply-nested JSON
             backend = None
         if backend:
             facts.append(f"backend: {backend}")

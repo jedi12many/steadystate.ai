@@ -910,3 +910,123 @@ def test_discover_emit_ci_nothing_to_emit(tmp_path, monkeypatch):
     result = CliRunner().invoke(app, ["discover", "--emit-ci"])
     assert result.exit_code == 0
     assert "name: steadystate-drift" not in result.stdout  # nothing emitted to stdout
+
+
+# -- registry-drift guard (the hand-maintained dicts must key off real sources) ---------------
+
+
+def test_hint_and_recipe_keys_are_registered_sources():
+    # Mirrors test_probe.test_auto_keys_are_registered_sources: a renamed/added source must not
+    # silently lose its hint or CI recipe. _CI_STEPS/_REACHABILITY are intentional *subsets*, so
+    # the assertion is <= (subset), not equality.
+    from steadystate.discover import _CI_STEPS, _HINTS, _REACHABILITY, required_bins
+    from steadystate.probe import PROBE_CAPABILITIES
+    from steadystate.sources import CAPABILITIES
+
+    sources = set(CAPABILITIES)
+    assert set(_HINTS) <= sources, f"_HINTS keys not registered sources: {set(_HINTS) - sources}"
+    assert set(_CI_STEPS) <= sources, f"_CI_STEPS keys not sources: {set(_CI_STEPS) - sources}"
+
+    all_bins: set[str] = set()
+    for caps in (*CAPABILITIES.values(), *PROBE_CAPABILITIES.values()):
+        all_bins.update(required_bins(caps.observe))
+    unknown = set(_REACHABILITY) - all_bins
+    assert not unknown, f"_REACHABILITY names binaries no source/probe needs: {unknown}"
+
+
+# -- scannable_now: the --check / --json signal -----------------------------------------------
+
+
+def test_scannable_now_true_on_ready_source_or_present_snapshot():
+    from steadystate.discover import scannable_now
+
+    ready = assess_source("terraform", ("terraform plan",), {"terraform"}, {}, ("main.tf",), ())
+    assert scannable_now([ready]) is True
+    # snapshot present but tool absent: scanning a captured file needs no CLI -> still scannable.
+    snap = assess_source("k8s", ("kubectl get -o json",), set(), {}, (), ("snap.json",))
+    assert scannable_now([snap]) is True
+
+
+def test_scannable_now_false_when_blocked_or_empty():
+    from steadystate.discover import scannable_now
+
+    blocked = assess_source("terraform", ("terraform plan",), set(), {}, ("main.tf",), ())
+    assert scannable_now([blocked]) is False  # *.tf present but terraform not installed
+    assert scannable_now([]) is False
+
+
+# -- --json output + --check exit code --------------------------------------------------------
+
+
+def test_discover_json_emits_machine_readable_report(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from steadystate import discover as disc
+    from steadystate.cli import app
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(disc.shutil, "which", lambda _b: None)
+
+    result = CliRunner().invoke(app, ["discover", "--json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["scannable"] is False
+    assert {f["name"] for f in payload["sources"]}  # every source serialized
+    assert "deep" not in payload  # --deep not passed
+
+
+def test_discover_check_exits_nonzero_when_nothing_scannable(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from steadystate import discover as disc
+    from steadystate.cli import app
+
+    monkeypatch.chdir(tmp_path)  # empty dir, no tools
+    monkeypatch.setattr(disc.shutil, "which", lambda _b: None)
+
+    result = CliRunner().invoke(app, ["discover", "--check"])
+    assert result.exit_code == 1
+    assert "SOURCES (--source):" in result.stdout  # report still printed before the exit
+
+
+def test_discover_check_exits_zero_when_scannable(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from steadystate import discover as disc
+    from steadystate.cli import app
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "main.tf").write_text("resource {}")  # a terraform live-dir signal
+    # only terraform installed -> no _REACHABILITY bin present -> no real subprocess in the test
+    monkeypatch.setattr(
+        disc.shutil, "which", lambda b: "/usr/bin/terraform" if b == "terraform" else None
+    )
+
+    result = CliRunner().invoke(app, ["discover", "--check"])
+    assert result.exit_code == 0
+
+
+def test_discover_json_and_create_are_mutually_exclusive(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from steadystate import discover as disc
+    from steadystate.cli import app
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(disc.shutil, "which", lambda _b: None)
+
+    result = CliRunner().invoke(app, ["discover", "--json", "--create"])
+    assert result.exit_code != 0
+    assert "can't combine" in result.output
+
+
+# -- hardening: a pathological cwd json file never crashes discovery --------------------------
+
+
+def test_classify_snapshots_survives_deeply_nested_json(tmp_path):
+    from steadystate.discover import _classify_snapshots
+
+    # Deeply-nested JSON makes json.loads raise RecursionError (not ValueError) -- it must be
+    # caught and the file skipped, not crash the scan.
+    (tmp_path / "bomb.json").write_text("[" * 2000 + "]" * 2000)
+    assert _classify_snapshots(tmp_path) == {}
