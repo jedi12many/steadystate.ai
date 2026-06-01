@@ -16,14 +16,42 @@ detect → probe → reason → surface → suggest → approve → act
 pip install steadystate            # core (stdlib-only)
 pip install 'steadystate[llm]'     # + optional LLM reasoning
 
+steadystate discover    # what can I scan *here*? (per source/probe: ready, blocked, or how)
 steadystate scan ./infra --source terraform                # drift scan
-steadystate scan ./manifests --source k8s --probe auto     # drift + live health
+steadystate scan plan.json --source k8s --probe kubectl    # drift + live health
 steadystate init        # interactive setup wizard -> writes a gitignored .env
 steadystate doctor      # what's configured, what's missing
 steadystate catalog     # every source, pack, surface + command this build offers
 ```
 
 No agent, no dashboard — point it at your IaC and run it in CI or as a scheduled job.
+
+## Getting started — point it at *your* setup
+
+Not sure which `--source` fits, or what to feed it? Start from the directory holding your IaC and let the tool tell you. The four steps escalate: **what's possible → what's actually there → register it → scan it.**
+
+```bash
+cd your-infra/
+
+# 1. What can I scan here? Per --source and --probe: is the CLI installed, the backend
+#    reachable, an input present? — and the exact command to run for each.
+steadystate discover
+
+# 2. Go live (read-only): interrogate the reachable backends and tailor the advice to what's
+#    really there — your actual cluster nodes, Helm releases, compose projects, Argo apps —
+#    with commands carrying your real release/namespace names.
+steadystate discover --deep
+
+# 3. Register what it found as named targets (name -> source + path), so a scheduled job or a
+#    chat-summoned `@steadystate probe <name>` resolves without hand-writing JSON. Named after
+#    the directory; suffixed per source when several are found. Merges, never clobbers.
+steadystate discover --create        # writes ./targets.json (or $STEADYSTATE_TARGETS)
+
+# 4. Scan — with the command discover handed you.
+steadystate scan . --source terraform
+```
+
+`discover` is read-only and safe to run anywhere; `--deep` only runs `get`/`list` reads and skips any backend it can't reach. Nothing here writes to your infrastructure.
 
 ## What it does — the deterministic core
 
