@@ -211,7 +211,7 @@ def _auto_apply(store: StateStore, fingerprints: list[str]) -> None:
 
 
 def _targets_file() -> Path:
-    """Targets registry path: STEADYSTATE_TARGETS if set, else ./steadystate.targets.json."""
+    """Targets registry path: STEADYSTATE_TARGETS if set, else .steadystate/targets.json."""
     return Path(os.environ.get(TARGETS_ENV) or DEFAULT_TARGETS_FILE)
 
 
@@ -251,7 +251,7 @@ def scan(
         "",
         "--target",
         help="Run a named target from the registry (STEADYSTATE_TARGETS, else "
-        "./steadystate.targets.json) -- "
+        ".steadystate/targets.json) -- "
         "the one `discover --create` writes and chat resolves. Supplies source/path/label/probe; "
         "an explicit --label/--probe still wins. Mutually exclusive with the positional path.",
     ),
@@ -662,7 +662,7 @@ def targets(
         "still resolves. Exits non-zero if any target has a problem.",
     ),
 ) -> None:
-    """List the named scan/probe targets (STEADYSTATE_TARGETS, else ./steadystate.targets.json).
+    """List the named scan/probe targets (STEADYSTATE_TARGETS, else .steadystate/targets.json).
 
     This is the registry `discover --create` writes, `scan --target` runs, and the chat listener
     resolves -- so `targets` lets you see and validate it from the CLI without opening the JSON."""
@@ -728,7 +728,7 @@ def sweep(
     """Probe every target (cluster) and roll up what's on fire -- a stateful fleet sweep.
 
     The batch counterpart to `scan --target <one>`: it runs every target in the registry
-    (STEADYSTATE_TARGETS, else ./steadystate.targets.json) through the same engine and prints a
+    (STEADYSTATE_TARGETS, else .steadystate/targets.json) through the same engine and prints a
     digest --
     which clusters are on fire, which are clear, and what recovered since the last sweep. One
     cluster being unreachable is reported inline, never sinks the rest. `--to` additionally pushes
@@ -914,7 +914,7 @@ def chat(state: Path = _STATE_OPTION) -> None:
     Teams / Discord, no signing (a local shell is already trusted). It runs the SAME parser
     (command_from_text) and dispatch (run_command) the chat adapters use, so it's a faithful way to
     exercise the chat mechanism. Targets resolve from STEADYSTATE_TARGETS, else
-    ./steadystate.targets.json (what `discover --create` writes), so no env var is needed locally.
+    .steadystate/targets.json (what `discover --create` writes), so no env var is needed locally.
     Commands: `help`, `pending`, `probe <target>` (or `probe all` to sweep the fleet),
     `approve <fp>`, `decline <fp>`. Ctrl-D or `exit` to quit."""
     state.parent.mkdir(parents=True, exist_ok=True)
@@ -1067,7 +1067,7 @@ def discover(
         False,
         "--create",
         help="Write the discovered sources into the targets registry (STEADYSTATE_TARGETS, else "
-        "./steadystate.targets.json) as named scan/probe targets -- named after the cwd, suffixed "
+        ".steadystate/targets.json) as named scan/probe targets -- named after the cwd, suffixed "
         "per source "
         "when several are found. With --deep, also registers live compose projects rooted outside "
         "the cwd. Merges without overwriting existing entries.",

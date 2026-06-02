@@ -16,10 +16,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 TARGETS_ENV = "STEADYSTATE_TARGETS"  # path to the targets JSON document
-# The default registry path when STEADYSTATE_TARGETS isn't set. Deliberately steadystate-specific
-# (not a bare ``targets.json``) so `discover --create` and the chat fallback never read or clobber
-# an unrelated `targets.json` that happens to be in the cwd.
-DEFAULT_TARGETS_FILE = "steadystate.targets.json"
+# The default registry path when STEADYSTATE_TARGETS isn't set. Lives under .steadystate/ (the
+# gitignored state dir, alongside state.db), so `discover --create` and the chat fallback never
+# read or clobber an unrelated `targets.json` that happens to be in the cwd.
+DEFAULT_TARGETS_FILE = ".steadystate/targets.json"
 
 
 @dataclass(frozen=True)
@@ -66,7 +66,7 @@ def load_targets(path: str | Path) -> dict[str, Target]:
 
 
 def load_targets_from_env() -> dict[str, Target]:
-    """The targets registry: ``STEADYSTATE_TARGETS`` if set, else ``./steadystate.targets.json``
+    """The targets registry: ``STEADYSTATE_TARGETS`` if set, else ``./.steadystate/targets.json``
     when it exists -- the same resolution `scan --target` / `targets` use, so a `discover --create`
     registry is picked up by the local `chat` REPL without exporting an env var. ``{}`` when neither
     resolves, so a listener with no targets answers a probe cleanly instead of erroring."""
@@ -110,10 +110,13 @@ def merge_targets(
 
 
 def save_targets(path: str | Path, targets: dict[str, Target]) -> None:
-    """Write the targets map to ``path`` as the JSON document ``load_targets`` reads. Overwrites the
-    file wholesale, so callers preserving existing entries merge first (``merge_targets``)."""
+    """Write the targets map to ``path`` as the JSON document ``load_targets`` reads. Creates the
+    parent dir (the default lives under ``.steadystate/``) and overwrites the file wholesale, so
+    callers preserving existing entries merge first (``merge_targets``)."""
     doc = {name: target_to_spec(target) for name, target in targets.items()}
-    Path(path).write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+    out = Path(path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
 
 
 def target_issues(

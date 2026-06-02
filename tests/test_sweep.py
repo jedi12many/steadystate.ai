@@ -139,7 +139,8 @@ def test_cli_sweep_renders_a_fleet_digest(monkeypatch, tmp_path):
     import steadystate.sweep as sweep
     from steadystate.cli import app
 
-    (tmp_path / "steadystate.targets.json").write_text(
+    (tmp_path / ".steadystate").mkdir(exist_ok=True)
+    (tmp_path / ".steadystate/targets.json").write_text(
         json.dumps(
             {
                 "prod": {"source": "k8s-live", "context": "prod"},
@@ -226,7 +227,8 @@ def test_cli_sweep_to_pushes_the_fleet_alerts_to_surfaces(monkeypatch, tmp_path)
             emitted.append(report)
 
     monkeypatch.setattr(cli, "_surfaces", lambda names: [_Recorder()] if names else [])
-    (tmp_path / "steadystate.targets.json").write_text(
+    (tmp_path / ".steadystate").mkdir(exist_ok=True)
+    (tmp_path / ".steadystate/targets.json").write_text(
         json.dumps({"prod": {"source": "k8s-live", "context": "prod"}})
     )
     monkeypatch.chdir(tmp_path)
