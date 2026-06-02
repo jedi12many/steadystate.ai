@@ -131,9 +131,14 @@ def sweep_targets(
     return SweepResult(results=tuple(results), resolved=resolved_titles, report=grouped)
 
 
-def render_sweep(result: SweepResult, *, verbose: bool = False) -> list[str]:
+def render_sweep(
+    result: SweepResult, *, verbose: bool = False, correlated: bool = True
+) -> list[str]:
     """The fleet digest as lines: a headline tally, then a line per target (on fire / clear /
-    unreachable), and what resolved fleet-wide. ``verbose`` lists each fire's title. Pure."""
+    unreachable), and what resolved fleet-wide. ``verbose`` lists each fire's title. ``correlated``
+    appends the terse "same issue in N places" roll-up (the CLI digest); the chat ``probe all``
+    turns it off and renders the findings in full detail (description + fingerprints) instead. Pure.
+    """
     n = len(result.results)
     head = (
         f"Fleet sweep: {n} cluster(s) -- {result.on_fire} on fire, "
@@ -152,13 +157,14 @@ def render_sweep(result: SweepResult, *, verbose: bool = False) -> list[str]:
             lines.append(f"  {r.name:<24} clear")
     # The same workload failing the same way in several places (across namespaces and clusters) --
     # the "one issue, not N" view, so you handle a fleet-wide image rollout once.
-    correlated = sorted(
-        (a for a in result.report.alerts if not a.drifts and len(a.symptoms) > 1),
-        key=lambda a: a.title,
-    )
     if correlated:
-        lines.append("  correlated across the fleet (same issue in multiple places):")
-        lines.extend(f"      - {a.title}" for a in correlated)
+        merged = sorted(
+            (a for a in result.report.alerts if not a.drifts and len(a.symptoms) > 1),
+            key=lambda a: a.title,
+        )
+        if merged:
+            lines.append("  correlated across the fleet (same issue in multiple places):")
+            lines.extend(f"      - {a.title}" for a in merged)
     if result.resolved:
         lines.append(f"  resolved since last sweep ({len(result.resolved)}):")
         lines.extend(f"      - {title}" for title in result.resolved)
