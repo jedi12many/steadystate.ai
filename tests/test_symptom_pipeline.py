@@ -50,6 +50,23 @@ def test_standalone_symptom_becomes_its_own_alert():
     assert alert.resources == [_WEB]  # symptom alerts still name their resource
 
 
+def test_a_symptoms_recommended_action_flows_to_its_alert():
+    # a prober can suggest a concrete fix (evicted-pod cleanup); it must reach the Alert so surfaces
+    # show it as the recommended action -- single and grouped.
+    fix = "kubectl delete pods -n prod --field-selector=status.phase=Failed"
+    sym = _symptom(category="Evicted", severity=Severity.MEDIUM)
+    sym.recommended_action = fix
+    [alert] = _pipeline().run([], symptoms=[sym]).alerts
+    assert alert.recommended_action == fix
+    # grouped: a representative fix from the group rides along too.
+    other = _symptom(
+        identity="apps/Deployment/stg/web", category="Evicted", severity=Severity.MEDIUM
+    )
+    other.recommended_action = fix
+    [grouped] = _pipeline().run([], symptoms=[sym, other]).alerts
+    assert grouped.recommended_action == fix and "in 2 place(s)" in grouped.title
+
+
 def test_symptom_diagnoses_into_a_co_located_drift():
     report = _pipeline().run([_drift()], symptoms=[_symptom()])
     assert len(report.alerts) == 1  # ONE alert, not two -- the diagnosis

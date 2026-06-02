@@ -110,7 +110,10 @@ def unhealthy_pods(pods: dict, workload: str) -> list[PodHealth]:
                 reason = waiting["reason"]
                 break
         if not reason and status.get("phase") == "Failed":
-            reason = "Failed"
+            # An evicted pod is a Failed pod with reason "Evicted" -- a dead tombstone (node
+            # memory/disk pressure killed it), not a crash. Call it out distinctly: lower severity,
+            # and the fix is a cleanup (delete it), not a restart.
+            reason = "Evicted" if status.get("reason") == "Evicted" else "Failed"
         if not reason and restarts > _RESTART_THRESHOLD:
             reason = f"{restarts} restarts"
         if reason:
@@ -307,7 +310,19 @@ class KubectlProbe:
             detail=detail,
             provenance=Provenance(source="kubernetes", address=resource.identity),
             evidence=evidence,
+            recommended_action=self._fix_for(category, namespace),
         )
+
+    def _fix_for(self, category: str, namespace: str) -> str | None:
+        """A concrete remediation for a category that has a safe one-liner. Evicted pods are dead
+        tombstones, so the fix is a scoped cleanup of Failed-phase pods (the field selector that
+        matches evicted ones); the `--context` makes it copy-paste runnable for the right cluster.
+        None for categories with no safe one-shot fix (a crashloop needs a real fix, not a delete).
+        """
+        if category != "Evicted":
+            return None
+        ctx = f" --context {self._context}" if self._context else ""
+        return f"kubectl delete pods -n {namespace} --field-selector=status.phase=Failed{ctx}"
 
     def _log_symptom(
         self, resource: Resource, namespace: str, pods: dict, workload: str
