@@ -382,6 +382,21 @@ def test_cli_findings_empty_message(tmp_path):
     assert "no findings" in result.output.lower()
 
 
+def test_cli_findings_hides_resolved_by_default(tmp_path):
+    from steadystate.cli import app
+
+    db = str(tmp_path / "state.db")
+    drift = _drift()
+    with StateStore(db) as store:  # scan 1 records it open; scan 2 (gone) resolves it
+        reconcile(_report(_alert(drift)), store, now=_t(1))
+        reconcile(_report(), store, now=_t(2))
+    runner = _runner()
+    default = runner.invoke(app, ["findings", "--state", db])
+    assert drift.fingerprint not in default.output and "resolved hidden" in default.output
+    assert drift.fingerprint in runner.invoke(app, ["findings", "--resolved", "--state", db]).output
+    assert drift.fingerprint in runner.invoke(app, ["findings", "--all", "--state", db]).output
+
+
 def test_cli_scan_stateless_creates_no_db(tmp_path, monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     from steadystate.cli import app

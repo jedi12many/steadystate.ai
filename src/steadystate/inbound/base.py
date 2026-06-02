@@ -54,7 +54,11 @@ COMMANDS: dict[str, tuple[str, str]] = {
         "`deep` also scans pod logs for errors",
     ),
     COST: ("cost [day|week]", "show LLM spend -- a rollup, or a day/week trend"),
-    FINDINGS: ("findings", "list remembered findings: fingerprint, status, severity"),
+    FINDINGS: (
+        "findings [open|resolved|muted|all]",
+        "list remembered findings (fingerprint, status, severity); resolved are hidden by default "
+        "-- `findings resolved`/`all` to show them, `open`/`muted` to filter",
+    ),
     SHOW: (
         "show <fingerprint>",
         "show a finding's captured evidence -- the fields (namespace, cluster, pod count, the "
@@ -84,8 +88,9 @@ _NEEDS_ARGUMENT = frozenset({APPROVE, DECLINE, PROBE, MUTE, SHOW})
 # Verbs that need TWO arguments: `send <fingerprint> <surface>`. The surface is the *last* plain
 # token, so a natural `send <fp> to servicenow` works (the "to" is ignored as a middle token).
 _NEEDS_TWO = frozenset({SEND})
-# Verbs that take an *optional* argument (cost's period); absent it, they still dispatch.
-_OPTIONAL_ARGUMENT = frozenset({COST})
+# Verbs that take an *optional* argument (cost's period; findings' status filter); absent it, they
+# still dispatch.
+_OPTIONAL_ARGUMENT = frozenset({COST, FINDINGS})
 
 # Muscle-memory synonyms for `probe` -- re-running a probe is what "refresh / capture state" means
 # (re-read live state and record the findings). Bare (no target) refreshes the whole fleet, so

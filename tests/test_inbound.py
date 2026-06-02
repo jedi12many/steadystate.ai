@@ -654,6 +654,29 @@ def test_run_command_findings_and_history_empty(tmp_path):
     assert "No remediation history" in run_command(Command(HISTORY, "amy"), db)
 
 
+def test_chat_findings_filter_hides_resolved_by_default(tmp_path):
+    from steadystate.reason.report import Report
+    from steadystate.reconcile_state import reconcile
+
+    db = str(tmp_path / "s.db")
+    drift = Drift(
+        identity="aws_s3_bucket.logs",
+        kind="aws_s3_bucket",
+        change_type=ChangeType.MODIFIED,
+        provenance=Provenance(source="terraform"),
+    )
+    alert = Alert(title=drift.summary(), severity=Severity.HIGH, drifts=[drift], why_it_matters="x")
+    with StateStore(db) as store:  # record open, then resolve (gone next scan)
+        reconcile(Report(items=[alert]), store, datetime(2026, 1, 1, tzinfo=UTC))
+        reconcile(Report(items=[]), store, datetime(2026, 1, 2, tzinfo=UTC))
+    # `findings` (chat) parses the filter as the optional argument.
+    assert command_from_text("findings resolved", "amy") == Command(FINDINGS, "amy", "resolved")
+    default = run_command(Command(FINDINGS, "amy"), db)  # default hides resolved
+    assert drift.fingerprint not in default and "resolved hidden" in default
+    assert drift.fingerprint in run_command(Command(FINDINGS, "amy", "resolved"), db)
+    assert drift.fingerprint in run_command(Command(FINDINGS, "amy", "all"), db)
+
+
 def test_run_command_probe_verbose_shows_the_evidence(monkeypatch, tmp_path):
     from steadystate.reason.report import Report
 

@@ -27,7 +27,7 @@ from ..reason.alert import Alert, Layer, Severity
 from ..reason.cost import roll_up, roll_up_by_period, scan_cost_line
 from ..reason.report import Report
 from ..reconcile_state import _fingerprints, alert_suppressed, finding_evidence, seen_findings
-from ..state import Finding, StateStore
+from ..state import Finding, StateStore, filter_findings
 from ..sweep import render_sweep, sweep_targets
 from ..targets import load_targets_from_env
 from .base import (
@@ -181,14 +181,19 @@ def _render_targets() -> str:
     return "\n".join(lines)
 
 
-def _render_findings(state_path: str) -> str:
+def _render_findings(state_path: str, status: str = "") -> str:
     """The chat view of `steadystate findings`: every remembered finding, its fingerprint, status
-    (open/muted/snoozed/resolved) and last severity -- the keys for mute/approve. Read-only."""
+    (open/muted/snoozed/resolved) and last severity -- the keys for mute/approve. ``status`` filters
+    (`findings resolved`/`open`/`muted`/`all`); resolved are hidden by default. Read-only."""
     if not state_path or not Path(state_path).exists():
         return "No findings recorded yet."
     with StateStore(state_path) as store:
-        rows = store.all_findings()
+        every = store.all_findings()
+    rows = filter_findings(every, status)
     if not rows:
+        hidden = len(every) - len(rows)
+        if hidden:
+            return f"No findings to show ({hidden} resolved hidden -- `findings all` to include)."
         return "No findings recorded yet."
     lines = [f"{len(rows)} finding(s):"]
     lines += [f"  {f.fingerprint}  {f.status:<8} {f.last_severity:<6} {f.last_title}" for f in rows]
@@ -429,7 +434,7 @@ def run_command(command: Command, state_path: str) -> str:
     if command.verb == COST:
         return _render_cost(state_path, command.argument)
     if command.verb == FINDINGS:
-        return _render_findings(state_path)
+        return _render_findings(state_path, command.argument)
     if command.verb == SHOW:
         return _render_show(command.argument, state_path)
     if command.verb == SURFACES_LIST:
