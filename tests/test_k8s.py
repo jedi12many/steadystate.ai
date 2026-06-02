@@ -248,3 +248,22 @@ def test_live_source_no_context_omits_the_flag(monkeypatch):
 
 def test_live_source_is_observe_only():
     assert KubernetesLiveSource.commands.destructive == ()
+
+
+def test_live_source_qualifies_identity_with_context():
+    # With a context set, identities are prefixed so the same workload on two clusters is two
+    # distinct findings in a shared store (the fleet sweep reconciles many clusters into one db).
+    src = KubernetesLiveSource(observed={"kind": "List", "items": [_deployment("nginx:1")]})
+    src.use_context("prod-cluster")
+    [r] = src.collect_declared()
+    assert r.identity == "prod-cluster/apps/Deployment/prod/web"
+    assert r.provenance.address == r.identity  # the address tracks the qualified identity
+
+
+def test_live_source_sanitizes_slashes_in_context():
+    # A '/' in the context (an EKS ARN) must not add a phantom path segment -- that would shift the
+    # probe's namespace/name parse (the last two '/'-segments).
+    src = KubernetesLiveSource(observed={"kind": "List", "items": [_deployment("nginx:1")]})
+    src.use_context("arn:aws:eks:us-east-1:1:cluster/prod")
+    [r] = src.collect_declared()
+    assert r.identity == "arn:aws:eks:us-east-1:1:cluster_prod/apps/Deployment/prod/web"

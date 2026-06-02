@@ -302,9 +302,26 @@ class KubernetesLiveSource:
         ambient current-context). This is the seam `build_report(context=...)` drives."""
         self._context = context or None
 
+    def _qualify(self, resource: Resource) -> Resource:
+        """Prefix this resource's identity with the (sanitized) context, so the SAME workload on two
+        clusters reads as two distinct findings in a shared store -- a fleet sweep that reconciles
+        many clusters into one db must not collide ``prod`` and ``staging``'s ``.../web``. Prefixing
+        the *front* keeps the kubectl probe's namespace/name parse (last two `/`-segments) intact;
+        any `/` in the context (an EKS ARN) is replaced so it can't add a phantom segment. A no-op
+        when no context is set (a single ambient cluster needs no qualifier)."""
+        if not self._context:
+            return resource
+        qid = f"{self._context.replace('/', '_')}/{resource.identity}"
+        return Resource(
+            kind=resource.kind,
+            identity=qid,
+            provenance=Provenance(source="kubernetes", address=qid),
+            properties=resource.properties,
+        )
+
     def _workloads(self) -> list[Resource]:
         doc = self._observed if self._observed is not None else self._run_kubectl()
-        return observed_resources_from_kubectl(doc)
+        return [self._qualify(r) for r in observed_resources_from_kubectl(doc)]
 
     def collect_declared(self) -> list[Resource]:
         return self._workloads()
