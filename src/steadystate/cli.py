@@ -51,7 +51,7 @@ from .serialize import report_to_dict
 from .sources import CAPABILITIES, DRIFT_SOURCES, PATHLESS_SOURCES, build_drift_source
 from .sources.base import SourceError
 from .sources.k8s import capture_baseline
-from .state import PendingAction, StateStore
+from .state import PendingAction, StateStore, filter_findings
 from .sweep import render_sweep, sweep_targets
 from .targets import (
     DEFAULT_TARGETS_FILE,
@@ -573,12 +573,29 @@ def snooze(
 
 
 @app.command()
-def findings(state: Path = _STATE_OPTION) -> None:
-    """List stored findings: fingerprint, status, first_seen, last_severity, title."""
+def findings(
+    state: Path = _STATE_OPTION,
+    open_: bool = typer.Option(False, "--open", help="Only open findings."),
+    resolved: bool = typer.Option(
+        False, "--resolved", help="Only resolved findings (hidden by default)."
+    ),
+    muted: bool = typer.Option(False, "--muted", help="Only muted findings."),
+    all_: bool = typer.Option(False, "--all", help="Every finding, resolved included."),
+) -> None:
+    """List stored findings: fingerprint, status, first_seen, last_severity, title.
+
+    Resolved findings are **hidden by default** (a cleared finding is usually noise after the
+    fact); pass --resolved or --all to see them, or --open/--muted to filter."""
+    status = (
+        "all" if all_ else "resolved" if resolved else "open" if open_ else "muted" if muted else ""
+    )
     with _open_store(state) as store:
-        rows = store.all_findings()
+        every = store.all_findings()
+    rows = filter_findings(every, status)
     if not rows:
-        typer.echo("no findings recorded yet.")
+        hidden = len(every) - len(rows)
+        hint = f" ({hidden} resolved hidden -- --resolved/--all to show)" if hidden else ""
+        typer.echo(f"no findings to show{hint}." if every else "no findings recorded yet.")
         return
     # Print the FULL fingerprint, not a prefix: it's the exact value an operator copies
     # into `mute`/`snooze`/`unmute`, and those match on the whole hex (a prefix would
