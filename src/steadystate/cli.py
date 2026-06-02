@@ -47,6 +47,7 @@ from .reason.cost import roll_up, roll_up_by_period, scan_cost_line
 from .reason.enrich import ENRICHERS
 from .reason.pipeline import CORRELATORS
 from .reconcile_state import reconcile
+from .serialize import report_to_dict
 from .sources import CAPABILITIES, DRIFT_SOURCES, PATHLESS_SOURCES, build_drift_source
 from .sources.base import SourceError
 from .sources.k8s import capture_baseline
@@ -235,6 +236,21 @@ def _resolve_target(name: str) -> Target:
     return resolved
 
 
+def _spend_dict(calls: list) -> dict | None:
+    """This scan's LLM spend as a JSON-ready dict (total + per-caller), or None when nothing was
+    spent -- the structured form of the human spend line, for `--json`."""
+    if not calls:
+        return None
+    rows = roll_up(calls)
+    return {
+        "usd": round(sum(r.cost_usd for r in rows), 6),
+        "calls": sum(r.calls for r in rows),
+        "by_caller": [
+            {"caller": r.caller, "usd": round(r.cost_usd, 6), "calls": r.calls} for r in rows
+        ],
+    }
+
+
 @app.command()
 def scan(
     path: Path | None = typer.Argument(
@@ -359,6 +375,13 @@ def scan(
         help="Show the evidence per alert on the console: the declared->observed before/after "
         "(and policy/symptom detail), so a scan can be audited, not just trusted.",
     ),
+    json_out: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit the report as JSON to stdout instead of the console digest -- scriptable, an "
+        "agent-readable object (alerts with reasoning, fingerprints, evidence, before/after). "
+        "Memory still applies (status/first_seen/resolved included); suppresses the surfaces.",
+    ),
 ) -> None:
     """Scan declared state for drift and surface the Alerts."""
     # --target resolves source/path/label/probe from the registry (the same one chat uses), so a
@@ -445,6 +468,10 @@ def scan(
                 recorded = _record_suggestions(store, source, path, report, now, label or None)
                 if autonomy == "auto":  # ...and, on auto, apply them through the same guardrails
                     _auto_apply(store, recorded)
+    if json_out:  # the machine-readable form: stdout is pure JSON, no surfaces, no spend footer
+        payload = report_to_dict(report, resolved=resolved, spend=_spend_dict(report.llm_calls))
+        typer.echo(json.dumps(payload, indent=2))
+        return
     for surface in surfaces:
         surface.emit(report, resolved=resolved)
     deliver_names = [d.strip() for d in deliver.split(",") if d.strip() and d.strip() != "none"]
@@ -993,6 +1020,12 @@ def probe(
         help="Also scan Running pods' logs for error/fatal signatures (one `kubectl logs` per pod "
         "-- catches a pod that's up but erroring). Off by default.",
     ),
+    json_out: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit the report as JSON to stdout, not the digest -- scriptable, agent-readable "
+        "(alerts with reasoning, fingerprints, evidence). Records findings as usual.",
+    ),
     state: Path = _STATE_OPTION,
 ) -> None:
     """Summon a health check of a named target now -- the one-shot, scriptable form of the chat
@@ -1000,8 +1033,24 @@ def probe(
     (drift + health), and prints what's wrong. **Records** the findings to --state (record-only --
     so they show in `findings` and can be muted -- never resolving another target's; that's
     `sweep`). Honors the mutes/snoozes in --state by default (--unmute shows everything); --verbose
-    adds the evidence; --deep also scans pod logs. The SAME path the listener runs."""
+    adds the evidence; --deep also scans pod logs; --json emits a structured object. The SAME path
+    the listener runs."""
     state.parent.mkdir(parents=True, exist_ok=True)
+    if json_out:  # the machine-readable form: build the report directly and dump it
+        from .inbound.server import probe_report
+
+        try:
+            report = probe_report(target, str(state), scan_logs=deep)
+        except LookupError as exc:
+            typer.echo(str(exc))
+            raise typer.Exit(1) from None
+        except Exception as exc:  # a real probe failure (unreachable backend, ...)
+            typer.secho(f"probe failed: {exc}", fg="red", err=True)
+            raise typer.Exit(1) from None
+        typer.echo(
+            json.dumps(report_to_dict(report, spend=_spend_dict(report.llm_calls)), indent=2)
+        )
+        return
     flags = frozenset(
         name
         for name, on in (("verbose", verbose), ("cost", cost), ("unmute", unmute), ("deep", deep))

@@ -327,6 +327,35 @@ def _record_probe_findings(report: Report, state_path: str) -> None:
             store.record(seen_findings(report), datetime.now(UTC), finding_evidence(report))
 
 
+def probe_report(target_name: str, state_path: str, *, scan_logs: bool = False) -> Report:
+    """Build (and record) the health report for one named target -- the report behind BOTH the chat
+    `probe` summary and CLI `probe --json`. Resolves the name against the targets registry, runs the
+    same engine a scheduled scan runs, and records the findings (record-only -- never resolves
+    another target's). Raises ``LookupError`` (with a human-readable message) for an unresolvable
+    target; lets a real probe failure (unreachable backend, ...) propagate."""
+    targets = load_targets_from_env()
+    if not targets:
+        raise LookupError(
+            "No targets configured -- run `discover --create` or set STEADYSTATE_TARGETS."
+        )
+    target = targets.get(target_name)
+    if target is None:
+        raise LookupError(f"Unknown target '{target_name}'. Known: {', '.join(sorted(targets))}.")
+    # A live target (k8s-live) has no path -- Path("") is "." which its source ignores; the
+    # context aims the source + probe at that one cluster.
+    report = build_report(
+        target.source,
+        Path(target.path),
+        probe="auto",
+        label=target.label,
+        context=target.context,
+        scan_logs=scan_logs,  # `--deep` -> also scan pod logs for errors
+    )
+    if state_path:  # persist the findings (record-only) -- this also creates the db
+        _record_probe_findings(report, state_path)
+    return report
+
+
 def _run_probe(target_name: str, state_path: str, flags: frozenset[str]) -> str:
     """Summon: scan a named target now and report what's wrong. Resolves the name against the
     targets registry (STEADYSTATE_TARGETS), runs the SAME engine a scheduled scan runs -- and,
@@ -337,27 +366,12 @@ def _run_probe(target_name: str, state_path: str, flags: frozenset[str]) -> str:
     chat stays a trigger, not a bypass."""
     if target_name == "all":  # `probe all` -> the stateful fleet sweep, not a single summon
         return _run_sweep(state_path, flags)
-    targets = load_targets_from_env()
-    if not targets:
-        return "No targets configured -- run `discover --create` or set STEADYSTATE_TARGETS."
-    target = targets.get(target_name)
-    if target is None:
-        return f"Unknown target '{target_name}'. Known: {', '.join(sorted(targets))}."
     try:
-        # A live target (k8s-live) has no path -- Path("") is "." which its source ignores; the
-        # context aims the source + probe at that one cluster.
-        report = build_report(
-            target.source,
-            Path(target.path),
-            probe="auto",
-            label=target.label,
-            context=target.context,
-            scan_logs="deep" in flags,  # `probe <t> deep` -> also scan pod logs for errors
-        )
+        report = probe_report(target_name, state_path, scan_logs="deep" in flags)
+    except LookupError as exc:  # unresolvable target -> the human-readable reason it carries
+        return str(exc)
     except Exception as exc:  # a summon must report the failure, never crash the listener
         return f"Probe of '{target_name}' failed: {exc}"
-    if state_path:  # persist the findings (record-only) -- this also creates the db
-        _record_probe_findings(report, state_path)
     alerts = list(report.alerts)
     suppressed = 0
     # Honor mutes by default, read-only -- but only when there's an existing store to read (opening
