@@ -21,6 +21,7 @@ from .discord import DiscordSurface
 from .grafana import GrafanaSurface
 from .pagerduty import PagerDutySurface
 from .prometheus import PrometheusSurface
+from .servicenow import ServiceNowSurface
 from .slack import SlackSurface
 from .teams import TeamsSurface
 from .webhook import WebhookSurface
@@ -37,6 +38,7 @@ _BUILTIN_SURFACES: dict[str, Callable[[], Surface]] = {
     "grafana": GrafanaSurface,
     "webhook": WebhookSurface,
     "pagerduty": PagerDutySurface,
+    "servicenow": ServiceNowSurface,
 }
 
 # Built-ins overlaid with discovered `steadystate.surfaces` entry points.

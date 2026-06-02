@@ -1,8 +1,9 @@
 """Generic webhook surface -- POST each Alert as provider-agnostic JSON to any HTTP endpoint.
 
-The escape hatch for everything steadystate has no native surface for: Opsgenie, Jira, ServiceNow,
-an internal event bus. Point ``STEADYSTATE_WEBHOOK_URL`` at a receiver (or a small middleware that
-maps the event onto your tool's API) and every surfaced Alert arrives as one structured JSON event.
+The escape hatch for everything steadystate has no native surface for: Opsgenie, Jira, an internal
+event bus (ServiceNow has its own native ``--to servicenow``). Point ``STEADYSTATE_WEBHOOK_URL`` at
+a receiver (or a small middleware that maps the event onto your tool's API) and every surfaced
+Alert arrives as one structured JSON event.
 Outbound only; stdlib urllib, http(s)-gated by `safe_urlopen`.
 
 Honest degrade: no URL configured -> says so once and sends nothing, never pretends it delivered.
