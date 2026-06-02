@@ -714,13 +714,21 @@ def sweep(
     verbose: bool = typer.Option(
         False, "--verbose", "-v", help="List each fire's title under its cluster."
     ),
+    to: str = typer.Option(
+        "",
+        "--to",
+        help=f"Also push the fleet's fires (every cluster's alerts, each labeled with its cluster) "
+        f"to these surfaces: {', '.join(sorted(SURFACES))}. The digest always prints to stdout; "
+        "this adds outward alerting, so a scheduled sweep can page without an inbound endpoint.",
+    ),
 ) -> None:
     """Probe every target (cluster) and roll up what's on fire -- a stateful fleet sweep.
 
     The batch counterpart to `scan --target <one>`: it runs every target in the registry
     (STEADYSTATE_TARGETS, else ./targets.json) through the same engine and prints a digest --
     which clusters are on fire, which are clear, and what recovered since the last sweep. One
-    cluster being unreachable is reported inline, never sinks the rest."""
+    cluster being unreachable is reported inline, never sinks the rest. `--to` additionally pushes
+    the fires to alert surfaces, so a cron sweep pages out (no inbound endpoint needed)."""
     target_file = _targets_file()
     if not target_file.exists():
         typer.echo(f"no targets file ({target_file}). Create one with `discover --create`.")
@@ -733,9 +741,13 @@ def sweep(
     if not registry:
         typer.echo(f"{target_file} has no targets.")
         return
+    # Resolve surfaces before the (slow) sweep, so a bad --to fails fast with a clean BadParameter.
+    surfaces = _surfaces([n.strip() for n in to.split(",") if n.strip()])
     result = sweep_targets(registry, state, datetime.now(UTC), stateless=stateless)
     for line in render_sweep(result, verbose=verbose):
         typer.echo(line)
+    for surface in surfaces:  # push the union of the fleet's alerts outward (each cluster-labeled)
+        surface.emit(result.report)
 
 
 @app.command()

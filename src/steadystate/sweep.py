@@ -16,7 +16,7 @@ with its context.)
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -46,6 +46,11 @@ class SweepResult:
 
     results: tuple[TargetResult, ...] = ()
     resolved: tuple[str, ...] = ()  # titles of findings gone from the whole fleet this sweep
+    # The union of every target's alerts (each already environment-labeled with its cluster), so a
+    # caller can push the fleet's fires to surfaces -- `sweep --to slack`. Mutes are honored on it
+    # when the sweep ran statefully (reconcile drops fully-suppressed alerts). render_sweep ignores
+    # it; it's only for emission.
+    report: Report = field(default_factory=Report)
 
     @property
     def on_fire(self) -> int:
@@ -89,13 +94,13 @@ def sweep_targets(
 
     resolved_titles: tuple[str, ...] = ()
     live: list[Report] = [rep for _, rep, _ in built if rep is not None]
+    # The union of all targets' items -- one report a caller can emit to surfaces, and the set a
+    # stateful reconcile judges presence over (resolve_absent fleet-wide, never per-target).
+    combined = Report(items=[item for rep in live for item in rep.items])
     if not stateless and live:
-        # ONE reconcile over the union -- so resolve_absent judges presence across the whole fleet,
-        # not per-target (which would resolve every other cluster's findings).
-        combined = Report(items=[item for rep in live for item in rep.items])
         Path(state_path).parent.mkdir(parents=True, exist_ok=True)
         with StateStore(state_path) as store:
-            resolved = reconcile(combined, store, now)
+            resolved = reconcile(combined, store, now)  # drops fully-suppressed alerts in place
             for rep in live:  # best-effort spend telemetry, like a normal scan
                 for call in rep.llm_calls:
                     store.record_llm_call(call, now)
@@ -117,7 +122,7 @@ def sweep_targets(
                 titles=tuple(a.title for a in alerts),
             )
         )
-    return SweepResult(results=tuple(results), resolved=resolved_titles)
+    return SweepResult(results=tuple(results), resolved=resolved_titles, report=combined)
 
 
 def render_sweep(result: SweepResult, *, verbose: bool = False) -> list[str]:

@@ -188,3 +188,54 @@ def test_chat_probe_all_runs_a_stateful_sweep(monkeypatch, tmp_path):
     assert command is not None and command.argument == "all"  # parsed as a normal probe target
     out = run_command(command, "")  # empty state path -> the sweep degrades to stateless
     assert "Fleet sweep" in out and "1 on fire" in out
+
+
+# -- sweep --to: push the fleet's fires to surfaces -------------------------------------------
+
+
+def test_sweep_result_report_is_the_union_of_alerts(monkeypatch):
+    import steadystate.sweep as sweep
+
+    monkeypatch.setattr(
+        sweep,
+        "build_report",
+        _build_report({"prod": _fire_report("prod/web"), "stg": _fire_report("stg/api")}),
+    )
+    targets = {
+        "prod": Target("prod", "k8s-live", context="prod"),
+        "stg": Target("stg", "k8s-live", context="stg"),
+    }
+    result = sweep.sweep_targets(targets, ":memory:")
+    titles = {a.title for a in result.report.alerts}
+    assert titles == {"prod/web is CrashLoopBackOff", "stg/api is CrashLoopBackOff"}
+
+
+def test_cli_sweep_to_pushes_the_fleet_alerts_to_surfaces(monkeypatch, tmp_path):
+    from typer.testing import CliRunner
+
+    import steadystate.sweep as sweep
+    from steadystate import cli
+    from steadystate.cli import app
+
+    emitted: list = []
+
+    class _Recorder:
+        name = "rec"
+
+        def emit(self, report, resolved=None):
+            emitted.append(report)
+
+    monkeypatch.setattr(cli, "_surfaces", lambda names: [_Recorder()] if names else [])
+    (tmp_path / "targets.json").write_text(
+        json.dumps({"prod": {"source": "k8s-live", "context": "prod"}})
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv(TARGETS_ENV, raising=False)
+    monkeypatch.setattr(sweep, "build_report", _build_report({"prod": _fire_report("prod/web")}))
+
+    result = CliRunner().invoke(
+        app, ["sweep", "--to", "rec", "--stateless"], env={"COLUMNS": "200"}
+    )
+    assert result.exit_code == 0, result.output
+    assert "1 on fire" in result.output  # the digest still prints to stdout
+    assert emitted and [a.title for a in emitted[0].alerts] == ["prod/web is CrashLoopBackOff"]
