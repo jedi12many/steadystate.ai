@@ -194,12 +194,16 @@ class KubectlProbe:
         worst = max(sick, key=lambda pod: pod.restarts)
         tail = self._last_log_line(namespace, worst.name)
         detail = f"{len(sick)} pod(s) {category}" + (f"; last log: {tail}" if tail else "")
+        # Name the WHERE in the title -- it's the one field every surface shows (the chat probe
+        # summary, the scan panel, and the remembered `findings` row, which stores only the title).
+        # With a fleet you need the cluster: `<context>/<namespace>`, else just the namespace.
+        where = f"{self._context}/{namespace}" if self._context else namespace
         return Symptom(
             identity=resource.identity,
             kind=resource.kind,
             category=category,
             severity=severity,
-            title=f"{_name(resource.identity)} is {category}",
+            title=f"{_name(resource.identity)} is {category} in {where}",
             detail=detail,
             provenance=Provenance(source="kubernetes", address=resource.identity),
         )

@@ -207,6 +207,22 @@ def test_probe_produces_a_symptom_for_an_unhealthy_declared_workload(monkeypatch
     assert "missing DB_URL" in symptom.detail  # the failing pod's last log line
 
 
+def test_symptom_title_names_the_namespace_and_cluster(monkeypatch):
+    # The title is the one field every surface shows (chat probe, scan panel, the remembered
+    # `findings` row), so it must say WHERE -- namespace, and the cluster too on a fleet -- else a
+    # `squid is CrashLoopBackOff` over many clusters/namespaces is unactionable.
+    pods = {"items": [_pod("web-abc", waiting="CrashLoopBackOff", restarts=9)]}
+
+    ambient = _probe(monkeypatch, pods)
+    [sym] = ambient.probe([_resource()])  # _resource() lives in namespace "prod"
+    assert sym.title == "web is CrashLoopBackOff in prod"  # single cluster -> namespace only
+
+    fleet = _probe(monkeypatch, pods)
+    fleet.use_context("prod-cluster")  # a target = a cluster -> qualify the title with it
+    [sym2] = fleet.probe([_resource()])
+    assert sym2.title == "web is CrashLoopBackOff in prod-cluster/prod"
+
+
 def test_probe_is_silent_on_a_healthy_workload(monkeypatch):
     prober = _probe(monkeypatch, {"items": [_pod("web-ok", phase="Running")]})
     assert prober.probe([_resource()]) == []
