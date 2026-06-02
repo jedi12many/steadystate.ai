@@ -38,10 +38,78 @@ def _workload_name(identity: str) -> str:
 
 
 def _place(identity: str) -> str:
-    """The namespace a workload lives in -- the second-to-last `/`-segment -- for naming where a
-    grouped symptom occurs (``.../team-a/squid`` -> ``team-a``), else the identity. Pure."""
-    parts = identity.split("/")
-    return parts[-2] if len(parts) >= 2 else identity
+    """Where a workload lives -- the identity with the workload name (last `/`-segment) stripped --
+    so the same name in different namespaces *or clusters* counts as different places
+    (``prod-cluster/apps/Deployment/team-a/squid`` -> ``prod-cluster/apps/Deployment/team-a``).
+    Pure."""
+    head, sep, _name = identity.rpartition("/")
+    return head if sep else identity
+
+
+def group_symptom_alerts(alerts: list[Alert]) -> list[Alert]:
+    """Fold ALERT-layer, standalone (no drift) symptom Alerts that share ``(kind, workload name,
+    category)`` into one each -- the same app failing the same way across namespaces *or clusters*
+    is one issue to handle, not N. It **flattens** each input alert's symptoms first, so it also
+    re-groups already-grouped alerts -- which is how the fleet sweep collapses per-cluster symptom
+    alerts across the whole landscape. Every other Alert (drift / policy / signal) passes through
+    unchanged. Each instance's Symptom rides along (memory/mute still track per instance) and the
+    merged Alert names how many + where. Mechanical, order-stable, pure."""
+    passthrough: list[Alert] = []
+    groups: dict[tuple[str, str, str], list[Symptom]] = {}
+    order: list[tuple[str, str, str]] = []
+    for alert in alerts:
+        if (
+            alert.layer is Layer.ALERT
+            and alert.symptoms
+            and not alert.drifts
+            and not alert.findings
+        ):
+            for symptom in alert.symptoms:
+                key = (symptom.kind, _workload_name(symptom.identity), symptom.category)
+                if key not in groups:
+                    groups[key] = []
+                    order.append(key)
+                groups[key].append(symptom)
+        else:
+            passthrough.append(alert)
+    return passthrough + [_merge_symptoms(key, groups[key]) for key in order]
+
+
+def _merge_symptoms(key: tuple[str, str, str], symptoms: list[Symptom]) -> Alert:
+    """One Alert for a group of same-``(kind, name, category)`` Symptoms across places. A lone
+    symptom rebuilds its own plain Alert (so grouping is idempotent and a singleton stays clean)."""
+    kind, name, category = key
+    severity = max((s.severity for s in symptoms), key=lambda sv: _SEVERITY_RANK[sv])
+    if len(symptoms) == 1:
+        only = symptoms[0]
+        return Alert(
+            title=only.title,
+            severity=only.severity,
+            drifts=[],
+            why_it_matters=only.detail,
+            layer=Layer.ALERT,
+            recommended_action=None,
+            llm_backed=False,
+            flagged_by=only.provenance.source,
+            symptoms=[only],
+        )
+    places = sorted({_place(s.identity) for s in symptoms})
+    shown = ", ".join(places[:8]) + (f" (+{len(places) - 8} more)" if len(places) > 8 else "")
+    return Alert(
+        title=f"{name} is {category} in {len(places)} place(s)",
+        severity=severity,
+        drifts=[],
+        why_it_matters=(
+            f"{len(symptoms)} instances of {kind} {name} are {category} across: {shown}. "
+            "Likely one root cause (e.g. a shared image/config) -- grouped mechanically by "
+            "name + symptom, so handle it once."
+        ),
+        layer=Layer.ALERT,
+        recommended_action=None,
+        llm_backed=False,
+        flagged_by=symptoms[0].provenance.source,
+        symptoms=symptoms,
+    )
 
 
 # An Event awaiting correlation: the drift, its deterministic score, the domain that
@@ -262,51 +330,6 @@ class Pipeline:
             )
         return standalone
 
-    def _group_symptoms(self, symptom_alerts: list[Alert]) -> list[Alert]:
-        """Fold standalone symptom Alerts that share ``(kind, workload name, category)`` into ONE
-        Alert -- the same app failing the same way across namespaces (or the landscape) is one issue
-        to handle, not N. Each instance's Symptom rides along (so memory/mute still track per
-        instance and you can see which recovered); the merged Alert names how many and where.
-        Mechanical, like the deterministic correlator -- it groups by a shared attribute, it doesn't
-        claim a reasoned root cause. Order-stable (first-seen group order)."""
-        groups: dict[tuple[str, str, str], list[Alert]] = {}
-        order: list[tuple[str, str, str]] = []
-        for alert in symptom_alerts:
-            symptom = alert.symptoms[0]
-            key = (symptom.kind, _workload_name(symptom.identity), symptom.category)
-            if key not in groups:
-                groups[key] = []
-                order.append(key)
-            groups[key].append(alert)
-        out: list[Alert] = []
-        for key in order:
-            members = groups[key]
-            out.append(members[0] if len(members) == 1 else self._merge_symptoms(key, members))
-        return out
-
-    def _merge_symptoms(self, key: tuple[str, str, str], members: list[Alert]) -> Alert:
-        """One Alert for a group of same-(kind, name, category) symptom Alerts across places."""
-        kind, name, category = key
-        symptoms = [m.symptoms[0] for m in members]
-        severity = max((s.severity for s in symptoms), key=lambda sv: _SEVERITY_RANK[sv])
-        places = sorted({_place(s.identity) for s in symptoms})
-        shown = ", ".join(places[:8]) + (f" (+{len(places) - 8} more)" if len(places) > 8 else "")
-        return Alert(
-            title=f"{name} is {category} in {len(places)} place(s)",
-            severity=severity,
-            drifts=[],
-            why_it_matters=(
-                f"{len(symptoms)} instances of {kind} {name} are {category} across: {shown}. "
-                "Likely one root cause (e.g. a shared image/config) -- grouped mechanically by "
-                "name + symptom, so handle it once."
-            ),
-            layer=Layer.ALERT,
-            recommended_action=None,
-            llm_backed=False,
-            flagged_by=symptoms[0].provenance.source,
-            symptoms=symptoms,
-        )
-
     def run(
         self,
         drifts: list[Drift],
@@ -351,7 +374,7 @@ class Pipeline:
         standalone_symptoms = self._diagnose(drift_alerts, symptom_alerts)
         # The same workload failing the same way across namespaces folds into one Alert -- so a bad
         # image crashlooping every team's `squid` is one issue to handle, not one per namespace.
-        standalone_symptoms = self._group_symptoms(standalone_symptoms)
+        standalone_symptoms = group_symptom_alerts(standalone_symptoms)
 
         return Report(
             items=signals + drift_alerts + policy_alerts + standalone_symptoms,

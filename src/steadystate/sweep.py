@@ -21,6 +21,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from .engine import build_report
+from .reason.pipeline import group_symptom_alerts
 from .reason.report import Report
 from .reconcile_state import reconcile
 from .state import StateStore
@@ -94,8 +95,10 @@ def sweep_targets(
 
     resolved_titles: tuple[str, ...] = ()
     live: list[Report] = [rep for _, rep, _ in built if rep is not None]
-    # The union of all targets' items -- one report a caller can emit to surfaces, and the set a
-    # stateful reconcile judges presence over (resolve_absent fleet-wide, never per-target).
+    # The union of all targets' items -- the set a stateful reconcile judges presence over
+    # (resolve_absent fleet-wide, never per-target). Reconcile over the UN-grouped union so it
+    # annotates the same Alert objects the per-target reports hold (that's how a target's `new`
+    # count is read below); the cross-cluster grouping is a separate copy, built after.
     combined = Report(items=[item for rep in live for item in rep.items])
     if not stateless and live:
         Path(state_path).parent.mkdir(parents=True, exist_ok=True)
@@ -122,7 +125,10 @@ def sweep_targets(
                 titles=tuple(a.title for a in alerts),
             )
         )
-    return SweepResult(results=tuple(results), resolved=resolved_titles, report=combined)
+    # The emitted/fleet report: collapse the same workload failing the same way ACROSS clusters
+    # into one Alert (each cluster already grouped its own namespaces) -- one issue, not N.
+    grouped = Report(items=group_symptom_alerts(combined.items))
+    return SweepResult(results=tuple(results), resolved=resolved_titles, report=grouped)
 
 
 def render_sweep(result: SweepResult, *, verbose: bool = False) -> list[str]:
@@ -144,6 +150,15 @@ def render_sweep(result: SweepResult, *, verbose: bool = False) -> list[str]:
                 lines.extend(f"      - {title}" for title in r.titles)
         else:
             lines.append(f"  {r.name:<24} clear")
+    # The same workload failing the same way in several places (across namespaces and clusters) --
+    # the "one issue, not N" view, so you handle a fleet-wide image rollout once.
+    correlated = sorted(
+        (a for a in result.report.alerts if not a.drifts and len(a.symptoms) > 1),
+        key=lambda a: a.title,
+    )
+    if correlated:
+        lines.append("  correlated across the fleet (same issue in multiple places):")
+        lines.extend(f"      - {a.title}" for a in correlated)
     if result.resolved:
         lines.append(f"  resolved since last sweep ({len(result.resolved)}):")
         lines.extend(f"      - {title}" for title in result.resolved)
