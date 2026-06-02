@@ -1119,3 +1119,70 @@ def test_check_reachable_swallows_timeout(monkeypatch):
     monkeypatch.setattr(disc, "_REACHABILITY_TIMEOUT", 0.3)
     monkeypatch.setitem(disc._REACHABILITY, "faketool", _py("import time; time.sleep(5)"))
     assert disc._check_reachable("faketool") is False
+
+
+# -- kube contexts -> live targets (discover --create registers your clusters) ----------------
+
+
+def test_context_targets_one_per_context_slugged():
+    from steadystate.discover import context_targets
+
+    targets = context_targets(["prod-cluster", "gke_proj_zone_stg"])
+    assert [t.name for t in targets] == ["prod-cluster", "gke-proj-zone-stg"]
+    assert all(t.source == "k8s-live" and t.path == "" and t.probe == "auto" for t in targets)
+    # the raw context drives kubectl + labels the alerts; the slug is just the friendly name.
+    assert targets[0].context == "prod-cluster" and targets[0].label == "prod-cluster"
+    assert targets[1].context == "gke_proj_zone_stg"
+
+
+def test_kube_contexts_parses_and_dedups(monkeypatch):
+    from steadystate import discover as disc
+
+    monkeypatch.setattr(disc, "_run", lambda argv: (True, "prod\nstg\nprod\n\n"))
+    assert disc.kube_contexts() == ["prod", "stg"]  # order preserved, deduped, blanks dropped
+
+
+def test_kube_contexts_empty_when_kubectl_absent(monkeypatch):
+    from steadystate import discover as disc
+
+    monkeypatch.setattr(disc, "_run", lambda argv: (False, ""))
+    assert disc.kube_contexts() == []  # degrades, never blocks a create
+
+
+def test_discover_create_registers_a_target_per_kube_context(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from steadystate import cli
+    from steadystate import discover as disc
+    from steadystate.cli import app
+    from steadystate.targets import load_targets
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(disc.shutil, "which", lambda _b: None)  # no cwd-local sources
+    monkeypatch.setattr(cli, "kube_contexts", lambda: ["prod-cluster", "gke_proj_zone_stg"])
+    monkeypatch.delenv("STEADYSTATE_TARGETS", raising=False)
+
+    result = CliRunner().invoke(app, ["discover", "--create"])
+    assert result.exit_code == 0, result.output
+    written = load_targets(tmp_path / "targets.json")
+    assert len(written) == 2
+    assert {t.context for t in written.values()} == {"prod-cluster", "gke_proj_zone_stg"}
+    assert all(t.source == "k8s-live" and t.path == "" for t in written.values())
+
+
+def test_discover_create_kube_contexts_is_idempotent(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from steadystate import cli
+    from steadystate import discover as disc
+    from steadystate.cli import app
+    from steadystate.targets import load_targets
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(disc.shutil, "which", lambda _b: None)
+    monkeypatch.setattr(cli, "kube_contexts", lambda: ["prod-cluster"])
+    monkeypatch.delenv("STEADYSTATE_TARGETS", raising=False)
+
+    CliRunner().invoke(app, ["discover", "--create"])
+    CliRunner().invoke(app, ["discover", "--create"])  # second run must not duplicate
+    assert len(load_targets(tmp_path / "targets.json")) == 1
