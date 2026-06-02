@@ -314,3 +314,40 @@ def test_auto_keys_are_registered_sources():
     unknown_sources = set(_AUTO) - set(DRIFT_SOURCES)
     assert not unknown_sources, f"auto-map keys are not registered sources: {unknown_sources}"
     assert set(_AUTO.values()) <= set(PROBES), "auto-map points at an unregistered probe"
+
+
+def test_probe_survives_a_pod_deleted_mid_probe(monkeypatch, caplog):
+    # A crash-looping pod is in `get pods`, then deleted before we fetch its logs -> kubectl logs
+    # errors (NotFound). The symptom must still surface (without a log tail), and the routine logs
+    # failure must NOT be a scary WARNING -- it's expected churn.
+    import json
+    import logging
+    import subprocess as sp
+
+    pod = {
+        "metadata": {"name": "web-abc", "namespace": "prod"},
+        "status": {
+            "phase": "Running",
+            "containerStatuses": [
+                {"restartCount": 9, "state": {"waiting": {"reason": "CrashLoopBackOff"}}}
+            ],
+        },
+    }
+
+    class _Ok:
+        def __init__(self, out):
+            self.stdout = out
+
+    def fake_run(argv, **kw):
+        if "logs" in argv:  # the pod is gone by the time we ask for its logs
+            raise sp.CalledProcessError(
+                1, argv, stderr='Error from server (NotFound): pods "web-abc" not found'
+            )
+        return _Ok(json.dumps({"items": [pod]}))
+
+    monkeypatch.setattr("steadystate.probe.kubectl.subprocess.run", fake_run)
+    with caplog.at_level(logging.WARNING, logger="steadystate.probe.kubectl"):
+        [symptom] = KubectlProbe().probe([_resource()])
+    assert symptom.category == "CrashLoopBackOff"
+    assert "last log" not in symptom.detail  # no tail -- the pod was gone, handled cleanly
+    assert caplog.records == []  # the logs failure was debug, not a warning

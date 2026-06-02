@@ -223,21 +223,35 @@ class KubectlProbe:
         return grouped
 
     def _last_log_line(self, namespace: str, pod: str) -> str:
+        # Best-effort evidence: a failed `kubectl logs` is routine -- the `--previous` attempt has
+        # no previous container on most pods, and the pod may have been deleted between the
+        # `get pods` and now -- so failures stay quiet; the symptom still surfaces, just no tail.
         tail = str(self.log_tail)
         text = self._run_text(
-            self._kubectl("logs", pod, "-n", namespace, "--tail", tail, "--previous")
+            self._kubectl("logs", pod, "-n", namespace, "--tail", tail, "--previous"),
+            best_effort=True,
         )
         if not text:
-            text = self._run_text(self._kubectl("logs", pod, "-n", namespace, "--tail", tail))
+            text = self._run_text(
+                self._kubectl("logs", pod, "-n", namespace, "--tail", tail), best_effort=True
+            )
         lines = [line for line in (text or "").splitlines() if line.strip()]
         return lines[-1][:200] if lines else ""
 
-    def _run_text(self, argv: list[str]) -> str:
+    def _run_text(self, argv: list[str], *, best_effort: bool = False) -> str:
         try:
             result = subprocess.run(
                 argv, check=True, capture_output=True, text=True, timeout=self.timeout
             )
             return result.stdout
         except (subprocess.SubprocessError, OSError) as exc:
-            logger.warning("kubectl probe (%s) failed: %s", " ".join(argv[:3]), exc)
+            # A failed pod *list* means no symptoms surfaced -- warn. A failed `kubectl logs`
+            # (``best_effort``) is expected churn (no previous container, or a pod deleted
+            # mid-probe), so it's debug, not noise.
+            logger.log(
+                logging.DEBUG if best_effort else logging.WARNING,
+                "kubectl probe (%s) failed: %s",
+                " ".join(argv[:3]),
+                exc,
+            )
             return ""
