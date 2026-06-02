@@ -51,6 +51,19 @@ def _fingerprints(alert: Alert) -> list[str]:
     )
 
 
+def alert_suppressed(alert: Alert, store: StateStore, now: datetime) -> bool:
+    """Whether an Alert should be withheld from a surface right now. Two ways to silence it: mute
+    its **correlation fingerprint** (the 'mute-all' key on a grouped finding -- the whole group
+    goes quiet at once), or mute **every** individual member. So: corr muted, OR (it has members
+    and all of them are muted/snoozed). The shared rule for the stateful reconcile and the chat
+    `_honor_mutes` read, so both honor a group mute identically."""
+    corr = alert.correlation_fingerprint
+    if corr and store.is_suppressed(corr, now):
+        return True
+    fps = _fingerprints(alert)
+    return bool(fps) and all(store.is_suppressed(fp, now) for fp in fps)
+
+
 def _display(drift: Drift, alert: Alert) -> tuple[str, str]:
     """The (severity, title) the store should remember for this drift's fingerprint.
 
@@ -114,8 +127,9 @@ def reconcile(
     surviving: list[Alert] = []
     for item in report.alerts:
         fps = _fingerprints(item)
-        # All suppressed -> drop the Alert entirely (operator silenced every member).
-        if fps and all(store.is_suppressed(fp, now) for fp in fps):
+        # Drop the Alert when silenced -- the operator muted the group's correlation fp, or every
+        # individual member.
+        if alert_suppressed(item, store, now):
             continue
         _annotate(item, fps, state)
         surviving.append(item)

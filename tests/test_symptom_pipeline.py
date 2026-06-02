@@ -111,6 +111,23 @@ def test_grouped_alert_keeps_each_instances_fingerprint():
     assert len(fps) == 2 and len(set(fps)) == 2  # distinct per namespace, so each is tracked
 
 
+def test_grouped_alert_has_a_correlation_fingerprint_distinct_from_members():
+    from steadystate.reconcile_state import _fingerprints
+
+    report = _pipeline().run([], symptoms=[_sq("team-a"), _sq("team-b")])
+    [alert] = report.alerts
+    corr = alert.correlation_fingerprint
+    assert corr and corr not in _fingerprints(alert)  # a NEW 'mute-all' key, not a member's
+    # stable across scans regardless of which places are present (keyed on kind/name/category).
+    again = _pipeline().run([], symptoms=[_sq("team-a"), _sq("team-b"), _sq("team-c")])
+    assert again.alerts[0].correlation_fingerprint == corr
+
+
+def test_a_single_uncorrelated_alert_has_no_correlation_fingerprint():
+    [alert] = _pipeline().run([], symptoms=[_sq("team-a")]).alerts
+    assert alert.correlation_fingerprint is None  # nothing to mute-all; only one finding
+
+
 def test_different_workloads_or_failure_modes_do_not_group():
     # different name (squid vs redis) -> separate; same name different category -> separate.
     report = _pipeline().run(

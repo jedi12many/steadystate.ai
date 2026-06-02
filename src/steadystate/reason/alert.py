@@ -59,6 +59,11 @@ class Alert:
     # resource is failing now). On a *diagnosis* Alert these ride alongside `drifts` -- a Symptom
     # correlated with the Drift that is its likely root cause. Empty for ordinary drift Alerts.
     symptoms: list[Symptom] = field(default_factory=list)
+    # A grouped/correlated Alert's own stable fingerprint -- one "mute-all" key for the whole
+    # group (the same workload failing the same way in N places), distinct from each member's
+    # fingerprint. Muting it silences the group at once without losing the per-member findings (so
+    # each still records + can be inspected with `raw`). None on an ordinary, single-finding Alert.
+    correlation_fingerprint: str | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     # Memory annotations, populated by the state store during a stateful scan and
     # left None when scanning statelessly (so Pipeline stays pure and the stateless
