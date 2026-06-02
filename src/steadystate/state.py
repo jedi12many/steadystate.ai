@@ -139,6 +139,23 @@ class Finding:
     details: dict[str, str] = field(default_factory=dict)
 
 
+# The status filters `findings` accepts. "" is the default view -- everything EXCEPT resolved, since
+# a cleared finding is usually noise after the fact; the rest name a single lifecycle state, and
+# "all" shows everything (resolved included). Shared by the CLI command and the chat verb.
+FINDING_FILTERS = ("", "open", "resolved", "muted", "snoozed", "all")
+
+
+def filter_findings(rows: list[Finding], status: str = "") -> list[Finding]:
+    """Apply a `findings` status filter. Default ("") hides resolved findings; a lifecycle name
+    (open/resolved/muted/snoozed) keeps only that state; "all" keeps everything. An unrecognized
+    value falls back to the default. Pure."""
+    if status == "all":
+        return list(rows)
+    if status in (OPEN, RESOLVED, MUTED, SNOOZED):
+        return [f for f in rows if f.status == status]
+    return [f for f in rows if f.status != RESOLVED]  # default: hide resolved
+
+
 @dataclass(frozen=True)
 class PendingAction:
     """A remediation offered for approval. A suggestion can carry either or both directions: the

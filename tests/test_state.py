@@ -239,6 +239,36 @@ def test_all_findings_lists_every_row():
     assert fps == {fp1, fp2}
 
 
+def test_filter_findings_hides_resolved_by_default():
+    from steadystate.state import Finding, filter_findings
+
+    def _f(status: str) -> Finding:
+        return Finding(
+            status, "t", "t", "low", status, status
+        )  # fingerprint == status for the test
+
+    rows = [_f("open"), _f("resolved"), _f("muted"), _f("snoozed")]
+    assert {f.status for f in filter_findings(rows)} == {
+        "open",
+        "muted",
+        "snoozed",
+    }  # default hides resolved
+    assert [f.status for f in filter_findings(rows, "resolved")] == ["resolved"]
+    assert [f.status for f in filter_findings(rows, "open")] == ["open"]
+    assert [f.status for f in filter_findings(rows, "muted")] == ["muted"]
+    assert {f.status for f in filter_findings(rows, "all")} == {
+        "open",
+        "resolved",
+        "muted",
+        "snoozed",
+    }
+    assert {f.status for f in filter_findings(rows, "bogus")} == {
+        "open",
+        "muted",
+        "snoozed",
+    }  # -> default
+
+
 def test_store_persists_to_file_and_reopens(tmp_path):
     # CREATE TABLE IF NOT EXISTS makes reopening an existing db a safe no-op migration.
     db = tmp_path / "nested" / "state.db"
