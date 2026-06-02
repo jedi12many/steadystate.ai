@@ -42,6 +42,10 @@ class Symptom:
     # Structured key/value evidence for the `show <fp>` view (namespace, cluster, pod count, last
     # log line, ...). Auxiliary -- excluded from equality so it never perturbs identity/grouping.
     evidence: dict[str, str] = field(default_factory=dict, compare=False)
+    # A concrete fix the prober can suggest for this malfunction (e.g. the `kubectl delete` that
+    # cleans up evicted pods) -- propagated to the Alert so surfaces show it as the recommended
+    # action. None for symptoms with no safe one-liner. Excluded from equality (auxiliary).
+    recommended_action: str | None = field(default=None, compare=False)
 
     def summary(self) -> str:
         return f"{self.category} {self.kind} {self.identity}"

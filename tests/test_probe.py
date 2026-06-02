@@ -96,6 +96,36 @@ def test_detects_image_pull_and_failed_phase():
     assert {p.reason for p in unhealthy_pods(pods, "web")} == {"ImagePullBackOff", "Failed"}
 
 
+def _evicted(name: str) -> dict:
+    return {"metadata": {"name": name}, "status": {"phase": "Failed", "reason": "Evicted"}}
+
+
+def test_evicted_pod_is_distinct_from_a_plain_failed_pod():
+    pods = _pods(_evicted("web-1"), _pod("web-2", phase="Failed"))
+    assert {p.name: p.reason for p in unhealthy_pods(pods, "web")} == {
+        "web-1": "Evicted",  # phase Failed + reason Evicted -> Evicted, not generic Failed
+        "web-2": "Failed",
+    }
+
+
+def test_evicted_is_medium_not_high():
+    # a crash/ImagePull is HIGH (cannot run); an evicted pod is a dead tombstone -> MEDIUM cleanup.
+    assert category_and_severity([PodHealth("web-1", "Evicted", 0)]) == ("Evicted", Severity.MEDIUM)
+
+
+def test_evicted_symptom_recommends_a_cleanup(monkeypatch):
+    # the whole point: the tool now OFFERS a fix for evicted pods -- the scoped cleanup command.
+    prober = KubectlProbe()
+    prober.use_context("prod-cluster")
+    monkeypatch.setattr(prober, "_all_pods", lambda: {"prod": {"items": [_evicted("web-1")]}})
+    monkeypatch.setattr(prober, "_last_log_line", lambda namespace, pod: "")
+    [sym] = prober.probe([_resource()])  # _resource() lives in namespace "prod"
+    assert sym.category == "Evicted" and sym.severity is Severity.MEDIUM
+    assert sym.recommended_action == (
+        "kubectl delete pods -n prod --field-selector=status.phase=Failed --context prod-cluster"
+    )
+
+
 def test_detects_restart_threshold_even_when_running():
     [pod] = unhealthy_pods(_pods(_pod("web-x", phase="Running", restarts=6)), "web")
     assert pod.reason == "6 restarts"

@@ -89,7 +89,7 @@ def _merge_symptoms(key: tuple[str, str, str], symptoms: list[Symptom]) -> Alert
             drifts=[],
             why_it_matters=only.detail,
             layer=Layer.ALERT,
-            recommended_action=None,
+            recommended_action=only.recommended_action,  # the prober's concrete fix, if any
             llm_backed=False,
             flagged_by=only.provenance.source,
             symptoms=[only],
@@ -106,7 +106,11 @@ def _merge_symptoms(key: tuple[str, str, str], symptoms: list[Symptom]) -> Alert
             "name + symptom, so handle it once."
         ),
         layer=Layer.ALERT,
-        recommended_action=None,
+        # A representative concrete fix from the group (they share a category, so the same kind of
+        # fix); the operator applies it per place (the places are listed above).
+        recommended_action=next(
+            (s.recommended_action for s in symptoms if s.recommended_action), None
+        ),
         llm_backed=False,
         flagged_by=symptoms[0].provenance.source,
         symptoms=symptoms,
