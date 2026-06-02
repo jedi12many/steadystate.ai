@@ -239,3 +239,50 @@ def test_cli_sweep_to_pushes_the_fleet_alerts_to_surfaces(monkeypatch, tmp_path)
     assert result.exit_code == 0, result.output
     assert "1 on fire" in result.output  # the digest still prints to stdout
     assert emitted and [a.title for a in emitted[0].alerts] == ["prod/web is CrashLoopBackOff"]
+
+
+# -- single probe now records (record-only, no cross-resolution) ------------------------------
+
+
+def test_probe_records_findings_but_resolves_no_other_target(monkeypatch, tmp_path):
+    import steadystate.inbound.server as server
+    from steadystate.state import StateStore
+
+    tf = tmp_path / "targets.json"
+    tf.write_text(json.dumps({"prod": {"source": "k8s-live", "context": "prod"}}))
+    monkeypatch.setenv(TARGETS_ENV, str(tf))
+    db = str(tmp_path / "state.db")
+
+    # Pre-seed another target's finding, so we can prove a single probe doesn't resolve it.
+    with StateStore(db) as store:
+        store.record(
+            {"other-fp": ("high", "stg/api is CrashLoopBackOff")}, datetime(2026, 6, 1, tzinfo=UTC)
+        )
+
+    monkeypatch.setattr(server, "build_report", _build_report({"prod": _fire_report("prod/web")}))
+    out = server._run_probe("prod", db, frozenset())
+    assert "CrashLoopBackOff" in out  # still reports
+
+    with StateStore(db) as store:
+        findings = {f.fingerprint: f for f in store.all_findings()}
+    # prod's finding was recorded (the db now persists it)...
+    assert any("prod/web" in f.last_title for f in findings.values())
+    # ...and the other target's finding is untouched -- record-only never resolves it.
+    assert "other-fp" in findings and findings["other-fp"].status != "resolved"
+
+
+def test_probe_creates_the_state_db_from_scratch(monkeypatch, tmp_path):
+    import steadystate.inbound.server as server
+    from steadystate.state import StateStore
+
+    tf = tmp_path / "targets.json"
+    tf.write_text(json.dumps({"prod": {"source": "k8s-live", "context": "prod"}}))
+    monkeypatch.setenv(TARGETS_ENV, str(tf))
+    db = tmp_path / "state.db"
+    assert not db.exists()
+
+    monkeypatch.setattr(server, "build_report", _build_report({"prod": _fire_report("prod/web")}))
+    server._run_probe("prod", str(db), frozenset())
+    assert db.exists()  # the probe created it
+    with StateStore(str(db)) as store:
+        assert store.all_findings()  # with the finding recorded

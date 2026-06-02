@@ -9,6 +9,7 @@ control flow are testable without standing up a socket.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import threading
@@ -21,7 +22,8 @@ from ..act.approve import apply_pending, decline_pending
 from ..engine import build_report
 from ..reason.alert import Alert
 from ..reason.cost import roll_up, roll_up_by_period, scan_cost_line
-from ..reconcile_state import _fingerprints
+from ..reason.report import Report
+from ..reconcile_state import _fingerprints, seen_findings
 from ..state import StateStore
 from ..sweep import render_sweep, sweep_targets
 from ..targets import load_targets_from_env
@@ -191,13 +193,25 @@ def _render_history(state_path: str) -> str:
     return "\n".join(lines)
 
 
+def _record_probe_findings(report: Report, state_path: str) -> None:
+    """Persist a summoned probe's findings to the store (new/recurring memory, and the db file
+    itself) so they show in `findings` and can be muted. **Record-only**: no `resolve_absent` -- a
+    single probe isn't a full-fleet view, so it must never mark another target's findings resolved
+    (that's `sweep`'s job, over the union). Best-effort: a wedged store never sinks the probe."""
+    with contextlib.suppress(Exception):
+        Path(state_path).parent.mkdir(parents=True, exist_ok=True)
+        with StateStore(state_path) as store:
+            store.record(seen_findings(report), datetime.now(UTC))
+
+
 def _run_probe(target_name: str, state_path: str, flags: frozenset[str]) -> str:
     """Summon: scan a named target now and report what's wrong. Resolves the name against the
     targets registry (STEADYSTATE_TARGETS), runs the SAME engine a scheduled scan runs -- and,
-    unless ``unmute`` is set, honors the mutes/snoozes the operator already set (read-only).
+    unless ``unmute`` is set, honors the mutes/snoozes the operator already set.
     ``verbose`` adds the full evidence per alert; ``cost`` adds the per-caller spend breakdown.
-    The reply carries a one-line spend footer. It never records or applies -- chat stays a
-    trigger, not a bypass."""
+    The reply carries a one-line spend footer. It **records** its findings (record-only -- so they
+    show in `findings` and can be muted -- never resolving another target's), but never applies:
+    chat stays a trigger, not a bypass."""
     if target_name == "all":  # `probe all` -> the stateful fleet sweep, not a single summon
         return _run_sweep(state_path)
     targets = load_targets_from_env()
@@ -218,6 +232,8 @@ def _run_probe(target_name: str, state_path: str, flags: frozenset[str]) -> str:
         )
     except Exception as exc:  # a summon must report the failure, never crash the listener
         return f"Probe of '{target_name}' failed: {exc}"
+    if state_path:  # persist the findings (record-only) -- this also creates the db
+        _record_probe_findings(report, state_path)
     alerts = list(report.alerts)
     suppressed = 0
     # Honor mutes by default, read-only -- but only when there's an existing store to read (opening

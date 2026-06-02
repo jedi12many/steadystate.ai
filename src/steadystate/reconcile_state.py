@@ -60,6 +60,22 @@ def _display(drift: Drift, alert: Alert) -> tuple[str, str]:
     return (alert.severity.value, drift.summary())
 
 
+def seen_findings(report: Report) -> dict[str, tuple[str, str]]:
+    """Every fingerprint in ``report`` -> the ``(severity, title)`` the store should remember for
+    it. Drifts, standing-policy findings, and symptoms all record identically (the store never
+    knows the difference). Pure -- shared by the full ``reconcile`` and the record-only path a
+    summoned ``probe`` uses to persist findings without resolving absent ones."""
+    seen: dict[str, tuple[str, str]] = {}
+    for item in report.items:
+        for drift in item.drifts:
+            seen[drift.fingerprint] = _display(drift, item)
+        for pf in item.findings:
+            seen[pf.fingerprint] = (item.severity.value, pf.title)
+        for symptom in item.symptoms:
+            seen[symptom.fingerprint] = (item.severity.value, symptom.title)
+    return seen
+
+
 def reconcile(
     report: Report, store: StateStore, now: datetime | None = None
 ) -> list[ResolvedFinding]:
@@ -72,21 +88,9 @@ def reconcile(
     """
     now = now or datetime.now(UTC)
 
-    # 1. Every fingerprint seen this scan -> (severity, title) to remember. Alerts and
-    #    signals both count toward "present", so a finding that drops below the Event
-    #    bar isn't mistaken for resolved.
-    seen: dict[str, tuple[str, str]] = {}
-    for item in report.items:
-        for drift in item.drifts:
-            seen[drift.fingerprint] = _display(drift, item)
-        # Standing-policy findings carry their own fingerprint + a stable title (the rule's
-        # one-liner), so they record exactly like drifts -- the store never knows the difference.
-        for pf in item.findings:
-            seen[pf.fingerprint] = (item.severity.value, pf.title)
-        # Symptoms likewise -- a malfunction is a finding the store remembers (new/recurring/
-        # resolved) so a recovered pod shows as resolved next scan.
-        for symptom in item.symptoms:
-            seen[symptom.fingerprint] = (item.severity.value, symptom.title)
+    # 1. Every fingerprint seen this scan -> (severity, title) to remember (alerts + signals both
+    #    count as "present", so a finding that drops below the Event bar isn't read as resolved).
+    seen = seen_findings(report)
 
     # 2. Record + read back per-fingerprint state.
     state = store.record(seen, now)

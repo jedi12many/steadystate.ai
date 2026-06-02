@@ -926,9 +926,11 @@ def probe(
     state: Path = _STATE_OPTION,
 ) -> None:
     """Summon a scan of a named target now -- the one-shot, scriptable form of the chat
-    `probe <target>` verb. Resolves the target from STEADYSTATE_TARGETS, runs the read-only engine
-    (drift + health), and prints what's wrong. Honors the mutes/snoozes in --state by default
-    (--unmute shows everything); --verbose adds the evidence. The SAME path the listener runs."""
+    `probe <target>` verb. Resolves the target from STEADYSTATE_TARGETS, runs the engine
+    (drift + health), and prints what's wrong. **Records** the findings to --state (record-only --
+    so they show in `findings` and can be muted -- never resolving another target's; that's
+    `sweep`). Honors the mutes/snoozes in --state by default (--unmute shows everything); --verbose
+    adds the evidence. The SAME path the listener runs."""
     state.parent.mkdir(parents=True, exist_ok=True)
     flags = frozenset(
         name for name, on in (("verbose", verbose), ("cost", cost), ("unmute", unmute)) if on
