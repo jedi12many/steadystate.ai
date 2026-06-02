@@ -299,6 +299,60 @@ def test_run_command_show_evidence_and_timestamps(tmp_path):
     assert "Unknown fingerprint" in run_command(Command(SHOW, "amy", "deadbeef"), db)
 
 
+# -- chat json (the agent read path) -------------------------------------------
+
+
+def _json_flag(verb: str, fp: str = "") -> Command:
+    return Command(verb, "amy", fp, flags=frozenset({"json"}))
+
+
+def test_json_flag_parses_on_read_verbs():
+    assert command_from_text("show fp7 json", "amy").flags == frozenset({"json"})
+    assert command_from_text("findings json", "amy").flags == frozenset({"json"})
+    assert command_from_text("probe prod json deep", "amy").flags == frozenset({"json", "deep"})
+
+
+def test_show_and_findings_json_return_structured_data(tmp_path):
+    db = str(tmp_path / "s.db")
+    fp = "a" * 64
+    with StateStore(db) as store:
+        store.record(
+            {fp: ("high", "squid is CrashLoopBackOff in prod/team-a")},
+            datetime(2026, 6, 2, 14, 30, tzinfo=UTC),
+            {fp: {"namespace": "team-a", "last_log": "boom"}},
+        )
+    doc = json.loads(run_command(_json_flag(SHOW, fp[:10]), db))  # prefix resolves
+    assert doc["fingerprint"] == fp and doc["status"] == "open"
+    assert doc["evidence"] == {"namespace": "team-a", "last_log": "boom"}
+
+    rows = json.loads(run_command(_json_flag(FINDINGS), db))
+    assert isinstance(rows, list) and rows[0]["fingerprint"] == fp
+
+
+def test_json_errors_are_json_not_prose(tmp_path):
+    # an agent in json mode must always get parseable output -- even on an error.
+    db = str(tmp_path / "s.db")
+    with StateStore(db) as store:
+        store.record({"a" * 64: ("low", "t")}, datetime(2026, 6, 2, tzinfo=UTC))
+    doc = json.loads(run_command(_json_flag(SHOW, "deadbeef"), db))
+    assert "error" in doc and "Unknown fingerprint" in doc["error"]
+    # no findings db yet -> findings json is an empty array, not a prose sentence.
+    assert json.loads(run_command(_json_flag(FINDINGS), str(tmp_path / "absent.db"))) == []
+
+
+def test_probe_json_returns_the_report_shape(monkeypatch, tmp_path):
+    monkeypatch.setenv(
+        "STEADYSTATE_TARGETS",
+        _targets_file(tmp_path, {"prod": {"source": "argocd", "path": "/x", "label": "prod"}}),
+    )
+    monkeypatch.setattr(
+        "steadystate.inbound.server.build_report", lambda *a, **k: _report_with_one_alert()
+    )
+    doc = json.loads(run_command(_json_flag(PROBE, "prod"), ":memory:"))
+    assert doc["summary"]["alerts"] == 1  # same shape as `scan --json`
+    assert doc["alerts"][0]["title"] == "web is Degraded"
+
+
 # -- surfaces / send (dispatch a finding to an alert surface) -------------------
 
 
