@@ -99,7 +99,7 @@ It's one file — mount a volume to persist it across runs; the scheduled scan a
 
 ## Deploying
 
-See **[DEPLOYMENT.md](./DEPLOYMENT.md)** — the model plus worked examples (in CI, an in-cluster CronJob, and a persistent chat listener), with a container image and ready-to-adapt manifests under [`deploy/`](./deploy/).
+See **[`examples/`](./examples/)** — worked deployment scenarios (a CI drift check, an in-cluster CronJob, a persistent chat listener, and live **fleet health** from a dir of kubeconfigs), each a short walkthrough plus the model they share. The ready-to-adapt container image and manifests they apply live under [`deploy/`](./deploy/).
 
 ## Design
 
