@@ -21,7 +21,7 @@ from .argocd import ArgoCDSource
 from .base import Capabilities, DriftSource
 from .docker_compose import DockerComposeSource
 from .helm import HelmSource
-from .k8s import KubernetesLiveSource, KubernetesSource
+from .k8s import KubernetesBaselineSource, KubernetesLiveSource, KubernetesSource
 from .rancher import RancherSource
 from .terraform import TerraformSource
 
@@ -74,6 +74,12 @@ def _k8s_live(path: Path) -> DriftSource:
     return KubernetesLiveSource()
 
 
+def _k8s_baseline(path: Path) -> DriftSource:
+    # PATHLESS: config drift vs a captured baseline (loaded by context from .steadystate/). Reads
+    # live workloads + the baseline file; the path is ignored.
+    return KubernetesBaselineSource()
+
+
 # name -> factory(path) -> DriftSource. Indexed by the CLI's --source choice.
 # docker-compose has no native plan diff, so it reconciles declared services
 # (`docker compose config`) against running containers (`docker compose ps`).
@@ -84,13 +90,14 @@ _BUILTIN_SOURCES: dict[str, Callable[[Path], DriftSource]] = {
     "docker-compose": _docker_compose,
     "k8s": _k8s,
     "k8s-live": _k8s_live,
+    "k8s-baseline": _k8s_baseline,
     "rancher": _rancher,
     "helm": _helm,
 }
 
 # Sources that take NO path input -- they read live state themselves (a reachable cluster), so
 # `scan --source <name>` needs no positional path and no target. The CLI passes them a placeholder.
-PATHLESS_SOURCES: frozenset[str] = frozenset({"k8s-live"})
+PATHLESS_SOURCES: frozenset[str] = frozenset({"k8s-live", "k8s-baseline"})
 
 # Per-plugin command manifests: observe (pre-approved, read-only) vs destructive (needs
 # approval). Keyed like the source registry -- adding a source means declaring its commands too.
@@ -101,6 +108,7 @@ _BUILTIN_CAPABILITIES: dict[str, Capabilities] = {
     "docker-compose": DockerComposeSource.commands,
     "k8s": KubernetesSource.commands,
     "k8s-live": KubernetesLiveSource.commands,
+    "k8s-baseline": KubernetesLiveSource.commands,
     "rancher": RancherSource.commands,
     "helm": HelmSource.commands,
 }

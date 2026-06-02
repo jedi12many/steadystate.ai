@@ -24,7 +24,11 @@ from steadystate.sources.argocd import ArgoCDSource
 from steadystate.sources.base import SourceError
 from steadystate.sources.docker_compose import DockerComposeSource
 from steadystate.sources.helm import HelmSource
-from steadystate.sources.k8s import KubernetesLiveSource, KubernetesSource
+from steadystate.sources.k8s import (
+    KubernetesBaselineSource,
+    KubernetesLiveSource,
+    KubernetesSource,
+)
 from steadystate.sources.rancher import RancherSource
 from steadystate.sources.terraform import TerraformSource
 
@@ -44,6 +48,8 @@ _LIVE: dict[str, Callable[[object], Callable[[], object]]] = {
     "terraform": lambda d: TerraformSource(working_dir=d).collect_drift,
     "k8s": lambda d: KubernetesSource(declared=[], get_args=["pods"]).collect_drift,
     "k8s-live": lambda d: KubernetesLiveSource().collect_declared,
+    # baseline injected so collect_drift gets past the baseline load to the live read (the kubectl).
+    "k8s-baseline": lambda d: KubernetesBaselineSource(baseline={"items": []}).collect_drift,
     "docker-compose": lambda d: DockerComposeSource(working_dir=d).collect_drift,
     "ansible": lambda d: AnsibleSource(playbook="site.yml").collect_drift,
     "helm": lambda d: HelmSource().collect_drift,
