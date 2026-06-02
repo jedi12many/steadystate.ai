@@ -163,6 +163,27 @@ _PAGERDUTY = Capability(
     ),
 )
 
+_SERVICENOW = Capability(
+    "servicenow",
+    "ServiceNow",
+    "Open (or update) an incident per alert via the Table API (--to servicenow).",
+    (
+        Setting(
+            "STEADYSTATE_SERVICENOW_INSTANCE",
+            "ServiceNow instance ('dev12345') or a full base URL",
+            example="dev12345",
+        ),
+        Setting("STEADYSTATE_SERVICENOW_USER", "integration user"),
+        Setting("STEADYSTATE_SERVICENOW_PASSWORD", "that user's password (or token)", secret=True),
+        Setting(
+            "STEADYSTATE_SERVICENOW_TABLE",
+            "target table (default 'incident')",
+            required=False,
+            example="incident",
+        ),
+    ),
+)
+
 _SLACK_LISTEN = Capability(
     "slack-listen",
     "Slack chat-back",
@@ -275,7 +296,10 @@ _GITHUB_PR = Capability(
 # Ordered sections -- the order `init` walks and `doctor` prints.
 SECTIONS: tuple[tuple[str, tuple[Capability, ...]], ...] = (
     ("Reasoning", (_LLM,)),
-    ("Alerts out (--to)", (_SLACK, _TEAMS, _DISCORD, _PROM_PUSH, _GRAFANA, _WEBHOOK, _PAGERDUTY)),
+    (
+        "Alerts out (--to)",
+        (_SLACK, _TEAMS, _DISCORD, _PROM_PUSH, _GRAFANA, _WEBHOOK, _PAGERDUTY, _SERVICENOW),
+    ),
     ("Chat back (listen --from)", (_SLACK_LISTEN, _TEAMS_LISTEN, _DISCORD_LISTEN)),
     ("Source credentials", (_ARGOCD, _RANCHER, _ANSIBLE)),
     ("Live-health enrichment", (_ENRICH, _SENTINEL_ENRICH)),
