@@ -14,7 +14,7 @@ from steadystate.model import ChangeType, Drift, Provenance
 from steadystate.reason.alert import Alert, Layer, Severity
 from steadystate.reason.report import Report
 from steadystate.reconcile_state import reconcile
-from steadystate.state import StateStore
+from steadystate.state import RESOLVED, StateStore
 
 
 def _drift(identity: str = "aws_s3_bucket.logs", source: str = "terraform") -> Drift:
@@ -144,6 +144,57 @@ def test_muting_the_correlation_fingerprint_silences_the_whole_group():
     silenced = grouped()
     reconcile(silenced, store, now=_t(3))
     assert silenced.alerts == []
+
+
+def test_correlation_fingerprint_is_recorded_then_resolves_when_the_group_collapses():
+    # The group fp is remembered (so it shows in `findings`, discoverable after the probe scrolls
+    # away). It's keyed on (kind, name, category), NOT on which places are present, so fixing SOME
+    # clusters keeps the SAME fp -- and when the group collapses to a single instance, the fp drops
+    # out of the report and resolves cleanly. No orphaned group fingerprint.
+    from steadystate.probe.base import Symptom
+
+    store = StateStore()
+    corr = "e" * 64
+
+    def _sym(place: str) -> Symptom:
+        return Symptom(
+            identity=f"{place}/apps/Deployment/ns/squid",
+            kind="Deployment",
+            category="CrashLoopBackOff",
+            severity=Severity.HIGH,
+            title=f"squid is CrashLoopBackOff in {place}",
+            detail="2 pod(s)",
+            provenance=Provenance(source="kubernetes", address=place),
+        )
+
+    def _grouped(*places: str) -> Report:
+        alert = Alert(
+            title=f"squid is CrashLoopBackOff in {len(places)} place(s)",
+            severity=Severity.HIGH,
+            drifts=[],
+            why_it_matters="grouped",
+            layer=Layer.ALERT,
+            symptoms=[_sym(p) for p in places],
+            correlation_fingerprint=corr,
+        )
+        return _report(alert)
+
+    reconcile(_grouped("a", "b"), store, now=_t(1))
+    assert any(f.fingerprint == corr for f in store.all_findings())  # discoverable in `findings`
+
+    # the group collapses to one instance -> the lone alert carries no correlation fp.
+    lone = _sym("a")
+    plain = Alert(
+        title=lone.title,
+        severity=Severity.HIGH,
+        drifts=[],
+        why_it_matters="x",
+        layer=Layer.ALERT,
+        symptoms=[lone],
+    )
+    resolved = reconcile(_report(plain), store, now=_t(2))
+    assert any(r.fingerprint == corr for r in resolved)  # the old group fp resolved cleanly
+    assert store.get(corr).status == RESOLVED
 
 
 def test_resolved_finding_is_reported_once():

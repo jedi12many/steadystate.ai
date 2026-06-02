@@ -86,6 +86,11 @@ def seen_findings(report: Report) -> dict[str, tuple[str, str]]:
             seen[pf.fingerprint] = (item.severity.value, pf.title)
         for symptom in item.symptoms:
             seen[symptom.fingerprint] = (item.severity.value, symptom.title)
+        # A correlated group's own "mute-all" fingerprint is remembered too -- so it shows in
+        # `findings` (discoverable after the probe scrolls away), gets the new/resolved lifecycle,
+        # and can be muted/`raw`'d. Its title is the group heading ("... in N place(s)").
+        if item.correlation_fingerprint:
+            seen[item.correlation_fingerprint] = (item.severity.value, item.title)
     return seen
 
 
@@ -101,6 +106,16 @@ def finding_evidence(report: Report) -> dict[str, dict[str, str]]:
         for symptom in item.symptoms:
             if symptom.evidence:
                 out[symptom.fingerprint] = dict(symptom.evidence)
+        # The group fingerprint's evidence: how many places, and a couple shared fields -- so
+        # `raw <correlation-fp>` shows the scope of the group, not "no evidence".
+        if item.correlation_fingerprint and item.symptoms:
+            first = item.symptoms[0]
+            out[item.correlation_fingerprint] = {
+                "correlated": f"{len(item.symptoms)} place(s)",
+                "workload": first.identity.rsplit("/", 1)[-1].rsplit(".", 1)[-1],
+                "kind": first.kind,
+                "category": first.category,
+            }
     return out
 
 
