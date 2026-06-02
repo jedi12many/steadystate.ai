@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import subprocess
 from dataclasses import dataclass
 
@@ -74,6 +75,16 @@ def _pod_belongs(pod: dict, workload: str) -> bool:
         return _owner_belongs(name, kind, workload)
     pod_name = (pod.get("metadata") or {}).get("name") or ""
     return pod_name == workload or pod_name.startswith(f"{workload}-")
+
+
+def _workload_pod_names(pods: dict, workload: str) -> list[str]:
+    """The names of every pod belonging to ``workload`` (healthy or not) in a `kubectl get pods`
+    doc -- the candidates a `--deep` log scan reads. Pure."""
+    return [
+        name
+        for pod in (pods.get("items") or [])
+        if _pod_belongs(pod, workload) and (name := (pod.get("metadata") or {}).get("name"))
+    ]
 
 
 def unhealthy_pods(pods: dict, workload: str) -> list[PodHealth]:
@@ -143,8 +154,61 @@ def category_and_severity(sick: list[PodHealth]) -> tuple[str, Severity]:
     return worst.reason, severity
 
 
+# -- log-content detection (`probe --deep`) ---------------------------------------------------
+# A pod can be Running + Ready yet failing in its LOGS -- a panic loop caught and restarted, a
+# flood of errors, an OOM trace. Status detection misses that; a `--deep` probe reads the tail
+# and matches these signatures. FATAL signatures are acute enough that ONE hit raises a symptom;
+# the ERROR signatures are the kind a healthy app emits occasionally, so they must clear a
+# threshold. Conservative on purpose -- favor precision over recall; a missed error log is less
+# harmful than alert fatigue. `ERROR`/`FATAL` are matched case-sensitively (the log-level
+# convention), so prose like "no error occurred" doesn't trip them.
+_LOG_FATAL_RE = re.compile(
+    r"panic:|fatal error:|SIGSEGV|segfault|segmentation fault|OOMKilled|out of memory|"
+    r"cannot allocate memory|Traceback \(most recent call last\)",
+    re.IGNORECASE,
+)
+_LOG_ERROR_RE = re.compile(
+    r"\bERROR\b|\bFATAL\b|level=(?:error|fatal)|Exception in thread|\bException\b|"
+    r"connection refused|context deadline exceeded|no route to host"
+)
+
+
+@dataclass(frozen=True)
+class LogVerdict:
+    """The outcome of scanning one pod's log tail: how many error lines, whether any was a
+    fatal-class signature, and a few sample lines (capped) for the evidence."""
+
+    error_count: int
+    fatal: bool
+    sample: list[str]
+
+
+def scan_log_text(text: str, threshold: int) -> LogVerdict | None:
+    """Scan a log tail for trouble. Returns a verdict when a FATAL-class signature appears (one is
+    enough) OR the error-line count reaches ``threshold``; else None (nothing actionable). Pure +
+    testable -- the detection rule, isolated from kubectl."""
+    fatal = False
+    count = 0
+    sample: list[str] = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        is_fatal = bool(_LOG_FATAL_RE.search(line))
+        if is_fatal or _LOG_ERROR_RE.search(line):
+            count += 1
+            fatal = fatal or is_fatal
+            if len(sample) < 5:
+                sample.append(line[:200])
+    if fatal or count >= threshold:
+        return LogVerdict(error_count=count, fatal=fatal, sample=sample)
+    return None
+
+
 class KubectlProbe:
-    """Produces a Symptom per declared kubernetes workload whose pods are unhealthy now."""
+    """Produces a Symptom per declared kubernetes workload whose pods are unhealthy now. With log
+    scanning enabled (`probe --deep`), it also reads the tail of the *Running* pods' logs and
+    raises a symptom for a workload that's status-healthy but erroring in its logs."""
 
     name = "kubectl"
     # Observe-only: a probe reads health, it never changes a workload. Declared so the manifest
@@ -158,12 +222,25 @@ class KubectlProbe:
         self.log_tail = log_tail
         self.timeout = timeout
         self._context: str | None = None
+        # Log scanning is opt-in (`probe --deep`): it costs one `kubectl logs` per pod, so it's off
+        # on the fast path. ``_scan_tail`` lines per pod, raise at ``_log_threshold`` error lines
+        # (a FATAL signature always trips), and cap how many pods per workload we read.
+        self._scan_logs = False
+        self._scan_tail = 200
+        self._log_threshold = 3
+        self._scan_max_pods = 5
 
     def use_context(self, context: str) -> None:
         """Aim every `kubectl` call at this kube context (a target = a cluster), so a fleet sweep
         probes each cluster in turn. '' clears it (the ambient current-context). Driven by
         `build_report(context=...)`; matches the live source's same-named seam."""
         self._context = context or None
+
+    def enable_log_scan(self) -> None:
+        """Turn on the deep log-content pass (`probe --deep` / `build_report(scan_logs=True)`): scan
+        the Running pods' log tails for error/fatal signatures, not just pod status. Off by default
+        because it costs a `kubectl logs` per pod."""
+        self._scan_logs = True
 
     def _kubectl(self, *args: str) -> list[str]:
         """A `kubectl` argv with `--context` appended when one is set."""
@@ -184,9 +261,16 @@ class KubectlProbe:
         for resource in k8s_resources:
             namespace = _namespace(resource.identity) or "default"
             workload = _name(resource.identity)
-            sick = unhealthy_pods(pods_by_namespace.get(namespace, {"items": []}), workload)
+            pods = pods_by_namespace.get(namespace, {"items": []})
+            sick = unhealthy_pods(pods, workload)
             if sick:
                 symptoms.append(self._symptom(resource, namespace, sick))
+            elif self._scan_logs:
+                # Status-healthy workload + `--deep` -> scan its pods' logs for errors. (A
+                # status-unhealthy workload already surfaced above; don't double-report it.)
+                log_symptom = self._log_symptom(resource, namespace, pods, workload)
+                if log_symptom is not None:
+                    symptoms.append(log_symptom)
         return symptoms
 
     def _symptom(self, resource: Resource, namespace: str, sick: list[PodHealth]) -> Symptom:
@@ -220,6 +304,64 @@ class KubectlProbe:
             category=category,
             severity=severity,
             title=f"{_name(resource.identity)} is {category} in {where}",
+            detail=detail,
+            provenance=Provenance(source="kubernetes", address=resource.identity),
+            evidence=evidence,
+        )
+
+    def _log_symptom(
+        self, resource: Resource, namespace: str, pods: dict, workload: str
+    ) -> Symptom | None:
+        """Scan the tail of a status-healthy workload's pods for error/fatal log signatures, and
+        raise one ``Erroring`` Symptom for the workload if any pod trips. One `kubectl logs` per
+        pod (capped); a failed/denied read is best-effort/quiet. None when nothing trips."""
+        pod_names = _workload_pod_names(pods, workload)[: self._scan_max_pods]
+        total = 0
+        fatal = False
+        sample: list[str] = []
+        scanned: list[str] = []
+        for pod in pod_names:
+            text = self._run_text(
+                self._kubectl("logs", pod, "-n", namespace, "--tail", str(self._scan_tail)),
+                best_effort=True,
+            )
+            if not text:
+                continue
+            scanned.append(pod)
+            verdict = scan_log_text(text, self._log_threshold)
+            if verdict is None:
+                continue
+            total += verdict.error_count
+            fatal = fatal or verdict.fatal
+            for line in verdict.sample:
+                if len(sample) < 5:
+                    sample.append(line)
+        if not sample and not fatal:  # nothing tripped across the workload's pods
+            return None
+        severity = Severity.HIGH if fatal else Severity.MEDIUM  # fatal-class -> HIGH, else MEDIUM
+        where = f"{self._context}/{namespace}" if self._context else namespace
+        name = _name(resource.identity)
+        detail = f"{total} error log line(s)" + (" incl. a fatal signature" if fatal else "")
+        detail += f"; e.g. {sample[0]}" if sample else ""
+        evidence = {
+            "workload": name,
+            "kind": resource.kind,
+            "namespace": namespace,
+            "category": "Erroring",
+            "error_lines": str(total),
+            "fatal": "yes" if fatal else "no",
+            "pods_scanned": ", ".join(scanned),
+        }
+        if self._context:
+            evidence["cluster"] = self._context
+        if sample:
+            evidence["sample"] = " | ".join(sample[:3])
+        return Symptom(
+            identity=resource.identity,
+            kind=resource.kind,
+            category="Erroring",
+            severity=severity,
+            title=f"{name} is Erroring in {where}",
             detail=detail,
             provenance=Provenance(source="kubernetes", address=resource.identity),
             evidence=evidence,

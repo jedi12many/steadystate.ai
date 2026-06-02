@@ -717,6 +717,11 @@ def sweep(
     verbose: bool = typer.Option(
         False, "--verbose", "-v", help="List each fire's title under its cluster."
     ),
+    deep: bool = typer.Option(
+        False,
+        "--deep",
+        help="Also scan every cluster's Running pods' logs for errors (a `kubectl logs` per pod).",
+    ),
     to: str = typer.Option(
         "",
         "--to",
@@ -747,7 +752,7 @@ def sweep(
         return
     # Resolve surfaces before the (slow) sweep, so a bad --to fails fast with a clean BadParameter.
     surfaces = _surfaces([n.strip() for n in to.split(",") if n.strip()])
-    result = sweep_targets(registry, state, datetime.now(UTC), stateless=stateless)
+    result = sweep_targets(registry, state, datetime.now(UTC), stateless=stateless, scan_logs=deep)
     for line in render_sweep(result, verbose=verbose):
         typer.echo(line)
     for surface in surfaces:  # push the union of the fleet's alerts outward (each cluster-labeled)
@@ -982,17 +987,25 @@ def probe(
     unmute: bool = typer.Option(
         False, "--unmute", help="Show muted/snoozed findings too (bypass suppression this run)."
     ),
+    deep: bool = typer.Option(
+        False,
+        "--deep",
+        help="Also scan Running pods' logs for error/fatal signatures (one `kubectl logs` per pod "
+        "-- catches a pod that's up but erroring). Off by default.",
+    ),
     state: Path = _STATE_OPTION,
 ) -> None:
-    """Summon a scan of a named target now -- the one-shot, scriptable form of the chat
+    """Summon a health check of a named target now -- the one-shot, scriptable form of the chat
     `probe <target>` verb. Resolves the target from STEADYSTATE_TARGETS, runs the engine
     (drift + health), and prints what's wrong. **Records** the findings to --state (record-only --
     so they show in `findings` and can be muted -- never resolving another target's; that's
     `sweep`). Honors the mutes/snoozes in --state by default (--unmute shows everything); --verbose
-    adds the evidence. The SAME path the listener runs."""
+    adds the evidence; --deep also scans pod logs. The SAME path the listener runs."""
     state.parent.mkdir(parents=True, exist_ok=True)
     flags = frozenset(
-        name for name, on in (("verbose", verbose), ("cost", cost), ("unmute", unmute)) if on
+        name
+        for name, on in (("verbose", verbose), ("cost", cost), ("unmute", unmute), ("deep", deep))
+        if on
     )
     typer.echo(run_command(Command(PROBE, _local_actor(), target, flags=flags), str(state)))
 

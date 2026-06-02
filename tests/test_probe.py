@@ -11,6 +11,7 @@ from steadystate.probe.kubectl import (
     KubectlProbe,
     PodHealth,
     category_and_severity,
+    scan_log_text,
     unhealthy_pods,
 )
 from steadystate.reason.alert import Severity
@@ -315,6 +316,77 @@ def test_probe_without_context_omits_the_flag(monkeypatch):
     )
     KubectlProbe().probe([_resource()])
     assert calls and all("--context" not in c for c in calls)
+
+
+# -- log-content detection (`probe --deep`) -------------------------------------
+
+
+def test_scan_log_text_fatal_trips_once_errors_need_a_threshold():
+    # a FATAL-class signature raises on a single hit...
+    fatal = scan_log_text("starting\npanic: runtime error: nil pointer\ngoroutine 1", threshold=3)
+    assert fatal is not None and fatal.fatal and "panic" in fatal.sample[0]
+    # ...while plain errors must clear the threshold (a healthy app logs the odd one).
+    assert scan_log_text("ERROR a\nERROR b\nERROR c", threshold=3).error_count == 3
+    assert scan_log_text("ERROR a\nERROR b", threshold=3) is None  # below the bar
+    # case-sensitive ERROR/FATAL, so prose doesn't trip it.
+    assert scan_log_text("no error occurred; all good\nnothing to report", threshold=3) is None
+    assert scan_log_text("", threshold=3) is None
+
+
+def _deep(monkeypatch, prober, pods, log_text):
+    monkeypatch.setattr(prober, "_all_pods", lambda: {"prod": pods})
+    monkeypatch.setattr(prober, "_run_text", lambda argv, best_effort=False: log_text)
+    monkeypatch.setattr(prober, "_last_log_line", lambda namespace, pod: "")
+    return prober
+
+
+def test_deep_probe_flags_a_running_pod_erroring_in_its_logs(monkeypatch):
+    # a status-HEALTHY pod (Running, no restarts) whose logs panic -> an Erroring symptom (HIGH).
+    prober = KubectlProbe()
+    prober.use_context("prod-cluster")
+    prober.enable_log_scan()
+    _deep(monkeypatch, prober, {"items": [_pod("web-abc", phase="Running")]}, "ok\npanic: boom\nx")
+    [sym] = prober.probe([_resource()])
+    assert sym.category == "Erroring" and sym.severity is Severity.HIGH
+    assert sym.title == "web is Erroring in prod-cluster/prod"  # names where, like a status symptom
+    assert "panic: boom" in sym.evidence["sample"] and sym.evidence["fatal"] == "yes"
+
+
+def test_non_fatal_log_errors_are_medium(monkeypatch):
+    prober = KubectlProbe()
+    prober.enable_log_scan()
+    _deep(
+        monkeypatch,
+        prober,
+        {"items": [_pod("web-abc", phase="Running")]},
+        "ERROR a\nERROR b\nERROR c",
+    )
+    [sym] = prober.probe([_resource()])
+    assert sym.severity is Severity.MEDIUM and sym.evidence["fatal"] == "no"
+
+
+def test_log_scan_is_off_unless_deep_is_enabled(monkeypatch):
+    # without enable_log_scan(), a Running pod's logs are never read -- the fast path is unchanged.
+    prober = KubectlProbe()
+    fetched: list[int] = []
+    monkeypatch.setattr(prober, "_all_pods", lambda: {"prod": {"items": [_pod("web-abc")]}})
+    monkeypatch.setattr(
+        prober, "_run_text", lambda argv, best_effort=False: fetched.append(1) or "panic: boom"
+    )
+    assert prober.probe([_resource()]) == []  # status-healthy -> no symptom, no log read
+    assert fetched == []
+
+
+def test_deep_does_not_double_report_a_status_unhealthy_workload(monkeypatch):
+    # a crash-looping pod already surfaces from STATUS; `--deep` must not add a second Erroring
+    # symptom for the same workload (and shouldn't even scan its logs).
+    prober = KubectlProbe()
+    prober.enable_log_scan()
+    crashing = _pod("web-abc", waiting="CrashLoopBackOff", restarts=9)
+    monkeypatch.setattr(prober, "_all_pods", lambda: {"prod": {"items": [crashing]}})
+    monkeypatch.setattr(prober, "_last_log_line", lambda namespace, pod: "panic: boom")
+    [sym] = prober.probe([_resource()])
+    assert sym.category == "CrashLoopBackOff"  # status wins; no Erroring duplicate
 
 
 # -- the registry ---------------------------------------------------------------

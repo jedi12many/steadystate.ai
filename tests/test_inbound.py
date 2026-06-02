@@ -363,6 +363,26 @@ def test_run_command_probe_resolves_and_summarizes(monkeypatch, tmp_path):
     assert "0/3 pods available" in msg  # the description shows by default, not just the title + fps
 
 
+def test_probe_deep_flag_parses_and_threads_log_scanning(monkeypatch, tmp_path):
+    # `probe <t> deep` -> the engine scans pod logs (scan_logs=True); a plain probe doesn't.
+    assert "deep" in command_from_text("probe prod deep", "amy").flags
+    monkeypatch.setenv(
+        "STEADYSTATE_TARGETS",
+        _targets_file(tmp_path, {"prod": {"source": "k8s-live", "context": "prod"}}),
+    )
+    captured: dict = {}
+
+    def fake_build(*a, **k):
+        captured.update(k)
+        return _report_with_one_alert()
+
+    monkeypatch.setattr("steadystate.inbound.server.build_report", fake_build)
+    run_command(command_from_text("probe prod deep", "amy"), ":memory:")
+    assert captured["scan_logs"] is True
+    run_command(Command(PROBE, "amy", "prod"), ":memory:")  # plain probe -> no deep
+    assert captured["scan_logs"] is False
+
+
 def test_summarize_shows_the_description_by_default_and_evidence_when_verbose():
     from steadystate.inbound.server import _summarize
     from steadystate.probe.base import Symptom
