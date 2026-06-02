@@ -20,6 +20,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 from ..act.approve import apply_pending, decline_pending
+from ..act.cleanup import record_cleanups
 from ..engine import build_report
 from ..notify import SURFACES
 from ..onboarding import Status, capabilities
@@ -328,8 +329,12 @@ def _record_probe_findings(report: Report, state_path: str) -> None:
     (that's `sweep`'s job, over the union). Best-effort: a wedged store never sinks the probe."""
     with contextlib.suppress(Exception):
         Path(state_path).parent.mkdir(parents=True, exist_ok=True)
+        now = datetime.now(UTC)
         with StateStore(state_path) as store:
-            store.record(seen_findings(report), datetime.now(UTC), finding_evidence(report))
+            store.record(seen_findings(report), now, finding_evidence(report))
+            # Offer an approvable cleanup for any evicted pods -- so `pending` lists it and
+            # `approve <fp>` runs the kubectl delete. Never auto-runs; approve is the gate.
+            record_cleanups(store, report, now)
 
 
 def probe_report(target_name: str, state_path: str, *, scan_logs: bool = False) -> Report:

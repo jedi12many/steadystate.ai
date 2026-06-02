@@ -26,6 +26,7 @@ from ..state import (
 )
 from . import build_executor
 from .base import RemediationResult
+from .cleanup import CLEANUP_SOURCE, run_cleanup
 
 
 def _audit(
@@ -54,6 +55,15 @@ def apply_pending(
     action = store.get_pending(fingerprint)
     if action is None or action.status != PENDING:
         return "no pending remediation for that fingerprint.", None
+    if action.source == CLEANUP_SOURCE:  # a symptom remediation: a direct, re-validated cleanup
+        # Claim before the irreversible step (same race guard as the drift path), then run the
+        # allow-listed kubectl delete and audit it. No drift source/executor -- the command is it.
+        if not store.claim_pending(fingerprint, PENDING, APPROVED, actor):
+            return "no pending remediation for that fingerprint.", None
+        result = run_cleanup(action)
+        outcome = VERIFIED if result.verified else APPLIED if result.applied else FAILED
+        store.record_audit(_audit(action, actor, APPROVED, outcome, result.detail), now)
+        return result.detail, result
     executor = build_executor(action.source, Path(action.path))
     if executor is None:
         return f"source '{action.source}' is observe-only; cannot remediate.", None
