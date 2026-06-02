@@ -128,6 +128,18 @@ def test_probe_honors_mutes_and_unmute_flag(runner, tmp_path, monkeypatch):
     assert "1 alert" in shown.stdout
 
 
+def test_tools_command_emits_a_json_tool_schema(runner):
+    from steadystate.cli import app
+
+    result = runner.invoke(app, ["tools"])
+    assert result.exit_code == 0
+    doc = json.loads(result.stdout)  # stdout is the machine schema
+    assert doc["version"] == 1
+    by = {t["name"]: t for t in doc["tools"]}
+    assert by["approve"]["effect"] == "guardrailed-write"  # the agent's guardrail
+    assert "deep" in by["probe"]["flags"]
+
+
 # -- chat (interactive REPL) ----------------------------------------------------
 
 
