@@ -57,6 +57,30 @@ def test_probe_with_no_targets_configured(runner, tmp_path, monkeypatch):
     assert "No targets configured" in result.stdout
 
 
+def test_probe_json_emits_a_structured_report(runner, tmp_path, monkeypatch):
+    import json
+
+    from steadystate.cli import app
+
+    _targets(
+        tmp_path,
+        monkeypatch,
+        {"prod": {"source": "terraform", "path": str(_empty_plan(tmp_path)), "label": "prod"}},
+    )
+    result = runner.invoke(app, ["probe", "prod", "--json", "--state", str(tmp_path / "s.db")])
+    assert result.exit_code == 0
+    doc = json.loads(result.stdout)  # stdout is pure JSON, not the human digest
+    assert doc["summary"] == {"alerts": 0, "signals": 0, "resolved": 0}  # an empty plan -> clean
+
+
+def test_probe_json_unknown_target_exits_nonzero(runner, tmp_path, monkeypatch):
+    from steadystate.cli import app
+
+    _targets(tmp_path, monkeypatch, {"prod": {"source": "terraform", "path": "/x"}})
+    result = runner.invoke(app, ["probe", "nope", "--json", "--state", str(tmp_path / "s.db")])
+    assert result.exit_code == 1 and "Unknown target 'nope'" in result.stdout
+
+
 def test_probe_honors_mutes_and_unmute_flag(runner, tmp_path, monkeypatch):
     from datetime import UTC, datetime
 
