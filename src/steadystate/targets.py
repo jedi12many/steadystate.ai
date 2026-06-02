@@ -21,35 +21,42 @@ TARGETS_ENV = "STEADYSTATE_TARGETS"  # path to the targets JSON document
 @dataclass(frozen=True)
 class Target:
     """One named target: the inputs a summoned scan/probe runs with -- the same shape as the
-    arguments to ``scan`` (source + path + label), plus the probe to read live health with."""
+    arguments to ``scan`` (source + path + label), plus the probe to read live health with.
+
+    A **live** target (a pathless source like ``k8s-live``) carries no ``path`` -- it reads live
+    state itself -- and instead names a ``context`` (a kube context), so a target *is* a cluster:
+    ``probe prod-cluster`` aims the source + probe at that one cluster."""
 
     name: str
     source: str
-    path: str
-    label: str  # the environment stamped on the alerts; defaults to the name
+    path: str = ""  # empty for a live source that reads live state (no file/dir to point at)
+    label: str = ""  # the environment stamped on the alerts; defaults to the name
     probe: str = "auto"  # the health probe to run; "auto" matches the source
+    context: str = ""  # a live backend context (a kube context) -- aims source + probe at it
 
 
 def load_targets(path: str | Path) -> dict[str, Target]:
     """Load the targets JSON document at ``path`` into a name -> Target map.
 
-    Format: ``{"<name>": {"source": ..., "path": ..., "label"?: ..., "probe"?: ...}, ...}``.
-    Raises ``ValueError`` (or ``OSError`` if the file is missing) on a malformed document, so a
-    typo fails loudly at load time -- never silently mid-probe.
+    Format: ``{"<name>": {"source": ..., "path"?: ..., "label"?: ..., "probe"?: ...,
+    "context"?: ...}, ...}``. ``path`` is optional -- a live target (k8s-live) omits it and names a
+    ``context`` instead. Raises ``ValueError`` (or ``OSError`` if the file is missing) on a
+    malformed document, so a typo fails loudly at load time -- never silently mid-probe.
     """
     raw = json.loads(Path(path).read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
         raise ValueError("targets file must be a JSON object of name -> target")
     out: dict[str, Target] = {}
     for name, spec in raw.items():
-        if not isinstance(spec, dict) or "source" not in spec or "path" not in spec:
-            raise ValueError(f"target '{name}' needs at least 'source' and 'path'")
+        if not isinstance(spec, dict) or "source" not in spec:
+            raise ValueError(f"target '{name}' needs at least a 'source'")
         out[name] = Target(
             name=name,
             source=str(spec["source"]),
-            path=str(spec["path"]),
+            path=str(spec.get("path") or ""),
             label=str(spec.get("label") or name),
             probe=str(spec.get("probe") or "auto"),
+            context=str(spec.get("context") or ""),
         )
     return out
 
@@ -62,14 +69,18 @@ def load_targets_from_env() -> dict[str, Target]:
 
 
 def target_to_spec(target: Target) -> dict[str, str]:
-    """A Target as the minimal JSON spec ``load_targets`` reads back: ``label`` and ``probe`` are
-    omitted when they hold their defaults (the name, and ``auto``), so a generated file stays terse.
-    Pure -- inverse of the per-entry parse in ``load_targets``."""
-    spec = {"source": target.source, "path": target.path}
+    """A Target as the minimal JSON spec ``load_targets`` reads back: ``path``/``label``/``probe``/
+    ``context`` are omitted when empty or at their default (so a live target writes just
+    ``source`` + ``context``, a file target stays terse). Pure -- inverse of ``load_targets``."""
+    spec = {"source": target.source}
+    if target.path:
+        spec["path"] = target.path
     if target.label != target.name:
         spec["label"] = target.label
     if target.probe != "auto":
         spec["probe"] = target.probe
+    if target.context:
+        spec["context"] = target.context
     return spec
 
 
@@ -101,15 +112,20 @@ def target_issues(
     known_sources: set[str],
     known_probes: set[str],
     path_exists: Callable[[str], bool],
+    pathless: frozenset[str] = frozenset(),
 ) -> list[str]:
     """Validate one target against the running build: its source is registered, its probe is a real
     one (or ``auto``/``none``), and its path resolves. Returns a list of human-readable problems --
-    empty means healthy. Pure: ``path_exists`` is injected, so it's testable without a disk."""
+    empty means healthy. Pure: ``path_exists`` is injected, so it's testable without a disk.
+
+    A target whose source is in ``pathless`` (a live source like ``k8s-live``) reads live state, so
+    it has no path to resolve -- its reachability is the probe's job at run time, not a static
+    check here -- so the path check is skipped for it."""
     issues: list[str] = []
     if target.source not in known_sources:
         issues.append(f"unknown source '{target.source}'")
     if target.probe not in known_probes:
         issues.append(f"unknown probe '{target.probe}'")
-    if not path_exists(target.path):
+    if target.source not in pathless and not path_exists(target.path):
         issues.append("path not found")
     return issues
