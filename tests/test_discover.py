@@ -7,7 +7,9 @@ filesystem; only the thin I/O gather + the CLI wiring touch the system, covered 
 from __future__ import annotations
 
 import json
+import sys
 
+from steadystate import discover as disc
 from steadystate.discover import (
     ToolStatus,
     assess_probe,
@@ -1030,3 +1032,90 @@ def test_classify_snapshots_survives_deeply_nested_json(tmp_path):
     # caught and the file skipped, not crash the scan.
     (tmp_path / "bomb.json").write_text("[" * 2000 + "]" * 2000)
     assert _classify_snapshots(tmp_path) == {}
+
+
+# -- the real subprocess I/O: _run / _run_json / _run_ndjson / _check_reachable ---------------
+#
+# Everywhere else these are monkeypatched away, so the genuine subprocess path (capture, text,
+# timeout, the OSError/SubprocessError swallow, the ndjson line skipping) was never exercised.
+# Drive it with a controllable child -- the Python interpreter itself -- so the test needs no
+# external CLI and runs identically on POSIX and Windows.
+
+
+def _py(code: str) -> list[str]:
+    """An argv that runs `code` in this interpreter -- a portable stand-in for a real tool."""
+    return [sys.executable, "-c", code]
+
+
+def test_run_captures_stdout_on_success():
+    ok, out = disc._run(_py("print('hello')"))
+    assert ok is True
+    assert out.strip() == "hello"
+
+
+def test_run_reports_failure_on_nonzero_exit():
+    ok, out = disc._run(_py("import sys; print('partial'); sys.exit(3)"))
+    assert ok is False  # returncode != 0 -> callers treat it as no data
+    assert "partial" in out  # stdout is still captured
+
+
+def test_run_swallows_missing_binary():
+    # FileNotFoundError (an OSError) must degrade to a clean (False, "") -- never propagate.
+    assert disc._run(["steadystate-no-such-binary-zzz", "--help"]) == (False, "")
+
+
+def test_run_swallows_timeout(monkeypatch):
+    # TimeoutExpired (a SubprocessError) must degrade to (False, "") -- a hung backend can't block.
+    monkeypatch.setattr(disc, "_DEEP_TIMEOUT", 0.3)
+    assert disc._run(_py("import time; time.sleep(5)")) == (False, "")
+
+
+def test_run_json_parses_a_valid_object():
+    assert disc._run_json(_py("import json; print(json.dumps({'a': 1}))")) == {"a": 1}
+
+
+def test_run_json_none_on_failed_run():
+    assert disc._run_json(_py("import sys; sys.exit(1)")) is None
+
+
+def test_run_json_none_on_unparseable_output():
+    assert disc._run_json(_py("print('not json at all')")) is None
+
+
+def test_run_ndjson_parses_one_object_per_line():
+    code = "import json; print(json.dumps({'a': 1})); print(json.dumps({'b': 2}))"
+    assert disc._run_ndjson(_py(code)) == [{"a": 1}, {"b": 2}]
+
+
+def test_run_ndjson_skips_blank_bad_and_non_object_lines():
+    code = (
+        "import json; print(json.dumps({'a': 1})); print(); print('garbage'); "
+        "print(json.dumps([1, 2])); print(json.dumps({'b': 2}))"
+    )
+    # blank skipped, 'garbage' skipped (ValueError), [1, 2] skipped (not a dict) -> two dicts kept.
+    assert disc._run_ndjson(_py(code)) == [{"a": 1}, {"b": 2}]
+
+
+def test_run_ndjson_none_on_failed_run():
+    assert disc._run_ndjson(_py("import sys; sys.exit(1)")) is None
+
+
+def test_check_reachable_true_on_zero_exit(monkeypatch):
+    monkeypatch.setitem(disc._REACHABILITY, "faketool", _py("import sys; sys.exit(0)"))
+    assert disc._check_reachable("faketool") is True
+
+
+def test_check_reachable_false_on_nonzero_exit(monkeypatch):
+    monkeypatch.setitem(disc._REACHABILITY, "faketool", _py("import sys; sys.exit(1)"))
+    assert disc._check_reachable("faketool") is False
+
+
+def test_check_reachable_false_on_missing_binary(monkeypatch):
+    monkeypatch.setitem(disc._REACHABILITY, "faketool", ["steadystate-no-such-binary-zzz"])
+    assert disc._check_reachable("faketool") is False
+
+
+def test_check_reachable_swallows_timeout(monkeypatch):
+    monkeypatch.setattr(disc, "_REACHABILITY_TIMEOUT", 0.3)
+    monkeypatch.setitem(disc._REACHABILITY, "faketool", _py("import time; time.sleep(5)"))
+    assert disc._check_reachable("faketool") is False
