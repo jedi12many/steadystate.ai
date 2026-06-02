@@ -37,6 +37,8 @@ TARGETS = "targets"
 HISTORY = "history"
 FINDINGS = "findings"
 RAW = "raw"
+SURFACES_LIST = "surfaces"
+SEND = "send"
 
 # The command grammar, in the order ``help`` lists them: verb -> (usage, one-line summary).
 # ``help`` renders itself from this table, so a newly added verb is discoverable the moment it
@@ -59,6 +61,15 @@ COMMANDS: dict[str, tuple[str, str]] = {
         "failing pod's last log) plus when it was first/last seen",
     ),
     HISTORY: ("history", "show the remediation audit log (newest first)"),
+    SURFACES_LIST: (
+        "surfaces",
+        "list the alert surfaces you can `send` to, and which are configured",
+    ),
+    SEND: (
+        "send <fingerprint> <surface>",
+        "dispatch one finding to an alert surface now (e.g. `send <fp> servicenow`) -- ad-hoc "
+        "escalation, no full scan",
+    ),
     MUTE: (
         "mute <fingerprint>",
         "silence a finding on future scans -- a single fp, or a correlated group's `mute-all` fp "
@@ -70,6 +81,9 @@ COMMANDS: dict[str, tuple[str, str]] = {
 # Verbs that require an argument to mean anything (a fingerprint for approve/decline/mute, a
 # target name for probe); the rest take none or an optional one.
 _NEEDS_ARGUMENT = frozenset({APPROVE, DECLINE, PROBE, MUTE, RAW})
+# Verbs that need TWO arguments: `send <fingerprint> <surface>`. The surface is the *last* plain
+# token, so a natural `send <fp> to servicenow` works (the "to" is ignored as a middle token).
+_NEEDS_TWO = frozenset({SEND})
 # Verbs that take an *optional* argument (cost's period); absent it, they still dispatch.
 _OPTIONAL_ARGUMENT = frozenset({COST})
 
@@ -103,6 +117,7 @@ class Command:
     actor: str  # who sent it -- recorded for the audit trail
     argument: str = ""  # the fingerprint for approve/decline/mute, the target for probe; else ""
     flags: frozenset[str] = frozenset()  # canonical modifier flags present (see _FLAG_ALIASES)
+    argument2: str = ""  # the second positional, for two-arg verbs (`send <fp> <surface>`)
 
 
 def render_help() -> str:
@@ -130,6 +145,10 @@ def command_from_text(text: str, actor: str) -> Command | None:
         rest = tokens[index + 1 :]
         flags = frozenset(_FLAG_ALIASES[t.lower()] for t in rest if t.lower() in _FLAG_ALIASES)
         args = [t for t in rest if t.lower() not in _FLAG_ALIASES]
+        if verb in _NEEDS_TWO:
+            if len(args) >= 2:  # `send <fp> <surface>` (or `send <fp> to <surface>`)
+                return Command(verb, actor, args[0], flags=flags, argument2=args[-1])
+            continue  # both parts required -> not actionable
         if verb in _NEEDS_ARGUMENT:
             if args:
                 return Command(verb, actor, args[0], flags=flags)
