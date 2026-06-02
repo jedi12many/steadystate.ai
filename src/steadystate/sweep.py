@@ -72,11 +72,13 @@ def sweep_targets(
     now: datetime | None = None,
     *,
     stateless: bool = False,
+    scan_logs: bool = False,
 ) -> SweepResult:
     """Probe every target and roll up the fleet. Stateful unless ``stateless``: one reconcile over
     the **union** of all reports (so absence is judged fleet-wide, never per-target), which records
     new/recurring and returns what resolved across the fleet. A target whose probe raises (an
-    unreachable cluster, a missing kubectl) is reported as not-``ok`` and never sinks the sweep."""
+    unreachable cluster, a missing kubectl) is reported as not-``ok`` and never sinks the sweep.
+    ``scan_logs`` (`probe all deep`) adds the per-pod log scan to every target."""
     now = now or datetime.now(UTC)
 
     built: list[tuple[str, Report | None, str]] = []
@@ -88,6 +90,7 @@ def sweep_targets(
                 probe="auto",
                 label=target.label,
                 context=target.context,
+                scan_logs=scan_logs,
             )
             built.append((name, report, ""))
         except Exception as exc:  # an unreachable/misconfigured cluster must not sink the sweep

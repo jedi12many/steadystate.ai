@@ -35,6 +35,14 @@ class SupportsContext(Protocol):
     def use_context(self, context: str) -> None: ...
 
 
+@runtime_checkable
+class SupportsLogScan(Protocol):
+    """A prober that can do a deeper, log-content pass (`probe --deep`) on top of its status check.
+    ``build_report(scan_logs=True)`` flips it on for whichever prober opts in; others ignore it."""
+
+    def enable_log_scan(self) -> None: ...
+
+
 def build_prober_for(probe: str, source: str, path: Path) -> Prober | None:
     """Resolve a ``--probe`` value to a Prober (or None). ``auto`` picks the probe matching the
     source (None where none makes sense, e.g. terraform/ansible); a name builds that probe."""
@@ -57,6 +65,7 @@ def build_report(
     no_llm: bool = False,
     label: str = "",
     context: str = "",
+    scan_logs: bool = False,
     llm_gate: PromptGate | None = None,
 ) -> Report:
     """Build a reasoned Report: drift + (optional) probe symptoms, scored + correlated + enriched,
@@ -65,6 +74,10 @@ def build_report(
     ``context`` (when set) aims the source + prober at a named backend context -- today a kube
     context, so the live cluster-health source and the kubectl probe both read that one cluster; a
     component that doesn't support it ignores it.
+
+    ``scan_logs`` (`probe --deep`) turns on the prober's deeper log-content pass -- the kubectl
+    probe then reads Running pods' log tails for error/fatal signatures, not just pod status.
+    Opt-in: it costs a `kubectl logs` per pod. A prober that doesn't support it ignores the flag.
 
     ``llm_gate`` (opt-in) is consulted before any prompt is sent to the model -- the CLI passes a
     confirmer so a cautious operator can review/approve egress; headless callers leave it None.
@@ -81,6 +94,8 @@ def build_report(
         for component in (src, prober):
             if isinstance(component, SupportsContext):
                 component.use_context(context)
+    if scan_logs and isinstance(prober, SupportsLogScan):  # `probe --deep`: read pod logs too
+        prober.enable_log_scan()
 
     drifts = src.collect_drift()
     # The declared inventory feeds the standing-policy pass (CIS/STIG) AND the probe. Only

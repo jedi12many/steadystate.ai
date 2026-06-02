@@ -352,6 +352,7 @@ def _run_probe(target_name: str, state_path: str, flags: frozenset[str]) -> str:
             probe="auto",
             label=target.label,
             context=target.context,
+            scan_logs="deep" in flags,  # `probe <t> deep` -> also scan pod logs for errors
         )
     except Exception as exc:  # a summon must report the failure, never crash the listener
         return f"Probe of '{target_name}' failed: {exc}"
@@ -388,7 +389,9 @@ def _run_sweep(state_path: str, flags: frozenset[str]) -> str:
     targets = load_targets_from_env()
     if not targets:
         return "No targets configured -- run `discover --create` or set STEADYSTATE_TARGETS."
-    result = sweep_targets(targets, state_path, datetime.now(UTC), stateless=not state_path)
+    result = sweep_targets(
+        targets, state_path, datetime.now(UTC), stateless=not state_path, scan_logs="deep" in flags
+    )
     # The tally; the CLI's terse "correlated" roll-up is replaced below by the full-detail findings.
     lines = render_sweep(result, correlated=False)
     if result.report.alerts:  # the deduped fleet findings, rendered like a single probe

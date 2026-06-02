@@ -48,9 +48,10 @@ COMMANDS: dict[str, tuple[str, str]] = {
     TARGETS: ("targets", "list the probe targets this listener knows"),
     PENDING: ("pending", "show remediations awaiting approval, with their fingerprints"),
     PROBE: (
-        "probe <target>|all [verbose|cost|unmute]",
-        "scan a target now to refresh its state -- or `probe all` for the whole fleet; aliases "
-        "`scan`/`refresh` (bare = the fleet); `verbose` shows evidence, `unmute` shows muted",
+        "probe <target>|all [verbose|cost|unmute|deep]",
+        "check a target's health now -- or `probe all` for the whole fleet; aliases "
+        "`scan`/`refresh` (bare = the fleet); `verbose` shows evidence, `unmute` shows muted, "
+        "`deep` also scans pod logs for errors",
     ),
     COST: ("cost [day|week]", "show LLM spend -- a rollup, or a day/week trend"),
     FINDINGS: ("findings", "list remembered findings: fingerprint, status, severity"),
@@ -93,11 +94,13 @@ _VERB_ALIASES = {"scan": PROBE, "refresh": PROBE}
 
 # Recognized modifier flags (with or without dashes) -> the canonical name a command checks for.
 # `verbose` = show the full evidence; `cost` = the per-caller spend breakdown; `unmute` = probe
-# bypasses mute/snooze suppression this run. Adding a flag is one row here.
+# bypasses mute/snooze suppression this run; `deep` = also scan pod logs for errors (costlier).
+# Adding a flag is one row here.
 _FLAG_ALIASES = {
     "unmute": "unmute", "--unmute": "unmute",
     "cost": "cost", "--cost": "cost",
     "verbose": "verbose", "--verbose": "verbose", "-v": "verbose",
+    "deep": "deep", "--deep": "deep",
 }  # fmt: skip
 
 
