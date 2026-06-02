@@ -84,3 +84,52 @@ def test_diagnosis_keeps_both_fingerprints_for_memory():
     [alert] = _pipeline().run([_drift()], symptoms=[_symptom()]).alerts
     fps = _fingerprints(alert)
     assert _drift().fingerprint in fps and _symptom().fingerprint in fps  # remembers both
+
+
+# -- correlating the same issue across the landscape ------------------------------------------
+
+
+def _sq(ns: str, category: str = "CrashLoopBackOff"):
+    return _symptom(identity=f"apps/Deployment/{ns}/squid", category=category)
+
+
+def test_same_app_same_error_across_namespaces_groups_into_one_alert():
+    # `squid` crash-looping in three namespaces (a bad image everywhere) is ONE issue, not three.
+    report = _pipeline().run([], symptoms=[_sq("team-a"), _sq("team-b"), _sq("team-c")])
+    [alert] = report.alerts
+    assert alert.title == "squid is CrashLoopBackOff in 3 place(s)"
+    assert len(alert.symptoms) == 3  # each instance rides along (memory tracks each)
+    assert all(ns in alert.why_it_matters for ns in ("team-a", "team-b", "team-c"))
+
+
+def test_grouped_alert_keeps_each_instances_fingerprint():
+    from steadystate.reconcile_state import _fingerprints
+
+    report = _pipeline().run([], symptoms=[_sq("team-a"), _sq("team-b")])
+    [alert] = report.alerts
+    fps = _fingerprints(alert)
+    assert len(fps) == 2 and len(set(fps)) == 2  # distinct per namespace, so each is tracked
+
+
+def test_different_workloads_or_failure_modes_do_not_group():
+    # different name (squid vs redis) -> separate; same name different category -> separate.
+    report = _pipeline().run(
+        [],
+        symptoms=[
+            _sq("team-a"),
+            _symptom(identity="apps/Deployment/team-a/redis"),
+            _sq("team-b", category="ImagePullBackOff"),
+        ],
+    )
+    assert len(report.alerts) == 3
+
+
+def test_diagnosis_takes_precedence_then_the_rest_group():
+    # team-a/squid has a co-located drift (diagnosed into it); team-b + team-c squid group alone.
+    report = _pipeline().run(
+        [_drift(identity="apps/Deployment/team-a/squid")],
+        symptoms=[_sq("team-a"), _sq("team-b"), _sq("team-c")],
+    )
+    assert len(report.alerts) == 2
+    grouped = [a for a in report.alerts if not a.drifts]
+    assert len(grouped) == 1 and len(grouped[0].symptoms) == 2  # team-b + team-c, not team-a
