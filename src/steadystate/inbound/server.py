@@ -154,7 +154,7 @@ def _render_targets() -> str:
     what `probe <target>` can reach without recalling the targets file."""
     targets = load_targets_from_env()
     if not targets:
-        return "No targets configured (set STEADYSTATE_TARGETS on the listener)."
+        return "No targets configured -- run `discover --create` or set STEADYSTATE_TARGETS."
     lines = [f"{len(targets)} target(s):"]
     lines += [
         f"  {name:<14} {t.source:<14} {('context=' + t.context) if t.context else t.label}"
@@ -202,7 +202,7 @@ def _run_probe(target_name: str, state_path: str, flags: frozenset[str]) -> str:
         return _run_sweep(state_path)
     targets = load_targets_from_env()
     if not targets:
-        return "No targets configured (set STEADYSTATE_TARGETS to a targets file on the listener)."
+        return "No targets configured -- run `discover --create` or set STEADYSTATE_TARGETS."
     target = targets.get(target_name)
     if target is None:
         return f"Unknown target '{target_name}'. Known: {', '.join(sorted(targets))}."
@@ -243,7 +243,7 @@ def _run_sweep(state_path: str) -> str:
     build history. Degrades to a stateless snapshot when the listener has no store path."""
     targets = load_targets_from_env()
     if not targets:
-        return "No targets configured (set STEADYSTATE_TARGETS to a targets file on the listener)."
+        return "No targets configured -- run `discover --create` or set STEADYSTATE_TARGETS."
     result = sweep_targets(targets, state_path, datetime.now(UTC), stateless=not state_path)
     return "\n".join(render_sweep(result, verbose=True))
 

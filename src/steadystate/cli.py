@@ -52,6 +52,7 @@ from .sources.base import SourceError
 from .state import PendingAction, StateStore
 from .sweep import render_sweep, sweep_targets
 from .targets import (
+    DEFAULT_TARGETS_FILE,
     TARGETS_ENV,
     Target,
     load_targets,
@@ -209,8 +210,8 @@ def _auto_apply(store: StateStore, fingerprints: list[str]) -> None:
 
 
 def _targets_file() -> Path:
-    """Where the targets registry lives: STEADYSTATE_TARGETS if set, else ./targets.json."""
-    return Path(os.environ.get(TARGETS_ENV) or "targets.json")
+    """Targets registry path: STEADYSTATE_TARGETS if set, else ./steadystate.targets.json."""
+    return Path(os.environ.get(TARGETS_ENV) or DEFAULT_TARGETS_FILE)
 
 
 def _resolve_target(name: str) -> Target:
@@ -248,7 +249,8 @@ def scan(
     target: str = typer.Option(
         "",
         "--target",
-        help="Run a named target from the registry (STEADYSTATE_TARGETS, else ./targets.json) -- "
+        help="Run a named target from the registry (STEADYSTATE_TARGETS, else "
+        "./steadystate.targets.json) -- "
         "the one `discover --create` writes and chat resolves. Supplies source/path/label/probe; "
         "an explicit --label/--probe still wins. Mutually exclusive with the positional path.",
     ),
@@ -659,7 +661,7 @@ def targets(
         "still resolves. Exits non-zero if any target has a problem.",
     ),
 ) -> None:
-    """List the named scan/probe targets (STEADYSTATE_TARGETS, else ./targets.json).
+    """List the named scan/probe targets (STEADYSTATE_TARGETS, else ./steadystate.targets.json).
 
     This is the registry `discover --create` writes, `scan --target` runs, and the chat listener
     resolves -- so `targets` lets you see and validate it from the CLI without opening the JSON."""
@@ -725,7 +727,8 @@ def sweep(
     """Probe every target (cluster) and roll up what's on fire -- a stateful fleet sweep.
 
     The batch counterpart to `scan --target <one>`: it runs every target in the registry
-    (STEADYSTATE_TARGETS, else ./targets.json) through the same engine and prints a digest --
+    (STEADYSTATE_TARGETS, else ./steadystate.targets.json) through the same engine and prints a
+    digest --
     which clusters are on fire, which are clear, and what recovered since the last sweep. One
     cluster being unreachable is reported inline, never sinks the rest. `--to` additionally pushes
     the fires to alert surfaces, so a cron sweep pages out (no inbound endpoint needed)."""
@@ -883,8 +886,10 @@ def chat(state: Path = _STATE_OPTION) -> None:
     """A local chat client: drive the listener's command grammar from your terminal -- no Slack /
     Teams / Discord, no signing (a local shell is already trusted). It runs the SAME parser
     (command_from_text) and dispatch (run_command) the chat adapters use, so it's a faithful way to
-    exercise the chat mechanism. Commands: `help`, `pending`, `probe <target>` (needs
-    STEADYSTATE_TARGETS), `approve <fp>`, `decline <fp>`. Ctrl-D or `exit` to quit."""
+    exercise the chat mechanism. Targets resolve from STEADYSTATE_TARGETS, else
+    ./steadystate.targets.json (what `discover --create` writes), so no env var is needed locally.
+    Commands: `help`, `pending`, `probe <target>` (or `probe all` to sweep the fleet),
+    `approve <fp>`, `decline <fp>`. Ctrl-D or `exit` to quit."""
     state.parent.mkdir(parents=True, exist_ok=True)
     actor = _local_actor()
     typer.echo("steadystate chat -- type `help`, or a command. Ctrl-D (or `exit`) to quit.")
@@ -992,7 +997,7 @@ def _create_targets(findings: list, extra: list | None = None) -> None:
     """`--create`: write the discovered sources into the targets registry (the name -> target map
     the chat listener resolves), merging without clobbering existing entries. ``extra`` carries the
     live-discovered targets from a paired ``--deep`` (compose projects rooted outside the cwd)."""
-    target_file = Path(os.environ.get(TARGETS_ENV) or "targets.json")
+    target_file = Path(os.environ.get(TARGETS_ENV) or DEFAULT_TARGETS_FILE)
     proposed = proposed_targets(findings, Path.cwd())
     # Fold in the live-discovered targets, but drop any the cwd-local pass already covers -- so a
     # compose project *in* the cwd isn't registered twice under two names. Key on (source, path,
@@ -1033,7 +1038,8 @@ def discover(
         False,
         "--create",
         help="Write the discovered sources into the targets registry (STEADYSTATE_TARGETS, else "
-        "./targets.json) as named scan/probe targets -- named after the cwd, suffixed per source "
+        "./steadystate.targets.json) as named scan/probe targets -- named after the cwd, suffixed "
+        "per source "
         "when several are found. With --deep, also registers live compose projects rooted outside "
         "the cwd. Merges without overwriting existing entries.",
     ),

@@ -40,7 +40,7 @@ change a cluster. (`k8s-live` is observe-only anyway; this just makes the *conne
 
 ```sh
 export KUBECONFIG="$(ls -1 ~/.kube/clusters/*.yaml | paste -sd:)"   # merge the read-only configs
-steadystate discover --create        # one k8s-live target per context -> ./targets.json
+steadystate discover --create        # one k8s-live target per context -> ./steadystate.targets.json
 steadystate targets --check          # see your clusters
 ```
 
@@ -83,7 +83,7 @@ To approve from chat or run `@steadystate probe all` on demand, run the listener
 [Service]
 ExecStart=/usr/local/bin/steadystate listen --from=slack --port=8723 \
   --state=/home/ops/.steadystate/state.db
-Environment=STEADYSTATE_TARGETS=/home/ops/targets.json
+Environment=STEADYSTATE_TARGETS=/home/ops/steadystate.targets.json
 Environment=KUBECONFIG=/home/ops/.kube/merged
 Environment=STEADYSTATE_SLACK_SIGNING_SECRET=...   # the inbound security boundary
 User=ops

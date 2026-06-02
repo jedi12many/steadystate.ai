@@ -45,8 +45,9 @@ COMMANDS: dict[str, tuple[str, str]] = {
     TARGETS: ("targets", "list the probe targets this listener knows"),
     PENDING: ("pending", "show remediations awaiting approval, with their fingerprints"),
     PROBE: (
-        "probe <target> [verbose|cost|unmute]",
-        "scan a named target now; `verbose` shows the evidence, `unmute` shows muted",
+        "probe <target>|all [verbose|cost|unmute]",
+        "scan a target now -- or `probe all` to sweep every target (the fleet); `verbose` shows "
+        "the evidence, `unmute` shows muted",
     ),
     COST: ("cost [day|week]", "show LLM spend -- a rollup, or a day/week trend"),
     FINDINGS: ("findings", "list remembered findings: fingerprint, status, severity"),

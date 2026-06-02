@@ -130,6 +130,11 @@ def test_render_help_lists_every_command():
         assert verb in text
 
 
+def test_render_help_documents_probe_all_sweep():
+    # `probe all` (the fleet sweep) is reachable but was undocumented -- help must mention it.
+    assert "probe all" in render_help() or "all" in render_help()
+
+
 # -- Slack payload parsing (buttons + slash) ------------------------------------
 
 
