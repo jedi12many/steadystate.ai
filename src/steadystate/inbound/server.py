@@ -220,7 +220,7 @@ def _run_probe(target_name: str, state_path: str, flags: frozenset[str]) -> str:
     show in `findings` and can be muted -- never resolving another target's), but never applies:
     chat stays a trigger, not a bypass."""
     if target_name == "all":  # `probe all` -> the stateful fleet sweep, not a single summon
-        return _run_sweep(state_path)
+        return _run_sweep(state_path, flags)
     targets = load_targets_from_env()
     if not targets:
         return "No targets configured -- run `discover --create` or set STEADYSTATE_TARGETS."
@@ -259,16 +259,25 @@ def _run_probe(target_name: str, state_path: str, flags: frozenset[str]) -> str:
     return out
 
 
-def _run_sweep(state_path: str) -> str:
+def _run_sweep(state_path: str, flags: frozenset[str]) -> str:
     """`probe all`: the **stateful** fleet sweep -- every target probed, rolled up into one digest
     of what's on fire across the fleet. Unlike the single `probe` (stateless), this records to the
     store so each sweep compares to the last (new/resolved) -- the operator asked for the batch to
-    build history. Degrades to a stateless snapshot when the listener has no store path."""
+    build history. Degrades to a stateless snapshot when the listener has no store path.
+
+    The reply is the cluster tally (which clusters are on fire / clear / unreachable, and what
+    recovered) followed by the fleet's findings in the SAME detail a single `probe` gives --
+    description and fingerprint(s) -- so `probe all` says WHAT is wrong and stays muteable, not just
+    a count. ``verbose`` swaps each finding's one-liner for its full evidence."""
     targets = load_targets_from_env()
     if not targets:
         return "No targets configured -- run `discover --create` or set STEADYSTATE_TARGETS."
     result = sweep_targets(targets, state_path, datetime.now(UTC), stateless=not state_path)
-    return "\n".join(render_sweep(result, verbose=True))
+    # The tally; the CLI's terse "correlated" roll-up is replaced below by the full-detail findings.
+    lines = render_sweep(result, correlated=False)
+    if result.report.alerts:  # the deduped fleet findings, rendered like a single probe
+        lines.append(_summarize("the fleet", result.report.alerts, verbose="verbose" in flags))
+    return "\n".join(lines)
 
 
 def run_command(command: Command, state_path: str) -> str:
