@@ -12,6 +12,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import os
 import threading
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
@@ -20,11 +21,13 @@ from pathlib import Path
 
 from ..act.approve import apply_pending, decline_pending
 from ..engine import build_report
-from ..reason.alert import Alert
+from ..notify import SURFACES
+from ..onboarding import Status, capabilities
+from ..reason.alert import Alert, Layer, Severity
 from ..reason.cost import roll_up, roll_up_by_period, scan_cost_line
 from ..reason.report import Report
 from ..reconcile_state import _fingerprints, alert_suppressed, finding_evidence, seen_findings
-from ..state import StateStore
+from ..state import Finding, StateStore
 from ..sweep import render_sweep, sweep_targets
 from ..targets import load_targets_from_env
 from .base import (
@@ -38,6 +41,8 @@ from .base import (
     PENDING,
     PROBE,
     RAW,
+    SEND,
+    SURFACES_LIST,
     TARGETS,
     Command,
     InboundAdapter,
@@ -201,14 +206,9 @@ def _render_raw(fingerprint: str, state_path: str) -> str:
     if not state_path or not Path(state_path).exists():
         return "No findings recorded yet -- run a `probe`/`scan` first."
     with StateStore(state_path) as store:
-        finding = store.get(fingerprint)
-        if finding is None:  # not an exact id -> try a unique prefix (a copy-pasted short fp)
-            matches = store.find_by_prefix(fingerprint)
-            if len(matches) > 1:
-                return f"'{fingerprint}' matches {len(matches)} findings -- use more of the fp."
-            finding = matches[0] if matches else None
+        finding, error = _lookup_finding(store, fingerprint)
     if finding is None:
-        return f"Unknown fingerprint '{fingerprint}'. Run `findings` to list them."
+        return error
     lines = [
         finding.last_title,
         f"  fingerprint   {finding.fingerprint}",
@@ -222,6 +222,84 @@ def _render_raw(fingerprint: str, state_path: str) -> str:
     else:  # a finding recorded before evidence capture, or a type that carries none
         lines.append("  (no raw evidence captured -- re-run a `probe`/`scan` to capture it)")
     return "\n".join(lines)
+
+
+def _lookup_finding(store: StateStore, token: str) -> tuple[Finding | None, str]:
+    """Resolve a fingerprint token to a stored Finding -- exact, else a *unique* prefix (they're
+    long, so a copy-pasted short form should work). Returns (finding, "") or (None, message)."""
+    finding = store.get(token)
+    if finding is not None:
+        return finding, ""
+    matches = store.find_by_prefix(token)
+    if len(matches) > 1:
+        return None, f"'{token}' matches {len(matches)} findings -- use more of the fp."
+    if not matches:
+        return None, f"Unknown fingerprint '{token}'. Run `findings` to list them."
+    return matches[0], ""
+
+
+def _surface_status(name: str) -> tuple[Status, str]:
+    """How ready an alert surface is to send, from the onboarding catalog (env-var readiness). A
+    surface with no capability entry (``console``) is always ready."""
+    cap = {c.key: c for c in capabilities()}.get(name)
+    return cap.assess(os.environ) if cap is not None else (Status.READY, "")
+
+
+def _render_surfaces() -> str:
+    """The chat view of `surfaces`: the alert surfaces you can `send <fp>` to, and whether each is
+    configured (so you know what'll actually deliver). Read-only."""
+    lines = ["alert surfaces (use `send <fp> <surface>`):"]
+    marks = {Status.READY: "configured", Status.PARTIAL: "partial", Status.OFF: "not configured"}
+    for name in sorted(SURFACES):
+        status, detail = _surface_status(name)
+        note = f" -- {detail}" if detail and status is not Status.READY else ""
+        lines.append(f"  {name:<12} {marks[status]}{note}")
+    return "\n".join(lines)
+
+
+def _alert_from_finding(finding: Finding) -> Alert:
+    """Reconstruct a summary Alert from a stored Finding, so a `send` can escalate a remembered
+    finding to a surface without a fresh scan. The store keeps the title, severity, captured
+    evidence and timestamps -- enough for a notification/incident -- but not the original
+    drift/symptom objects, so this is a summary (no before/after). The finding's fingerprint rides
+    as the Alert's ``correlation_fingerprint`` so a surface that dedups (ServiceNow's
+    correlation_id) ties it to the same incident a scheduled scan would open."""
+    severity = Severity(finding.last_severity) if finding.last_severity else Severity.MEDIUM
+    detail = "; ".join(f"{k}: {v}" for k, v in finding.details.items())
+    why = detail or f"Escalated from steadystate findings (first seen {finding.first_seen})."
+    return Alert(
+        title=finding.last_title,
+        severity=severity,
+        drifts=[],
+        why_it_matters=why,
+        layer=Layer.ALERT,
+        correlation_fingerprint=finding.fingerprint,
+    )
+
+
+def _send_finding(fingerprint: str, surface_name: str, state_path: str) -> str:
+    """`send <fp> <surface>`: dispatch one remembered finding to an alert surface now -- an ad-hoc
+    escalation ("file this in ServiceNow"), not a full scan. Resolves the fingerprint against the
+    store, checks the surface is configured (so we don't silently send nothing), reconstructs a
+    summary Alert, and emits it. A trigger, not a bypass -- it forwards a finding, never acts."""
+    if surface_name not in SURFACES:
+        return f"Unknown surface '{surface_name}'. Known: {', '.join(sorted(SURFACES))}."
+    status, detail = _surface_status(surface_name)
+    if status is not Status.READY:
+        gap = f" ({detail})" if detail else ""
+        return f"Surface '{surface_name}' isn't configured{gap}; nothing sent. See `surfaces`."
+    if not state_path or not Path(state_path).exists():
+        return "No findings recorded yet -- run a `probe`/`scan` first."
+    with StateStore(state_path) as store:
+        finding, error = _lookup_finding(store, fingerprint)
+    if finding is None:
+        return error
+    try:
+        SURFACES[surface_name]().emit(Report(items=[_alert_from_finding(finding)]))
+    except Exception as exc:  # a surface must never crash the listener
+        return f"Send to '{surface_name}' failed: {exc}"
+    short = finding.fingerprint[:12]
+    return f"Sent {short} ({finding.last_title}) to {surface_name}."
 
 
 def _render_history(state_path: str) -> str:
@@ -337,6 +415,10 @@ def run_command(command: Command, state_path: str) -> str:
         return _render_findings(state_path)
     if command.verb == RAW:
         return _render_raw(command.argument, state_path)
+    if command.verb == SURFACES_LIST:
+        return _render_surfaces()
+    if command.verb == SEND:
+        return _send_finding(command.argument, command.argument2, state_path)
     if command.verb == HISTORY:
         return _render_history(state_path)
     with StateStore(state_path) as store:
