@@ -86,9 +86,10 @@ def _evidence(alert: Alert) -> list[str]:
 
 def _summarize(name: str, alerts: list[Alert], suppressed: int = 0, verbose: bool = False) -> str:
     """A chat summary of a summoned scan: the kept alerts (worst first, as the report orders them)
-    or a clean all-clear, plus how many were withheld by mute/snooze. ``verbose`` adds the full
-    evidence per alert. Read-only -- it reports, it never records or applies. (Spend footer is
-    appended by the caller.)"""
+    or a clean all-clear, plus how many were withheld by mute/snooze. Each alert shows its title,
+    a one-line description (``why_it_matters``), and its fingerprint(s); ``verbose`` swaps the
+    one-liner for the full evidence (the declared->observed before/after, fix, per-symptom detail).
+    Read-only -- it reports, never records or applies. (Spend footer is appended by the caller.)"""
     if not alerts:
         if suppressed:
             return f"{name}: clean except {suppressed} muted/snoozed -- add `unmute` to show."
@@ -98,8 +99,14 @@ def _summarize(name: str, alerts: list[Alert], suppressed: int = 0, verbose: boo
         chips = " ".join(f"[{r.framework} {r.id}]" for r in a.references)
         head = f"  {a.severity.value.upper():<8} {a.title}"
         lines.append(f"{head}  {chips}" if chips else head)
+        # The description -- so a probe says WHAT is wrong, not just a title + fingerprints.
+        # `verbose` replaces it with the full evidence (which already leads with why_it_matters).
         if verbose:
             lines += _evidence(a)
+        elif a.why_it_matters:
+            lines.append(f"           {a.why_it_matters}")
+        if a.recommended_action and not verbose:  # the one-line fix, when there is one
+            lines.append(f"           fix: {a.recommended_action}")
         # The fingerprint(s) so the finding is actionable -- `mute <fp>` a benign one, and a
         # diagnosis Alert (drift + symptom) lists both, since suppressing it needs both muted.
         for fp in _fingerprints(a):
