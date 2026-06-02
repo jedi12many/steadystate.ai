@@ -31,6 +31,9 @@ def _inputs(tmp_path):
         "ansible": _sample(tmp_path, "ansible.json", {"plays": []}),
         "docker-compose": _sample(tmp_path, "compose.json", {"config": {"services": {}}, "ps": []}),
         "k8s": _sample(tmp_path, "k8s.json", {"declared": [], "observed": []}),
+        # k8s-live reads the cluster itself (no captured input); the path is ignored, and its
+        # collect_drift is a constant [] (declared == observed by construction), so no kubectl runs.
+        "k8s-live": _sample(tmp_path, "k8s-live.json", {}),
         "rancher": _sample(tmp_path, "gitrepo.json", {"status": {"resources": []}}),
         "helm": _sample(tmp_path, "helm.json", []),
     }

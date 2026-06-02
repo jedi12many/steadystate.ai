@@ -14,6 +14,7 @@ the listener catches it and replies with the message.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Protocol, runtime_checkable
 
 from .act import build_executor
 from .probe import Prober, auto_prober_for, build_prober
@@ -23,6 +24,15 @@ from .reason.pipeline import Pipeline, build_correlator
 from .reason.report import Report, Tuning
 from .sources import build_drift_source
 from .sources.base import StateSource
+
+
+@runtime_checkable
+class SupportsContext(Protocol):
+    """A source or prober that can be aimed at a named backend context -- today a kube context, so
+    one cluster = one target. ``build_report`` applies it to whichever of the source/prober opt in;
+    components that don't implement it (every non-k8s source) simply ignore ``--context``."""
+
+    def use_context(self, context: str) -> None: ...
 
 
 def build_prober_for(probe: str, source: str, path: Path) -> Prober | None:
@@ -46,10 +56,15 @@ def build_report(
     enrich: str = "none",
     no_llm: bool = False,
     label: str = "",
+    context: str = "",
     llm_gate: PromptGate | None = None,
 ) -> Report:
     """Build a reasoned Report: drift + (optional) probe symptoms, scored + correlated + enriched,
     every item stamped with ``label``. Pure -- no state store, no surfaces.
+
+    ``context`` (when set) aims the source + prober at a named backend context -- today a kube
+    context, so the live cluster-health source and the kubectl probe both read that one cluster; a
+    component that doesn't support it ignores it.
 
     ``llm_gate`` (opt-in) is consulted before any prompt is sent to the model -- the CLI passes a
     confirmer so a cautious operator can review/approve egress; headless callers leave it None.
@@ -62,6 +77,10 @@ def build_report(
     enricher = build_enricher(enrich)
     prober = build_prober_for(probe, source, path)
     src = build_drift_source(source, path)
+    if context:  # aim whichever of the source/prober support it at this backend context
+        for component in (src, prober):
+            if isinstance(component, SupportsContext):
+                component.use_context(context)
 
     drifts = src.collect_drift()
     # The declared inventory feeds the standing-policy pass (CIS/STIG) AND the probe. Only

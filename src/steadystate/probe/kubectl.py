@@ -122,6 +122,20 @@ class KubectlProbe:
     def __init__(self, log_tail: int = 20, timeout: float = 10.0) -> None:
         self.log_tail = log_tail
         self.timeout = timeout
+        self._context: str | None = None
+
+    def use_context(self, context: str) -> None:
+        """Aim every `kubectl` call at this kube context (a target = a cluster), so a fleet sweep
+        probes each cluster in turn. '' clears it (the ambient current-context). Driven by
+        `build_report(context=...)`; matches the live source's same-named seam."""
+        self._context = context or None
+
+    def _kubectl(self, *args: str) -> list[str]:
+        """A `kubectl` argv with `--context` appended when one is set."""
+        argv = ["kubectl", *args]
+        if self._context:
+            argv += ["--context", self._context]
+        return argv
 
     def probe(self, resources: list[Resource]) -> list[Symptom]:
         symptoms: list[Symptom] = []
@@ -153,7 +167,7 @@ class KubectlProbe:
         )
 
     def _get_pods(self, namespace: str) -> dict:
-        text = self._run_text(["kubectl", "get", "pods", "-n", namespace, "-o", "json"])
+        text = self._run_text(self._kubectl("get", "pods", "-n", namespace, "-o", "json"))
         if not text:
             return {}
         try:
@@ -165,10 +179,10 @@ class KubectlProbe:
     def _last_log_line(self, namespace: str, pod: str) -> str:
         tail = str(self.log_tail)
         text = self._run_text(
-            ["kubectl", "logs", pod, "-n", namespace, "--tail", tail, "--previous"]
+            self._kubectl("logs", pod, "-n", namespace, "--tail", tail, "--previous")
         )
         if not text:
-            text = self._run_text(["kubectl", "logs", pod, "-n", namespace, "--tail", tail])
+            text = self._run_text(self._kubectl("logs", pod, "-n", namespace, "--tail", tail))
         lines = [line for line in (text or "").splitlines() if line.strip()]
         return lines[-1][:200] if lines else ""
 

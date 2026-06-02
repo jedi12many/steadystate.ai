@@ -21,7 +21,7 @@ from .argocd import ArgoCDSource
 from .base import Capabilities, DriftSource
 from .docker_compose import DockerComposeSource
 from .helm import HelmSource
-from .k8s import KubernetesSource
+from .k8s import KubernetesLiveSource, KubernetesSource
 from .rancher import RancherSource
 from .terraform import TerraformSource
 
@@ -68,6 +68,12 @@ def _k8s(path: Path) -> DriftSource:
     return KubernetesSource(declared=snap.get("declared"), observed=snap.get("observed"))
 
 
+def _k8s_live(path: Path) -> DriftSource:
+    # PATHLESS: a live cluster health source -- it reads the cluster's own workloads via kubectl
+    # (aim it with --context). The path is ignored; the CLI supplies a placeholder.
+    return KubernetesLiveSource()
+
+
 # name -> factory(path) -> DriftSource. Indexed by the CLI's --source choice.
 # docker-compose has no native plan diff, so it reconciles declared services
 # (`docker compose config`) against running containers (`docker compose ps`).
@@ -77,9 +83,14 @@ _BUILTIN_SOURCES: dict[str, Callable[[Path], DriftSource]] = {
     "ansible": _ansible,
     "docker-compose": _docker_compose,
     "k8s": _k8s,
+    "k8s-live": _k8s_live,
     "rancher": _rancher,
     "helm": _helm,
 }
+
+# Sources that take NO path input -- they read live state themselves (a reachable cluster), so
+# `scan --source <name>` needs no positional path and no target. The CLI passes them a placeholder.
+PATHLESS_SOURCES: frozenset[str] = frozenset({"k8s-live"})
 
 # Per-plugin command manifests: observe (pre-approved, read-only) vs destructive (needs
 # approval). Keyed like the source registry -- adding a source means declaring its commands too.
@@ -89,6 +100,7 @@ _BUILTIN_CAPABILITIES: dict[str, Capabilities] = {
     "ansible": AnsibleSource.commands,
     "docker-compose": DockerComposeSource.commands,
     "k8s": KubernetesSource.commands,
+    "k8s-live": KubernetesLiveSource.commands,
     "rancher": RancherSource.commands,
     "helm": HelmSource.commands,
 }
@@ -121,7 +133,13 @@ def _build_capabilities(
 DRIFT_SOURCES: dict[str, Callable[[Path], DriftSource]] = _build_sources()
 CAPABILITIES: dict[str, Capabilities] = _build_capabilities(DRIFT_SOURCES)
 
-__all__ = ["CAPABILITIES", "DRIFT_SOURCES", "Capabilities", "build_drift_source"]
+__all__ = [
+    "CAPABILITIES",
+    "DRIFT_SOURCES",
+    "PATHLESS_SOURCES",
+    "Capabilities",
+    "build_drift_source",
+]
 
 
 def build_drift_source(source: str, path: Path) -> DriftSource:

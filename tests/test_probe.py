@@ -189,6 +189,36 @@ def test_probe_degrades_when_kubectl_unavailable(monkeypatch):
     assert KubectlProbe().probe([_resource()]) == []  # no cluster -> no symptoms, no raise
 
 
+def test_probe_threads_context_into_every_kubectl_call(monkeypatch):
+    calls: list[list[str]] = []
+
+    class _Result:
+        stdout = '{"items": []}'
+
+    monkeypatch.setattr(
+        "steadystate.probe.kubectl.subprocess.run",
+        lambda argv, **kw: calls.append(argv) or _Result(),
+    )
+    prober = KubectlProbe()
+    prober.use_context("prod-cluster")
+    prober.probe([_resource()])  # a kubernetes resource -> one `kubectl get pods`
+    assert calls and all(c[-2:] == ["--context", "prod-cluster"] for c in calls)
+
+
+def test_probe_without_context_omits_the_flag(monkeypatch):
+    calls: list[list[str]] = []
+
+    class _Result:
+        stdout = '{"items": []}'
+
+    monkeypatch.setattr(
+        "steadystate.probe.kubectl.subprocess.run",
+        lambda argv, **kw: calls.append(argv) or _Result(),
+    )
+    KubectlProbe().probe([_resource()])
+    assert calls and all("--context" not in c for c in calls)
+
+
 # -- the registry ---------------------------------------------------------------
 
 

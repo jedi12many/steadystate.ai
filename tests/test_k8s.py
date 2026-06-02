@@ -1,6 +1,7 @@
 from steadystate.model import ChangeType
-from steadystate.sources.base import ObservedSource, StateSource
+from steadystate.sources.base import DriftSource, ObservedSource, StateSource
 from steadystate.sources.k8s import (
+    KubernetesLiveSource,
     KubernetesSource,
     observed_resources_from_kubectl,
     reconcile_k8s,
@@ -201,3 +202,49 @@ def test_source_requires_observed_or_get_args():
         pass
     else:
         raise AssertionError("expected ValueError without observed or get_args")
+
+
+# -- the live cluster-health source (k8s-live) ------------------------------------------------
+
+
+def test_live_source_emits_workloads_as_zero_drift():
+    # declared == observed by construction -> no drift; the signal is health (the probe), not drift.
+    src = KubernetesLiveSource(observed={"kind": "List", "items": [_deployment("nginx:1.27")]})
+    assert isinstance(src, DriftSource) and isinstance(src, StateSource)
+    assert src.collect_drift() == []
+    resources = src.collect_declared()
+    assert [r.identity for r in resources] == ["apps/Deployment/prod/web"]
+    # provenance must be "kubernetes" so the kubectl probe (which filters on it) checks them.
+    assert resources[0].provenance.source == "kubernetes"
+
+
+def test_live_source_threads_context_into_kubectl(monkeypatch):
+    seen = {}
+
+    def fake_run_tool(argv, **kwargs):
+        seen["argv"] = argv
+        return '{"items": []}'
+
+    monkeypatch.setattr("steadystate.sources.k8s.run_tool", fake_run_tool)
+    src = KubernetesLiveSource()  # no injected observed -> reads live
+    src.use_context("prod-cluster")
+    src.collect_declared()
+    assert seen["argv"][:2] == ["kubectl", "get"]
+    assert "--all-namespaces" in seen["argv"]
+    assert seen["argv"][-2:] == ["--context", "prod-cluster"]
+
+
+def test_live_source_no_context_omits_the_flag(monkeypatch):
+    seen = {}
+
+    def fake_run_tool(argv, **kwargs):
+        seen["argv"] = argv
+        return '{"kind": "List", "items": []}'
+
+    monkeypatch.setattr("steadystate.sources.k8s.run_tool", fake_run_tool)
+    KubernetesLiveSource().collect_declared()  # ambient current-context
+    assert "--context" not in seen["argv"]
+
+
+def test_live_source_is_observe_only():
+    assert KubernetesLiveSource.commands.destructive == ()
