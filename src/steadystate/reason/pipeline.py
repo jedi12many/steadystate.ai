@@ -30,6 +30,20 @@ if TYPE_CHECKING:  # observe.base imports Severity from .alert; guard to avoid t
 
 _SEVERITY_RANK = {Severity.LOW: 0, Severity.MEDIUM: 1, Severity.HIGH: 2, Severity.CRITICAL: 3}
 
+
+def _workload_name(identity: str) -> str:
+    """The bare workload/resource name -- the last `/`- or `.`-segment
+    (``prod-cluster/apps/Deployment/team-a/squid`` -> ``squid``). Pure."""
+    return identity.rsplit("/", 1)[-1].rsplit(".", 1)[-1]
+
+
+def _place(identity: str) -> str:
+    """The namespace a workload lives in -- the second-to-last `/`-segment -- for naming where a
+    grouped symptom occurs (``.../team-a/squid`` -> ``team-a``), else the identity. Pure."""
+    parts = identity.split("/")
+    return parts[-2] if len(parts) >= 2 else identity
+
+
 # An Event awaiting correlation: the drift, its deterministic score, the domain that
 # raised it (if any), and that domain's framework references for the drift (if any).
 _Event = tuple[Drift, Severity, "str | None", "list[Reference]"]
@@ -248,6 +262,51 @@ class Pipeline:
             )
         return standalone
 
+    def _group_symptoms(self, symptom_alerts: list[Alert]) -> list[Alert]:
+        """Fold standalone symptom Alerts that share ``(kind, workload name, category)`` into ONE
+        Alert -- the same app failing the same way across namespaces (or the landscape) is one issue
+        to handle, not N. Each instance's Symptom rides along (so memory/mute still track per
+        instance and you can see which recovered); the merged Alert names how many and where.
+        Mechanical, like the deterministic correlator -- it groups by a shared attribute, it doesn't
+        claim a reasoned root cause. Order-stable (first-seen group order)."""
+        groups: dict[tuple[str, str, str], list[Alert]] = {}
+        order: list[tuple[str, str, str]] = []
+        for alert in symptom_alerts:
+            symptom = alert.symptoms[0]
+            key = (symptom.kind, _workload_name(symptom.identity), symptom.category)
+            if key not in groups:
+                groups[key] = []
+                order.append(key)
+            groups[key].append(alert)
+        out: list[Alert] = []
+        for key in order:
+            members = groups[key]
+            out.append(members[0] if len(members) == 1 else self._merge_symptoms(key, members))
+        return out
+
+    def _merge_symptoms(self, key: tuple[str, str, str], members: list[Alert]) -> Alert:
+        """One Alert for a group of same-(kind, name, category) symptom Alerts across places."""
+        kind, name, category = key
+        symptoms = [m.symptoms[0] for m in members]
+        severity = max((s.severity for s in symptoms), key=lambda sv: _SEVERITY_RANK[sv])
+        places = sorted({_place(s.identity) for s in symptoms})
+        shown = ", ".join(places[:8]) + (f" (+{len(places) - 8} more)" if len(places) > 8 else "")
+        return Alert(
+            title=f"{name} is {category} in {len(places)} place(s)",
+            severity=severity,
+            drifts=[],
+            why_it_matters=(
+                f"{len(symptoms)} instances of {kind} {name} are {category} across: {shown}. "
+                "Likely one root cause (e.g. a shared image/config) -- grouped mechanically by "
+                "name + symptom, so handle it once."
+            ),
+            layer=Layer.ALERT,
+            recommended_action=None,
+            llm_backed=False,
+            flagged_by=symptoms[0].provenance.source,
+            symptoms=symptoms,
+        )
+
     def run(
         self,
         drifts: list[Drift],
@@ -290,6 +349,9 @@ class Pipeline:
             alert = self._alert_from_symptom(symptom, layer)
             (signals if below_bar else symptom_alerts).append(alert)
         standalone_symptoms = self._diagnose(drift_alerts, symptom_alerts)
+        # The same workload failing the same way across namespaces folds into one Alert -- so a bad
+        # image crashlooping every team's `squid` is one issue to handle, not one per namespace.
+        standalone_symptoms = self._group_symptoms(standalone_symptoms)
 
         return Report(
             items=signals + drift_alerts + policy_alerts + standalone_symptoms,
