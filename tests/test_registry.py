@@ -34,6 +34,9 @@ def _inputs(tmp_path):
         # k8s-live reads the cluster itself (no captured input); the path is ignored, and its
         # collect_drift is a constant [] (declared == observed by construction), so no kubectl runs.
         "k8s-live": _sample(tmp_path, "k8s-live.json", {}),
+        # k8s-baseline likewise ignores the path; with no captured baseline its collect_drift is []
+        # (nothing to diff yet), so no kubectl runs here either.
+        "k8s-baseline": _sample(tmp_path, "k8s-baseline.json", {}),
         "rancher": _sample(tmp_path, "gitrepo.json", {"status": {"resources": []}}),
         "helm": _sample(tmp_path, "helm.json", []),
     }

@@ -23,9 +23,12 @@ reconcile on presence alone, so neither shows as false drift.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from ..model import Drift, Provenance, Resource
 from ..reconcile import reconcile
-from .base import Capabilities, loads_json, run_tool
+from .base import Capabilities, SourceError, loads_json, run_tool
 
 # Workload kinds whose containers live under spec.template.spec; a bare Pod keeps
 # them under spec directly.
@@ -296,6 +299,7 @@ class KubernetesLiveSource:
         self._observed = observed  # injectable for tests; else read live
         self._context: str | None = None
         self.timeout = timeout
+        self._cache: list[Resource] | None = None  # one live read per scan, reused
 
     def use_context(self, context: str) -> None:
         """Aim every kubectl read at this kube context (a target = a cluster). '' clears it (the
@@ -320,8 +324,10 @@ class KubernetesLiveSource:
         )
 
     def _workloads(self) -> list[Resource]:
-        doc = self._observed if self._observed is not None else self._run_kubectl()
-        return [self._qualify(r) for r in observed_resources_from_kubectl(doc)]
+        if self._cache is None:
+            doc = self._observed if self._observed is not None else self._run_kubectl()
+            self._cache = [self._qualify(r) for r in observed_resources_from_kubectl(doc)]
+        return self._cache
 
     def collect_declared(self) -> list[Resource]:
         return self._workloads()
@@ -340,3 +346,96 @@ class KubernetesLiveSource:
             argv += ["--context", self._context]
         stdout = run_tool(argv, timeout=self.timeout, tool="kubectl get")
         return loads_json(stdout, tool="kubectl get")
+
+
+# -- baseline drift: reconcile the live cluster against a captured "known-good" snapshot --------
+#
+# k8s-live answers "is anything on fire?" but reports zero *drift* (no declared side). A captured
+# baseline IS that declared side for a cluster you have no manifests for: snapshot the workloads
+# once with `steadystate baseline`, and later scans reconcile live-vs-baseline -> a workload that
+# appeared/vanished or whose image changed since the baseline shows as drift. Compared on presence
+# + container images only (replicas are dropped -- HPA churns them, so they'd be noise).
+
+_BASELINE_DIR = ".steadystate"
+
+
+def _slug(context: str) -> str:
+    """A filename-safe form of a kube context (`gke_proj_zone_prod`, an EKS ARN, ...)."""
+    out = "".join(ch if ch.isalnum() else "-" for ch in context.lower())
+    while "--" in out:
+        out = out.replace("--", "-")
+    return out.strip("-") or "default"
+
+
+def baseline_path(context: str) -> Path:
+    """Where a cluster's baseline snapshot lives -- one file per context under ``.steadystate/``,
+    alongside the state db. Pure."""
+    return Path(_BASELINE_DIR) / f"baseline-{_slug(context)}.json"
+
+
+def capture_baseline(context: str, *, timeout: float = 30.0) -> tuple[Path, int]:
+    """Snapshot the cluster's current workloads (the live `kubectl get deploy,sts,ds -A`) to the
+    baseline file for ``context`` -- the "known-good" later scans diff against. Returns the path
+    written and the workload count. Refreshing is just re-running this. I/O."""
+    src = KubernetesLiveSource(timeout=timeout)
+    src.use_context(context)
+    doc = src._run_kubectl()  # the raw List of workloads
+    path = baseline_path(context)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(doc, indent=2), encoding="utf-8")
+    items = doc.get("items") if isinstance(doc, dict) else None
+    return path, len(items or [])
+
+
+def _images_only(resource: Resource) -> Resource:
+    """Drop everything but container images from a resource's properties, so baseline drift compares
+    on presence + images and not on replicas (HPA churn) or the declared-only security posture."""
+    props = {k: v for k, v in resource.properties.items() if k == "images"}
+    return Resource(
+        kind=resource.kind,
+        identity=resource.identity,
+        provenance=resource.provenance,
+        properties=props,
+    )
+
+
+class KubernetesBaselineSource(KubernetesLiveSource):
+    """Config drift for a cluster you have no manifests for: reconcile the **live** workloads
+    against a **captured baseline** (the declared side). A workload added/removed since the
+    baseline, or one whose image changed, shows as drift. Inherits the live read + the kubectl
+    health probe from `k8s-live`, so one scan gives **both** config drift (vs baseline) and health
+    (fires). With no baseline captured yet it reports no drift (health still works) -- capture one
+    with `steadystate baseline <target>`. Observe-only.
+    """
+
+    name = "k8s-baseline"
+
+    def __init__(
+        self, baseline: object | None = None, observed: object | None = None, timeout: float = 30.0
+    ) -> None:
+        super().__init__(observed=observed, timeout=timeout)
+        self._baseline = baseline  # injectable for tests; else loaded from the baseline file
+
+    def _load_baseline(self) -> object | None:
+        """The captured baseline doc for this context, or None when none has been captured yet (a
+        baseline target with no snapshot simply reports no drift -- health still works). A baseline
+        file that's present but corrupt is a loud `SourceError`, never a silent empty diff."""
+        if self._baseline is not None:
+            return self._baseline
+        path = baseline_path(self._context or "")
+        if not path.exists():
+            return None
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise SourceError(f"baseline {path} is unreadable: {exc}") from exc
+
+    def collect_drift(self) -> list[Drift]:
+        baseline_doc = self._load_baseline()
+        if baseline_doc is None:  # no baseline captured -> nothing to diff against yet
+            return []
+        # declared = the captured baseline (qualified like the live side so identities align and the
+        # store stays cluster-distinct); observed = live. Images + presence only (replicas dropped).
+        declared = [_images_only(self._qualify(r)) for r in resources_from_manifests(baseline_doc)]
+        observed = [_images_only(r) for r in self._workloads()]  # _workloads already qualifies
+        return reconcile_k8s(declared, observed)

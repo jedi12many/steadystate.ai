@@ -49,6 +49,7 @@ from .reason.pipeline import CORRELATORS
 from .reconcile_state import reconcile
 from .sources import CAPABILITIES, DRIFT_SOURCES, PATHLESS_SOURCES, build_drift_source
 from .sources.base import SourceError
+from .sources.k8s import capture_baseline
 from .state import PendingAction, StateStore
 from .sweep import render_sweep, sweep_targets
 from .targets import (
@@ -751,6 +752,32 @@ def sweep(
         typer.echo(line)
     for surface in surfaces:  # push the union of the fleet's alerts outward (each cluster-labeled)
         surface.emit(result.report)
+
+
+@app.command()
+def baseline(
+    target: str = typer.Argument(
+        ..., help="A named target whose cluster (context) to snapshot as the known-good baseline."
+    ),
+) -> None:
+    """Capture a cluster's current workloads as a known-good **baseline** (under .steadystate/).
+
+    For a cluster you have no manifests for, the baseline is the *declared* side: once captured, a
+    `k8s-baseline` target reports config drift against it -- a workload added/removed, or an image
+    changed, since the snapshot. Resolves the cluster from the target's `context`; refresh anytime
+    by re-running. Compared on presence + images (replicas are ignored, so HPA isn't noise)."""
+    tgt = _resolve_target(target)
+    if not tgt.context:
+        raise typer.BadParameter(
+            f"target '{target}' has no context -- baseline needs a live cluster target (k8s-live "
+            "/ k8s-baseline)."
+        )
+    try:
+        path, count = capture_baseline(tgt.context)
+    except SourceError as exc:
+        typer.secho(f"baseline failed: {exc}", fg="red", err=True)
+        raise typer.Exit(1) from None
+    typer.echo(f"baseline captured: {count} workload(s) for context '{tgt.context}' -> {path}")
 
 
 @app.command()

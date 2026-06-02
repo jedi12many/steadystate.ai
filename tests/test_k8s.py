@@ -1,3 +1,5 @@
+import json
+
 from steadystate.model import ChangeType
 from steadystate.sources.base import DriftSource, ObservedSource, StateSource
 from steadystate.sources.k8s import (
@@ -267,3 +269,128 @@ def test_live_source_sanitizes_slashes_in_context():
     src.use_context("arn:aws:eks:us-east-1:1:cluster/prod")
     [r] = src.collect_declared()
     assert r.identity == "arn:aws:eks:us-east-1:1:cluster_prod/apps/Deployment/prod/web"
+
+
+# -- the baseline source (k8s-baseline): config drift vs a captured snapshot -------------------
+
+
+def test_baseline_no_baseline_yields_no_drift():
+    from steadystate.sources.k8s import KubernetesBaselineSource
+
+    # No baseline captured -> nothing to diff against yet (health still works via the probe).
+    src = KubernetesBaselineSource(observed={"kind": "List", "items": [_deployment("nginx:1")]})
+    assert src.collect_drift() == []
+
+
+def test_baseline_reports_image_change_as_drift():
+    from steadystate.sources.k8s import KubernetesBaselineSource
+
+    baseline = {"kind": "List", "items": [_deployment("nginx:1.27")]}
+    live = {"kind": "List", "items": [_deployment("nginx:1.28")]}  # image bumped since the baseline
+    src = KubernetesBaselineSource(baseline=baseline, observed=live)
+    [drift] = src.collect_drift()
+    assert drift.change_type == ChangeType.MODIFIED
+    assert drift.identity == "apps/Deployment/prod/web"
+
+
+def test_baseline_ignores_replicas_to_avoid_hpa_noise():
+    from steadystate.sources.k8s import KubernetesBaselineSource
+
+    # Same image, only replicas differ (HPA churn) -> NOT drift (compared on presence + images).
+    baseline = {"kind": "List", "items": [_deployment("nginx:1.27", replicas=3)]}
+    live = {"kind": "List", "items": [_deployment("nginx:1.27", replicas=9)]}
+    assert KubernetesBaselineSource(baseline=baseline, observed=live).collect_drift() == []
+
+
+def test_baseline_new_and_removed_workloads():
+    from steadystate.sources.k8s import KubernetesBaselineSource
+
+    baseline = {"kind": "List", "items": [_deployment("nginx:1", name="web")]}
+    live = {"kind": "List", "items": [_deployment("nginx:1", name="api")]}  # web gone, api appeared
+    changes = {
+        d.change_type
+        for d in KubernetesBaselineSource(baseline=baseline, observed=live).collect_drift()
+    }
+    assert ChangeType.ADDED in changes and ChangeType.REMOVED in changes
+
+
+def test_baseline_qualifies_drift_identity_with_context():
+    from steadystate.sources.k8s import KubernetesBaselineSource
+
+    src = KubernetesBaselineSource(
+        baseline={"kind": "List", "items": [_deployment("nginx:1.27")]},
+        observed={"kind": "List", "items": [_deployment("nginx:1.28")]},
+    )
+    src.use_context("prod-cluster")
+    [drift] = src.collect_drift()
+    assert (
+        drift.identity == "prod-cluster/apps/Deployment/prod/web"
+    )  # cluster-distinct in the store
+
+
+def test_capture_baseline_writes_the_snapshot(tmp_path, monkeypatch):
+    from steadystate.sources import k8s as k8smod
+
+    monkeypatch.chdir(tmp_path)
+    workloads = {
+        "kind": "List",
+        "items": [_deployment("nginx:1"), _deployment("redis:7", name="cache")],
+    }
+    monkeypatch.setattr(k8smod, "run_tool", lambda argv, **kw: json.dumps(workloads))
+    path, count = k8smod.capture_baseline("prod-cluster")
+    assert count == 2
+    assert path == k8smod.baseline_path("prod-cluster")
+    assert path.exists() and json.loads(path.read_text())["items"]
+
+
+def test_baseline_corrupt_file_is_a_loud_error(tmp_path, monkeypatch):
+    import pytest
+
+    from steadystate.sources.base import SourceError
+    from steadystate.sources.k8s import KubernetesBaselineSource, baseline_path
+
+    monkeypatch.chdir(tmp_path)
+    src = KubernetesBaselineSource()
+    src.use_context("prod")
+    p = baseline_path("prod")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("{ not json")
+    with pytest.raises(SourceError, match="unreadable"):
+        src.collect_drift()
+
+
+def test_cli_baseline_captures_for_a_targets_context(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from steadystate.cli import app
+    from steadystate.sources import k8s as k8smod
+    from steadystate.targets import TARGETS_ENV
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "t.json").write_text(
+        json.dumps({"prod": {"source": "k8s-live", "context": "prod-cluster"}})
+    )
+    monkeypatch.setenv(TARGETS_ENV, str(tmp_path / "t.json"))
+    monkeypatch.setattr(
+        k8smod,
+        "run_tool",
+        lambda argv, **kw: json.dumps({"kind": "List", "items": [_deployment("nginx:1")]}),
+    )
+    result = CliRunner().invoke(app, ["baseline", "prod"])
+    assert result.exit_code == 0, result.output
+    assert "baseline captured: 1 workload" in result.output
+    assert k8smod.baseline_path("prod-cluster").exists()
+
+
+def test_cli_baseline_rejects_a_target_without_a_context(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from steadystate.cli import app
+    from steadystate.targets import TARGETS_ENV
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "t.json").write_text(json.dumps({"demo": {"source": "k8s", "path": "snap.json"}}))
+    monkeypatch.setenv(TARGETS_ENV, str(tmp_path / "t.json"))
+    result = CliRunner().invoke(app, ["baseline", "demo"], env={"COLUMNS": "200", "NO_COLOR": "1"})
+    assert result.exit_code != 0
+    assert "no context" in result.output

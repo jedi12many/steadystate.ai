@@ -57,6 +57,7 @@ PROBE_CAPABILITIES: dict[str, Capabilities] = {
 _AUTO: dict[str, str] = {
     "k8s": "kubectl",
     "k8s-live": "kubectl",  # the live cluster-health source relies on the kubectl probe for fires
+    "k8s-baseline": "kubectl",  # a baseline scan gives config drift + health in one pass
     "docker-compose": "docker",
     "argocd": "argocd",
 }
