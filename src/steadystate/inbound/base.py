@@ -46,8 +46,8 @@ COMMANDS: dict[str, tuple[str, str]] = {
     PENDING: ("pending", "show remediations awaiting approval, with their fingerprints"),
     PROBE: (
         "probe <target>|all [verbose|cost|unmute]",
-        "scan a target now -- or `probe all` to sweep every target (the fleet); `verbose` shows "
-        "the evidence, `unmute` shows muted",
+        "scan a target now to refresh its state -- or `probe all` for the whole fleet; aliases "
+        "`scan`/`refresh` (bare = the fleet); `verbose` shows evidence, `unmute` shows muted",
     ),
     COST: ("cost [day|week]", "show LLM spend -- a rollup, or a day/week trend"),
     FINDINGS: ("findings", "list remembered findings: fingerprint, status, severity"),
@@ -61,6 +61,11 @@ COMMANDS: dict[str, tuple[str, str]] = {
 _NEEDS_ARGUMENT = frozenset({APPROVE, DECLINE, PROBE, MUTE})
 # Verbs that take an *optional* argument (cost's period); absent it, they still dispatch.
 _OPTIONAL_ARGUMENT = frozenset({COST})
+
+# Muscle-memory synonyms for `probe` -- re-running a probe is what "refresh / capture state" means
+# (re-read live state and record the findings). Bare (no target) refreshes the whole fleet, so
+# `refresh` alone == `probe all`; with a target, `refresh <t>` == `probe <t>`.
+_VERB_ALIASES = {"scan": PROBE, "refresh": PROBE}
 
 # Recognized modifier flags (with or without dashes) -> the canonical name a command checks for.
 # `verbose` = show the full evidence; `cost` = the per-caller spend breakdown; `unmute` = probe
@@ -97,21 +102,27 @@ def render_help() -> str:
 
 def command_from_text(text: str, actor: str) -> Command | None:
     """Parse a free-text instruction (a Teams @mention or a Slack slash command) into a Command,
-    or None if no known verb appears. Scans tokens for the first verb, then splits the rest into
-    recognized flags (verbose / cost / unmute) and plain tokens; the first plain token is the
-    argument. A verb that *requires* an argument is skipped when none follows."""
+    or None if no known verb appears. Scans tokens for the first verb (resolving a synonym like
+    ``scan``/``refresh`` to its canonical verb), then splits the rest into recognized flags
+    (verbose / cost / unmute) and plain tokens; the first plain token is the argument. A verb that
+    *requires* an argument is skipped when none follows -- except a bare probe-synonym, which means
+    the whole fleet (``refresh`` == ``probe all``)."""
     tokens = text.split()
     for index, token in enumerate(tokens):
-        verb = token.lower()
+        low = token.lower()
+        is_alias = low in _VERB_ALIASES
+        verb = _VERB_ALIASES.get(low, low)
         if verb not in COMMANDS:
             continue
         rest = tokens[index + 1 :]
         flags = frozenset(_FLAG_ALIASES[t.lower()] for t in rest if t.lower() in _FLAG_ALIASES)
         args = [t for t in rest if t.lower() not in _FLAG_ALIASES]
         if verb in _NEEDS_ARGUMENT:
-            if not args:  # required argument absent -> not actionable; keep scanning
-                continue
-            return Command(verb, actor, args[0], flags=flags)
+            if args:
+                return Command(verb, actor, args[0], flags=flags)
+            if is_alias:  # bare `scan`/`refresh` -> refresh the whole fleet (probe all)
+                return Command(verb, actor, "all", flags=flags)
+            continue  # a required argument is absent (e.g. bare `probe`) -> not actionable
         argument = args[0] if (verb in _OPTIONAL_ARGUMENT and args) else ""
         return Command(verb, actor, argument, flags=flags)
     return None

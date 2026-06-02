@@ -114,6 +114,21 @@ def test_text_grammar_parses_probe_flags():
     )
 
 
+def test_scan_and_refresh_are_probe_synonyms():
+    # muscle-memory: `scan`/`refresh <target>` == `probe <target>` (re-run to refresh state).
+    assert command_from_text("refresh prod", "amy") == Command(PROBE, "amy", "prod")
+    assert command_from_text("scan prod", "amy") == Command(PROBE, "amy", "prod")
+    # bare `refresh`/`scan` (no target) refreshes the whole fleet -> `probe all`.
+    assert command_from_text("refresh", "amy") == Command(PROBE, "amy", "all")
+    assert command_from_text("scan", "amy") == Command(PROBE, "amy", "all")
+    # flags still parse through the alias.
+    assert command_from_text("refresh prod verbose", "amy") == Command(
+        PROBE, "amy", "prod", flags=frozenset({"verbose"})
+    )
+    # bare `probe` still needs a target (unchanged) -- only the synonyms default to the fleet.
+    assert command_from_text("probe", "amy") is None
+
+
 def test_text_grammar_is_case_insensitive_and_skips_leading_noise():
     assert command_from_text("hey  PENDING please", "amy") == Command(PENDING, "amy")
 
