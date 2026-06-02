@@ -36,7 +36,7 @@ from .discover import (
 from .discover import render as render_discovery
 from .engine import build_report
 from .inbound import INBOUND, build_inbound
-from .inbound.base import PROBE, Command, command_from_text
+from .inbound.base import PROBE, Command, command_from_text, tool_schema
 from .inbound.server import run_command, serve
 from .notify import SURFACES, build_surfaces
 from .notify.base import Surface
@@ -1008,6 +1008,17 @@ def probe(
         if on
     )
     typer.echo(run_command(Command(PROBE, _local_actor(), target, flags=flags), str(state)))
+
+
+@app.command()
+def tools() -> None:
+    """Emit steadystate's chat verbs as a JSON tool/function-call schema (to stdout).
+
+    For wiring an LLM agent -- e.g. a Microsoft Teams Copilot -- to *drive* steadystate: each tool
+    carries its args, its `effect` (read-only / state-write / guardrailed-write / external-send --
+    the guardrail the agent must respect), and (for `probe`) its flags. Built from the same command
+    table `help`/`chat` use, so it never drifts from what the listener actually dispatches."""
+    typer.echo(json.dumps(tool_schema(), indent=2))
 
 
 _STATUS_STYLE = {

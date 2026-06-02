@@ -128,6 +128,64 @@ def render_help() -> str:
     return "\n".join(lines)
 
 
+# The positional argument(s) each verb takes, for the machine tool schema -- (name, required).
+# A two-arg verb (send) lists both; a verb with an optional arg marks it not-required.
+_TOOL_ARGS: dict[str, tuple[tuple[str, bool], ...]] = {
+    HELP: (),
+    TARGETS: (),
+    PENDING: (),
+    PROBE: (("target", True),),  # a target name, or "all" for the fleet
+    COST: (("period", False),),  # day | week, optional
+    FINDINGS: (),
+    SHOW: (("fingerprint", True),),
+    HISTORY: (),
+    SURFACES_LIST: (),
+    SEND: (("fingerprint", True), ("surface", True)),
+    MUTE: (("fingerprint", True),),
+    APPROVE: (("fingerprint", True),),
+    DECLINE: (("fingerprint", True),),
+}
+# Each verb's effect on the world -- the guardrail an agent (a Teams Copilot) must respect:
+# read-only (no change), state-write (mutes/dismissals -- reversible, no infra), guardrailed-write
+# (approve -> applies a remediation through the executor guardrails), external-send (push outward).
+_TOOL_EFFECT: dict[str, str] = {
+    HELP: "read-only",
+    TARGETS: "read-only",
+    PENDING: "read-only",
+    PROBE: "read-only",  # scans + records findings, never acts on infra
+    COST: "read-only",
+    FINDINGS: "read-only",
+    SHOW: "read-only",
+    HISTORY: "read-only",
+    SURFACES_LIST: "read-only",
+    SEND: "external-send",  # emits a finding to an external alert surface
+    MUTE: "state-write",
+    APPROVE: "guardrailed-write",  # applies a pending remediation (executor-guardrailed)
+    DECLINE: "state-write",
+}
+
+
+def tool_schema() -> dict:
+    """steadystate's chat verbs as a machine tool/function-call schema -- so an LLM agent (e.g. a
+    Teams Copilot) can register them as tools and *drive* steadystate, not just read its output.
+    Built from the same ``COMMANDS`` table ``help`` renders, so the schema can never drift from
+    what the listener dispatches; each tool carries its args, its ``effect`` (the guardrail the
+    agent must respect), and -- for ``probe`` -- its modifier flags. Pure."""
+    tools = []
+    for verb, (usage, summary) in COMMANDS.items():
+        tool: dict = {
+            "name": verb,
+            "summary": summary,
+            "usage": usage,
+            "args": [{"name": name, "required": req} for name, req in _TOOL_ARGS[verb]],
+            "effect": _TOOL_EFFECT[verb],
+        }
+        if verb == PROBE:  # the only verb with modifier flags today
+            tool["flags"] = sorted(set(_FLAG_ALIASES.values()))
+        tools.append(tool)
+    return {"version": 1, "tools": tools}
+
+
 def command_from_text(text: str, actor: str) -> Command | None:
     """Parse a free-text instruction (a Teams @mention or a Slack slash command) into a Command,
     or None if no known verb appears. Scans tokens for the first verb (resolving a synonym like

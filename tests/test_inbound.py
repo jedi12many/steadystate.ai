@@ -167,6 +167,28 @@ def test_render_help_documents_probe_all_sweep():
     assert "probe all" in render_help() or "all" in render_help()
 
 
+def test_tool_schema_covers_every_command_with_args_and_effects():
+    from steadystate.inbound.base import COMMANDS, tool_schema
+
+    schema = tool_schema()
+    by = {t["name"]: t for t in schema["tools"]}
+    assert set(by) == set(COMMANDS)  # the schema can never drift from the dispatch table
+    # the guardrail vocabulary an agent must respect, with the verbs in the right buckets.
+    assert by["approve"]["effect"] == "guardrailed-write"
+    assert by["send"]["effect"] == "external-send"
+    assert by["show"]["effect"] == "read-only" and by["probe"]["effect"] == "read-only"
+    assert {t["effect"] for t in schema["tools"]} <= {
+        "read-only",
+        "state-write",
+        "guardrailed-write",
+        "external-send",
+    }
+    # args + flags are exposed so a tool-calling agent knows how to invoke each verb.
+    assert [a["name"] for a in by["send"]["args"]] == ["fingerprint", "surface"]
+    assert by["cost"]["args"] == [{"name": "period", "required": False}]  # optional arg marked
+    assert "deep" in by["probe"]["flags"]
+
+
 # -- Slack payload parsing (buttons + slash) ------------------------------------
 
 
