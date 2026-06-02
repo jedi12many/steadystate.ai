@@ -20,6 +20,23 @@ from .reason.report import Report
 
 if TYPE_CHECKING:
     from .reconcile_state import ResolvedFinding
+    from .state import Finding
+
+
+def finding_to_dict(finding: Finding) -> dict:
+    """One *stored* finding as a JSON-ready dict -- for `show <fp> json` / `findings json`, the
+    agent's read-back of remembered findings. The durable record: fingerprint, title, lifecycle
+    status, last severity, first/last-seen timestamps, and the captured `evidence` (namespace,
+    cluster, last log, ...). Pure."""
+    return {
+        "fingerprint": finding.fingerprint,
+        "title": finding.last_title,
+        "status": finding.status,
+        "severity": finding.last_severity,
+        "first_seen": finding.first_seen,
+        "last_seen": finding.last_seen,
+        "evidence": finding.details,
+    }
 
 
 def _member_fingerprints(alert: Alert) -> list[str]:
