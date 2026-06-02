@@ -67,7 +67,8 @@ def test_from_env_falls_back_to_the_default_file(monkeypatch, tmp_path):
     # No env var, but a `discover --create` registry in the cwd -> the chat REPL picks it up.
     monkeypatch.delenv(TARGETS_ENV, raising=False)
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "steadystate.targets.json").write_text(
+    (tmp_path / ".steadystate").mkdir(exist_ok=True)
+    (tmp_path / ".steadystate/targets.json").write_text(
         json.dumps({"prod": {"source": "k8s-live", "context": "prod"}})
     )
     assert "prod" in load_targets_from_env()
@@ -83,7 +84,8 @@ def test_from_env_ignores_an_unrelated_targets_json(monkeypatch, tmp_path):
 
 def test_env_var_wins_over_the_default_file(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "steadystate.targets.json").write_text(
+    (tmp_path / ".steadystate").mkdir(exist_ok=True)
+    (tmp_path / ".steadystate/targets.json").write_text(
         json.dumps({"default": {"source": "k8s", "path": "/d"}})
     )
     explicit = tmp_path / "explicit.targets.json"
@@ -151,7 +153,8 @@ def _targets_dir(tmp_path):
     tool-free scan: empty declared/observed -> no drift)."""
     snap = tmp_path / "snap.json"
     snap.write_text(json.dumps({"declared": [], "observed": []}))
-    (tmp_path / "steadystate.targets.json").write_text(
+    (tmp_path / ".steadystate").mkdir(exist_ok=True)
+    (tmp_path / ".steadystate/targets.json").write_text(
         json.dumps({"demo": {"source": "k8s", "path": str(snap)}})
     )
     return tmp_path
@@ -216,7 +219,8 @@ def test_targets_check_ok(monkeypatch, tmp_path):
 
 
 def test_targets_check_flags_missing_path(monkeypatch, tmp_path):
-    (tmp_path / "steadystate.targets.json").write_text(
+    (tmp_path / ".steadystate").mkdir(exist_ok=True)
+    (tmp_path / ".steadystate/targets.json").write_text(
         json.dumps({"bad": {"source": "k8s", "path": str(tmp_path / "gone.json")}})
     )
     result = _run(monkeypatch, tmp_path, ["targets", "--check"])
@@ -234,7 +238,8 @@ def test_targets_no_file(monkeypatch, tmp_path):
 
 
 def _live_targets_dir(tmp_path):
-    (tmp_path / "steadystate.targets.json").write_text(
+    (tmp_path / ".steadystate").mkdir(exist_ok=True)
+    (tmp_path / ".steadystate/targets.json").write_text(
         json.dumps({"prod": {"source": "k8s-live", "context": "prod-cluster"}})
     )
     return tmp_path

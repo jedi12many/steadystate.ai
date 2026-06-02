@@ -46,7 +46,7 @@ steadystate discover --deep
 #    job, and a chat-summoned `@steadystate probe <name>` all resolve it without hand-writing
 #    JSON. Named after the directory; suffixed per source when several are found. Merges, never
 #    clobbers. `steadystate targets [--check]` lists and validates the registry.
-steadystate discover --create        # writes ./steadystate.targets.json (or $STEADYSTATE_TARGETS)
+steadystate discover --create        # writes .steadystate/targets.json (or $STEADYSTATE_TARGETS)
 
 # 4. Scan — by target name (source/path/label/probe come from the registry) ...
 steadystate scan --target your-infra
