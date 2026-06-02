@@ -13,13 +13,15 @@ the scenarios reference them and add the environment-specific glue.
 
 | Scenario | Shape | Reach the state via |
 |---|---|---|
+| [bastion-host](./bastion-host/) | a process on a jump box | a read-only kubeconfig per cluster — nothing in-cluster |
 | [ci-terraform](./ci-terraform/) | in CI (pull) | a Terraform plan JSON produced in your pipeline |
 | [k8s-cronjob](./k8s-cronjob/) | in-cluster CronJob | a read-only ServiceAccount (the K8s API) |
 | [chat-listener](./chat-listener/) | long-lived Deployment | named targets + a chat provider, shared SQLite |
 | [fleet-health](./fleet-health/) | listener over many clusters | a dir of kubeconfigs, discovered into targets |
 
-New to steadystate? **[fleet-health](./fleet-health/)** is the quickest "is anything on fire?"
-win when your IaC is locked down — point it at your kubeconfigs and probe the live clusters.
+New to steadystate? Start on a **[bastion-host](./bastion-host/)** — run it on a jump box you
+already use, deploy nothing into the cluster, and probe the live clusters with `steadystate chat`.
+It's the lowest-commitment way to run the **[fleet-health](./fleet-health/)** flow.
 
 ## The model
 

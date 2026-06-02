@@ -11,6 +11,10 @@ It builds on the live **`k8s-live`** source (it reads the cluster's own workload
 them — no declared manifests needed) and the **fleet sweep**. Start local; add the listener when
 you want it from Teams/Slack while away from your desk.
 
+> Don't want to deploy into the cluster while you evaluate? Run this exact flow on a jump box
+> instead — see [bastion-host](../bastion-host/). Steps 1–2 below are identical; only the
+> "make it persistent" part differs (a systemd service vs an in-cluster Deployment).
+
 ## 1. Discover your clusters → named targets
 
 Point `KUBECONFIG` at the kubeconfigs you can reach (a directory of files, or one config with many
