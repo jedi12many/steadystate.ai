@@ -151,7 +151,7 @@ class KubectlProbe:
     # is honest -- `kubectl logs` (the failing pod's evidence) hits the `pods/log` subresource,
     # which a least-privilege RBAC must grant `pods` AND `pods/log` for.
     commands = Capabilities(
-        observe=("kubectl get pods -o json", "kubectl logs --tail --previous"),
+        observe=("kubectl get pods -A -o json", "kubectl logs --tail --previous"),
     )
 
     def __init__(self, log_tail: int = 20, timeout: float = 10.0) -> None:
@@ -173,15 +173,18 @@ class KubectlProbe:
         return argv
 
     def probe(self, resources: list[Resource]) -> list[Symptom]:
+        # Fetch every pod in ONE `kubectl get pods -A` rather than one call per namespace -- across
+        # a fleet with many namespaces that's 1 round-trip instead of N. Skip the read entirely when
+        # no kubernetes resource is present (a non-k8s scan never touches kubectl).
+        k8s_resources = [r for r in resources if r.provenance.source == "kubernetes"]
+        if not k8s_resources:
+            return []
+        pods_by_namespace = self._all_pods()
         symptoms: list[Symptom] = []
-        pods_by_namespace: dict[str, dict] = {}  # one `kubectl get pods` per namespace, cached
-        for resource in resources:
-            if resource.provenance.source != "kubernetes":
-                continue
+        for resource in k8s_resources:
             namespace = _namespace(resource.identity) or "default"
             workload = _name(resource.identity)
-            pods = pods_by_namespace.setdefault(namespace, self._get_pods(namespace))
-            sick = unhealthy_pods(pods, workload)
+            sick = unhealthy_pods(pods_by_namespace.get(namespace, {"items": []}), workload)
             if sick:
                 symptoms.append(self._symptom(resource, namespace, sick))
         return symptoms
@@ -201,15 +204,23 @@ class KubectlProbe:
             provenance=Provenance(source="kubernetes", address=resource.identity),
         )
 
-    def _get_pods(self, namespace: str) -> dict:
-        text = self._run_text(self._kubectl("get", "pods", "-n", namespace, "-o", "json"))
+    def _all_pods(self) -> dict[str, dict]:
+        """Every pod in the cluster from ONE `kubectl get pods -A -o json`, grouped by namespace ->
+        a ``{"items": [...]}`` doc (the shape ``unhealthy_pods`` reads). ``{}`` on any failure, so a
+        missing/unreachable kubectl degrades to no symptoms rather than crashing the scan."""
+        text = self._run_text(self._kubectl("get", "pods", "-A", "-o", "json"))
         if not text:
             return {}
         try:
-            parsed = json.loads(text)
+            doc = json.loads(text)
         except ValueError:
             return {}
-        return parsed if isinstance(parsed, dict) else {}
+        items = doc.get("items") if isinstance(doc, dict) else None
+        grouped: dict[str, dict] = {}
+        for pod in items or []:
+            namespace = (pod.get("metadata") or {}).get("namespace") or "default"
+            grouped.setdefault(namespace, {"items": []})["items"].append(pod)
+        return grouped
 
     def _last_log_line(self, namespace: str, pod: str) -> str:
         tail = str(self.log_tail)

@@ -192,7 +192,8 @@ def test_a_single_cannot_run_pod_makes_the_whole_symptom_high():
 
 def _probe(monkeypatch, pods: dict, log: str = "fatal: missing DB_URL"):
     prober = KubectlProbe()
-    monkeypatch.setattr(prober, "_get_pods", lambda namespace: pods)
+    # `_resource()` lives in namespace "prod"; _all_pods returns pods grouped by namespace.
+    monkeypatch.setattr(prober, "_all_pods", lambda: {"prod": pods})
     monkeypatch.setattr(prober, "_last_log_line", lambda namespace, pod: log)
     return prober
 
@@ -212,11 +213,11 @@ def test_probe_is_silent_on_a_healthy_workload(monkeypatch):
 
 
 def test_probe_ignores_non_kubernetes_resources(monkeypatch):
-    looked_up: list[str] = []
+    fetched: list[int] = []
     prober = KubectlProbe()
-    monkeypatch.setattr(prober, "_get_pods", lambda ns: looked_up.append(ns) or {"items": []})
+    monkeypatch.setattr(prober, "_all_pods", lambda: fetched.append(1) or {})
     assert prober.probe([_resource(identity="aws_s3_bucket.logs", source="terraform")]) == []
-    assert looked_up == []  # never even ran kubectl
+    assert fetched == []  # no kubernetes resource -> never even ran kubectl
 
 
 def test_probe_degrades_when_kubectl_unavailable(monkeypatch):
@@ -225,6 +226,31 @@ def test_probe_degrades_when_kubectl_unavailable(monkeypatch):
 
     monkeypatch.setattr("steadystate.probe.kubectl.subprocess.run", boom)
     assert KubectlProbe().probe([_resource()]) == []  # no cluster -> no symptoms, no raise
+
+
+def test_all_pods_fetches_every_namespace_in_one_call(monkeypatch):
+    import json
+
+    doc = {
+        "items": [
+            {"metadata": {"name": "web-1", "namespace": "prod"}, "status": {}},
+            {"metadata": {"name": "api-1", "namespace": "stg"}, "status": {}},
+            {"metadata": {"name": "web-2", "namespace": "prod"}, "status": {}},
+        ]
+    }
+    calls: list[list[str]] = []
+
+    class _Result:
+        stdout = json.dumps(doc)
+
+    monkeypatch.setattr(
+        "steadystate.probe.kubectl.subprocess.run",
+        lambda argv, **kw: calls.append(argv) or _Result(),
+    )
+    grouped = KubectlProbe()._all_pods()
+    assert len(calls) == 1 and "-A" in calls[0]  # ONE call, all namespaces -- not per-namespace
+    assert set(grouped) == {"prod", "stg"}
+    assert [p["metadata"]["name"] for p in grouped["prod"]["items"]] == ["web-1", "web-2"]
 
 
 def test_probe_threads_context_into_every_kubectl_call(monkeypatch):
