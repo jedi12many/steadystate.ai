@@ -58,6 +58,35 @@ def test_fingerprint_varies_by_source_identity_and_change_type():
     assert _drift(change_type=ChangeType.REMOVED).fingerprint != base
 
 
+# -- store: structured evidence (the `raw <fp>` view) ---------------------------
+
+
+def test_record_persists_evidence_and_a_bare_re_sighting_preserves_it():
+    store = StateStore()
+    fp = _drift().fingerprint
+    store.record({fp: ("high", "squid down")}, _t(1), {fp: {"namespace": "team-a", "pods": "2"}})
+    got = store.get(fp)
+    assert got is not None and got.details == {"namespace": "team-a", "pods": "2"}
+
+    # a later, cheaper sighting with NO evidence must not erase the captured detail (COALESCE).
+    store.record({fp: ("high", "squid down")}, _t(2))
+    assert store.get(fp).details == {"namespace": "team-a", "pods": "2"}
+
+    # but fresh evidence overwrites.
+    store.record({fp: ("high", "squid down")}, _t(3), {fp: {"namespace": "team-a", "pods": "3"}})
+    assert store.get(fp).details["pods"] == "3"
+
+
+def test_find_by_prefix_resolves_a_short_fingerprint_and_escapes_wildcards():
+    store = StateStore()
+    fp = _drift().fingerprint
+    store.record({fp: ("low", "t")}, _t(1))
+    assert [f.fingerprint for f in store.find_by_prefix(fp[:8])] == [fp]
+    assert store.find_by_prefix("nope") == []
+    # `_` is a LIKE wildcard -- it must be escaped, not match any single char.
+    assert store.find_by_prefix("_" + fp[1:8]) == []
+
+
 # -- store: record / new-vs-recurring -------------------------------------------
 
 

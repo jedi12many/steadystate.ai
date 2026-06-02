@@ -198,6 +198,22 @@ class KubectlProbe:
         # summary, the scan panel, and the remembered `findings` row, which stores only the title).
         # With a fleet you need the cluster: `<context>/<namespace>`, else just the namespace.
         where = f"{self._context}/{namespace}" if self._context else namespace
+        # Structured fields for `raw <fp>` -- "which pods, where, the actual error, how flappy".
+        # Insertion order is display order; the long log line goes last. The store keeps these
+        # per fingerprint, so a later `raw` can answer "what was the error, and was it recent?".
+        evidence = {
+            "workload": _name(resource.identity),
+            "kind": resource.kind,
+            "namespace": namespace,
+            "category": category,
+            "unhealthy_pods": str(len(sick)),
+            "pods": ", ".join(p.name for p in sick),
+            "max_restarts": str(worst.restarts),
+        }
+        if self._context:
+            evidence["cluster"] = self._context
+        if tail:
+            evidence["last_log"] = tail
         return Symptom(
             identity=resource.identity,
             kind=resource.kind,
@@ -206,6 +222,7 @@ class KubectlProbe:
             title=f"{_name(resource.identity)} is {category} in {where}",
             detail=detail,
             provenance=Provenance(source="kubernetes", address=resource.identity),
+            evidence=evidence,
         )
 
     def _all_pods(self) -> dict[str, dict]:

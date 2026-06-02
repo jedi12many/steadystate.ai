@@ -36,6 +36,7 @@ MUTE = "mute"
 TARGETS = "targets"
 HISTORY = "history"
 FINDINGS = "findings"
+RAW = "raw"
 
 # The command grammar, in the order ``help`` lists them: verb -> (usage, one-line summary).
 # ``help`` renders itself from this table, so a newly added verb is discoverable the moment it
@@ -51,6 +52,11 @@ COMMANDS: dict[str, tuple[str, str]] = {
     ),
     COST: ("cost [day|week]", "show LLM spend -- a rollup, or a day/week trend"),
     FINDINGS: ("findings", "list remembered findings: fingerprint, status, severity"),
+    RAW: (
+        "raw <fingerprint>",
+        "show a finding's raw evidence -- the captured fields (namespace, cluster, pod count, the "
+        "failing pod's last log) plus when it was first/last seen",
+    ),
     HISTORY: ("history", "show the remediation audit log (newest first)"),
     MUTE: ("mute <fingerprint>", "silence a finding (e.g. a benign probe result) on future scans"),
     APPROVE: ("approve <fingerprint>", "apply a pending remediation (guardrailed)"),
@@ -58,7 +64,7 @@ COMMANDS: dict[str, tuple[str, str]] = {
 }
 # Verbs that require an argument to mean anything (a fingerprint for approve/decline/mute, a
 # target name for probe); the rest take none or an optional one.
-_NEEDS_ARGUMENT = frozenset({APPROVE, DECLINE, PROBE, MUTE})
+_NEEDS_ARGUMENT = frozenset({APPROVE, DECLINE, PROBE, MUTE, RAW})
 # Verbs that take an *optional* argument (cost's period); absent it, they still dispatch.
 _OPTIONAL_ARGUMENT = frozenset({COST})
 

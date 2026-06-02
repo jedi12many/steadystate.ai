@@ -21,6 +21,7 @@ from steadystate.inbound.base import (
     MUTE,
     PENDING,
     PROBE,
+    RAW,
     TARGETS,
     Command,
     command_from_text,
@@ -141,7 +142,19 @@ def test_text_grammar_needs_a_fingerprint_for_act_verbs_and_ignores_unknowns():
 
 def test_render_help_lists_every_command():
     text = render_help()
-    for verb in (HELP, TARGETS, PENDING, PROBE, COST, FINDINGS, HISTORY, MUTE, APPROVE, DECLINE):
+    for verb in (
+        HELP,
+        TARGETS,
+        PENDING,
+        PROBE,
+        COST,
+        FINDINGS,
+        RAW,
+        HISTORY,
+        MUTE,
+        APPROVE,
+        DECLINE,
+    ):
         assert verb in text
 
 
@@ -256,6 +269,30 @@ def test_run_command_mute_silences_a_fingerprint(tmp_path):
     # it's now suppressed in the store, so the next scan/probe honors it
     with StateStore(db) as store:
         assert store.is_suppressed(fp, datetime(2026, 1, 1, tzinfo=UTC))
+
+
+def test_raw_grammar_and_help():
+    assert command_from_text("raw fp7", "amy") == Command(RAW, "amy", "fp7")
+    assert command_from_text("raw", "amy") is None  # needs a fingerprint
+    assert "raw <fingerprint>" in render_help()
+
+
+def test_run_command_raw_shows_evidence_and_timestamps(tmp_path):
+    db = str(tmp_path / "s.db")
+    fp = "a" * 64
+    with StateStore(db) as store:
+        store.record(
+            {fp: ("high", "squid is CrashLoopBackOff in prod-cluster/team-a")},
+            datetime(2026, 6, 2, 14, 30, tzinfo=UTC),
+            {fp: {"namespace": "team-a", "cluster": "prod-cluster", "last_log": "missing DB_URL"}},
+        )
+    msg = run_command(Command(RAW, "amy", fp[:10]), db)  # a prefix resolves
+    assert "squid is CrashLoopBackOff in prod-cluster/team-a" in msg
+    assert "missing DB_URL" in msg  # the raw error
+    assert "namespace" in msg and "team-a" in msg
+    assert "2026-06-02T14:30" in msg  # first/last seen -- the window the operator asked about
+
+    assert "Unknown fingerprint" in run_command(Command(RAW, "amy", "deadbeef"), db)
 
 
 def test_run_command_approve_routes_to_core(monkeypatch, tmp_path):
