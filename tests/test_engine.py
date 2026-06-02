@@ -83,7 +83,7 @@ def test_build_report_threads_context_to_source_and_probe(monkeypatch):
     pods = {
         "items": [
             {
-                "metadata": {"name": "web-abc"},
+                "metadata": {"name": "web-abc", "namespace": "prod"},
                 "status": {
                     "phase": "Running",
                     "containerStatuses": [

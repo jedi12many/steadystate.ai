@@ -27,7 +27,7 @@ _WORKLOADS = {
 _CRASHING_PODS = {
     "items": [
         {
-            "metadata": {"name": "web-abc"},
+            "metadata": {"name": "web-abc", "namespace": "prod"},
             "status": {
                 "phase": "Running",
                 "containerStatuses": [
