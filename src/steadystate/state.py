@@ -134,7 +134,7 @@ class Finding:
     note: str | None = None
     actor: str | None = None
     # Structured evidence captured when the finding was last recorded -- the key/value fields the
-    # `raw <fp>` view shows (namespace, cluster, pod count, last log line, ...). Empty until a
+    # `show <fp>` view shows (namespace, cluster, pod count, last log line, ...). Empty until a
     # probe records any, and for finding types that carry none.
     details: dict[str, str] = field(default_factory=dict)
 
@@ -212,7 +212,7 @@ class StateStore:
         if "patch" not in cols:
             self._conn.execute("ALTER TABLE pending_actions ADD COLUMN patch TEXT")
         finding_cols = {row["name"] for row in self._conn.execute("PRAGMA table_info(findings)")}
-        if "details" not in finding_cols:  # structured per-fingerprint evidence (the `raw` view)
+        if "details" not in finding_cols:  # structured per-fingerprint evidence (the `show` view)
             self._conn.execute("ALTER TABLE findings ADD COLUMN details TEXT")
 
     def close(self) -> None:
@@ -287,9 +287,9 @@ class StateStore:
         """Upsert every fingerprint surfaced this scan; return per-fingerprint state.
 
         ``seen`` maps fingerprint -> (severity, title). ``evidence`` optionally maps a fingerprint
-        to a small dict of structured fields (namespace, cluster, last log, ...) the `raw <fp>` view
-        shows; a re-sighting that carries none preserves whatever was last captured (COALESCE), so a
-        cheap stateless probe never erases a richer record. For each fingerprint:
+        to a small dict of structured fields (namespace, cluster, last log, ...) the `show <fp>`
+        view shows; a re-sighting that carries none preserves what was last captured (COALESCE), so
+        a cheap stateless probe never erases a richer record. For each fingerprint:
 
         * new fingerprint -> insert with ``first_seen == last_seen == now``, ``open``;
         * known fingerprint -> refresh ``last_seen`` + severity/title, preserve the

@@ -40,8 +40,8 @@ from .base import (
     MUTE,
     PENDING,
     PROBE,
-    RAW,
     SEND,
+    SHOW,
     SURFACES_LIST,
     TARGETS,
     Command,
@@ -195,13 +195,13 @@ def _render_findings(state_path: str) -> str:
     return "\n".join(lines)
 
 
-def _render_raw(fingerprint: str, state_path: str) -> str:
-    """The chat view of `raw <fingerprint>`: a finding's captured evidence -- the structured fields
+def _render_show(fingerprint: str, state_path: str) -> str:
+    """The chat view of `show <fingerprint>`: a finding's captured evidence -- the structured fields
     a probe recorded (namespace, cluster, pod count, the failing pod's last log line, ...) plus when
     it was first and last seen, so an operator can answer "what exactly broke, and was it during the
     window I care about?". Accepts a unique fingerprint prefix (they're long). Read-only.
 
-    Each error keeps its own fingerprint, so on a grouped finding you ask `raw` of any one member's
+    Each error keeps its own fingerprint, so on a grouped finding you `show` any one member's
     fingerprint and get that instance's detail -- one example is enough."""
     if not state_path or not Path(state_path).exists():
         return "No findings recorded yet -- run a `probe`/`scan` first."
@@ -220,7 +220,7 @@ def _render_raw(fingerprint: str, state_path: str) -> str:
         lines.append("  -- evidence --")
         lines += [f"  {key:<14} {value}" for key, value in finding.details.items()]
     else:  # a finding recorded before evidence capture, or a type that carries none
-        lines.append("  (no raw evidence captured -- re-run a `probe`/`scan` to capture it)")
+        lines.append("  (no evidence captured -- re-run a `probe`/`scan` to capture it)")
     return "\n".join(lines)
 
 
@@ -416,8 +416,8 @@ def run_command(command: Command, state_path: str) -> str:
         return _render_cost(state_path, command.argument)
     if command.verb == FINDINGS:
         return _render_findings(state_path)
-    if command.verb == RAW:
-        return _render_raw(command.argument, state_path)
+    if command.verb == SHOW:
+        return _render_show(command.argument, state_path)
     if command.verb == SURFACES_LIST:
         return _render_surfaces()
     if command.verb == SEND:

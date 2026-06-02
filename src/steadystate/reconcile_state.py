@@ -88,14 +88,14 @@ def seen_findings(report: Report) -> dict[str, tuple[str, str]]:
             seen[symptom.fingerprint] = (item.severity.value, symptom.title)
         # A correlated group's own "mute-all" fingerprint is remembered too -- so it shows in
         # `findings` (discoverable after the probe scrolls away), gets the new/resolved lifecycle,
-        # and can be muted/`raw`'d. Its title is the group heading ("... in N place(s)").
+        # and can be muted or `show`n. Its title is the group heading ("... in N place(s)").
         if item.correlation_fingerprint:
             seen[item.correlation_fingerprint] = (item.severity.value, item.title)
     return seen
 
 
 def finding_evidence(report: Report) -> dict[str, dict[str, str]]:
-    """Every fingerprint -> a small dict of structured fields to remember for the `raw <fp>` view.
+    """Every fingerprint -> a small dict of structured fields to remember for the `show <fp>` view.
     A Symptom contributes the probe's structured evidence (namespace, cluster, pod count, the
     failing pod's last log line, ...); a Drift contributes its change type + kind. Pure; a finding
     with no fields is omitted (the store then keeps whatever it last had)."""
@@ -107,7 +107,7 @@ def finding_evidence(report: Report) -> dict[str, dict[str, str]]:
             if symptom.evidence:
                 out[symptom.fingerprint] = dict(symptom.evidence)
         # The group fingerprint's evidence: how many places, and a couple shared fields -- so
-        # `raw <correlation-fp>` shows the scope of the group, not "no evidence".
+        # `show <correlation-fp>` shows the scope of the group, not "no evidence".
         if item.correlation_fingerprint and item.symptoms:
             first = item.symptoms[0]
             out[item.correlation_fingerprint] = {
@@ -135,7 +135,7 @@ def reconcile(
     #    count as "present", so a finding that drops below the Event bar isn't read as resolved).
     seen = seen_findings(report)
 
-    # 2. Record + read back per-fingerprint state (plus structured evidence for the `raw` view).
+    # 2. Record + read back per-fingerprint state (plus structured evidence for the `show` view).
     state = store.record(seen, now, finding_evidence(report))
 
     # 3. Annotate + suppress Alerts (signals are left as a count).

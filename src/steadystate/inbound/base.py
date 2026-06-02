@@ -36,7 +36,7 @@ MUTE = "mute"
 TARGETS = "targets"
 HISTORY = "history"
 FINDINGS = "findings"
-RAW = "raw"
+SHOW = "show"
 SURFACES_LIST = "surfaces"
 SEND = "send"
 
@@ -55,9 +55,9 @@ COMMANDS: dict[str, tuple[str, str]] = {
     ),
     COST: ("cost [day|week]", "show LLM spend -- a rollup, or a day/week trend"),
     FINDINGS: ("findings", "list remembered findings: fingerprint, status, severity"),
-    RAW: (
-        "raw <fingerprint>",
-        "show a finding's raw evidence -- the captured fields (namespace, cluster, pod count, the "
+    SHOW: (
+        "show <fingerprint>",
+        "show a finding's captured evidence -- the fields (namespace, cluster, pod count, the "
         "failing pod's last log) plus when it was first/last seen",
     ),
     HISTORY: ("history", "show the remediation audit log (newest first)"),
@@ -80,7 +80,7 @@ COMMANDS: dict[str, tuple[str, str]] = {
 }
 # Verbs that require an argument to mean anything (a fingerprint for approve/decline/mute, a
 # target name for probe); the rest take none or an optional one.
-_NEEDS_ARGUMENT = frozenset({APPROVE, DECLINE, PROBE, MUTE, RAW})
+_NEEDS_ARGUMENT = frozenset({APPROVE, DECLINE, PROBE, MUTE, SHOW})
 # Verbs that need TWO arguments: `send <fingerprint> <surface>`. The surface is the *last* plain
 # token, so a natural `send <fp> to servicenow` works (the "to" is ignored as a middle token).
 _NEEDS_TWO = frozenset({SEND})

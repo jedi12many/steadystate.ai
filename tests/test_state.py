@@ -58,7 +58,7 @@ def test_fingerprint_varies_by_source_identity_and_change_type():
     assert _drift(change_type=ChangeType.REMOVED).fingerprint != base
 
 
-# -- store: structured evidence (the `raw <fp>` view) ---------------------------
+# -- store: structured evidence (the `show <fp>` view) ---------------------------
 
 
 def test_record_persists_evidence_and_a_bare_re_sighting_preserves_it():
