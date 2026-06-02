@@ -323,6 +323,38 @@ def test_run_command_probe_resolves_and_summarizes(monkeypatch, tmp_path):
     )
     msg = run_command(Command(PROBE, "amy", "prod"), ":memory:")
     assert "prod: 1 alert" in msg and "web is Degraded" in msg and "HIGH" in msg
+    assert "0/3 pods available" in msg  # the description shows by default, not just the title + fps
+
+
+def test_summarize_shows_the_description_by_default_and_evidence_when_verbose():
+    from steadystate.inbound.server import _summarize
+    from steadystate.probe.base import Symptom
+
+    symptom = Symptom(
+        identity="apps/Deployment/prod/squid",
+        kind="Deployment",
+        category="CrashLoopBackOff",
+        severity=Severity.HIGH,
+        title="squid is CrashLoopBackOff",
+        detail="2 pod(s) CrashLoopBackOff; last log: fatal: missing DB_URL",
+        provenance=Provenance(source="kubernetes", address="apps/Deployment/prod/squid"),
+    )
+    alert = Alert(
+        title="squid is CrashLoopBackOff in 2 place(s)",
+        severity=Severity.HIGH,
+        drifts=[],
+        why_it_matters="2 instances of Deployment squid are CrashLoopBackOff across: prod, stg.",
+        layer=Layer.ALERT,
+        symptoms=[symptom],
+        recommended_action="kubectl rollout restart",
+    )
+    default = _summarize("prod", [alert])
+    assert "squid is CrashLoopBackOff in 2 place(s)" in default
+    assert "2 instances of Deployment squid are CrashLoopBackOff" in default  # the description
+    assert "fix: kubectl rollout restart" in default
+    assert "fp " in default  # fingerprints still listed
+    verbose = _summarize("prod", [alert], verbose=True)
+    assert "missing DB_URL" in verbose  # the full per-symptom evidence
 
 
 def test_run_command_probe_unknown_target_lists_the_known_ones(monkeypatch, tmp_path):

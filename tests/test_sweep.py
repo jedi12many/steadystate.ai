@@ -288,3 +288,32 @@ def test_probe_creates_the_state_db_from_scratch(monkeypatch, tmp_path):
     assert db.exists()  # the probe created it
     with StateStore(str(db)) as store:
         assert store.all_findings()  # with the finding recorded
+
+
+# -- cross-cluster correlation: the same issue across the landscape ---------------------------
+
+
+def test_sweep_correlates_the_same_workload_across_clusters(monkeypatch):
+    import steadystate.sweep as sweep
+
+    # squid crash-looping in two clusters (a bad image rolled out everywhere) -> ONE fleet issue.
+    reports = {
+        "prod-cluster": _fire_report("prod-cluster/apps/Deployment/team-a/squid"),
+        "stg-cluster": _fire_report("stg-cluster/apps/Deployment/team-a/squid"),
+    }
+    monkeypatch.setattr(sweep, "build_report", _build_report(reports))
+    targets = {
+        "prod": Target("prod", "k8s-live", context="prod-cluster"),
+        "stg": Target("stg", "k8s-live", context="stg-cluster"),
+    }
+    result = sweep.sweep_targets(targets, ":memory:")
+
+    assert result.on_fire == 2  # the per-cluster digest still shows each cluster on fire
+    # ...but the emitted/fleet report collapses them into ONE correlated alert.
+    grouped = [a for a in result.report.alerts if not a.drifts and len(a.symptoms) > 1]
+    assert len(grouped) == 1
+    assert grouped[0].title == "squid is CrashLoopBackOff in 2 place(s)"
+    assert len(grouped[0].symptoms) == 2  # both clusters' instances ride along
+    digest = "\n".join(render_sweep(result))
+    assert "correlated across the fleet" in digest
+    assert "squid is CrashLoopBackOff in 2 place(s)" in digest
