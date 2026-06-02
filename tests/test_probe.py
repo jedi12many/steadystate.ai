@@ -225,7 +225,7 @@ def test_symptom_title_names_the_namespace_and_cluster(monkeypatch):
 
 
 def test_symptom_carries_structured_evidence_for_the_raw_view(monkeypatch):
-    # The `raw <fp>` view reads these fields out of the store -- the probe must capture them.
+    # The `show <fp>` view reads these fields out of the store -- the probe must capture them.
     pods = {"items": [_pod("web-abc", waiting="CrashLoopBackOff", restarts=9)]}
     prober = _probe(monkeypatch, pods)
     prober.use_context("prod-cluster")

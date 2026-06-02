@@ -39,7 +39,7 @@ class Symptom:
     detail: str  # the evidence: pod counts + the failing pod's last log line
     provenance: Provenance
     detected_at: datetime = field(default_factory=_now)
-    # Structured key/value evidence for the `raw <fp>` view (namespace, cluster, pod count, last
+    # Structured key/value evidence for the `show <fp>` view (namespace, cluster, pod count, last
     # log line, ...). Auxiliary -- excluded from equality so it never perturbs identity/grouping.
     evidence: dict[str, str] = field(default_factory=dict, compare=False)
 
