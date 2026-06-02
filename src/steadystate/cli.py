@@ -22,10 +22,12 @@ from .discover import (
     as_dict as discovery_as_dict,
 )
 from .discover import (
+    context_targets,
     deep_inspect,
     deep_targets,
     emit_github_actions,
     emittable_sources,
+    kube_contexts,
     probe_environment,
     proposed_targets,
     render_inspections,
@@ -939,13 +941,15 @@ def _create_targets(findings: list, extra: list | None = None) -> None:
     live-discovered targets from a paired ``--deep`` (compose projects rooted outside the cwd)."""
     target_file = Path(os.environ.get(TARGETS_ENV) or "targets.json")
     proposed = proposed_targets(findings, Path.cwd())
-    # Fold in the deep-discovered targets, but drop any whose (source, path) the cwd-local pass
-    # already covers -- so a compose project *in* the cwd isn't registered twice under two names.
-    seen = {(t.source, t.path) for t in proposed}
+    # Fold in the live-discovered targets, but drop any the cwd-local pass already covers -- so a
+    # compose project *in* the cwd isn't registered twice under two names. Key on (source, path,
+    # context): live cluster targets share an empty path, so context is what distinguishes them.
+    seen = {(t.source, t.path, t.context) for t in proposed}
     for target in extra or []:
-        if (target.source, target.path) not in seen:
+        key = (target.source, target.path, target.context)
+        if key not in seen:
             proposed.append(target)
-            seen.add((target.source, target.path))
+            seen.add(key)
     if not proposed:
         typer.echo("\nno scannable source found here -- nothing to create.")
         return
@@ -959,7 +963,8 @@ def _create_targets(findings: list, extra: list | None = None) -> None:
     typer.echo(f"\nTARGETS -> {target_file}")
     for target in proposed:
         mark = "added" if target.name in added else "exists (kept)"
-        typer.echo(f"  {target.name:<26} {target.source} @ {target.path}  [{mark}]")
+        locator = f"context={target.context}" if target.context else target.path
+        typer.echo(f"  {target.name:<26} {target.source} @ {locator}  [{mark}]")
     typer.echo(f"point the listener at it:  export {TARGETS_ENV}={target_file}")
 
 
@@ -1038,7 +1043,10 @@ def discover(
         for line in lines:
             typer.echo(line)
         if create:
-            _create_targets(findings, extra=deep_targets(inspections))
+            # Live targets to fold in: deep-discovered compose projects (with --deep), plus one
+            # k8s-live target per kube context -- so `discover --create` registers your clusters.
+            extra = deep_targets(inspections) + context_targets(kube_contexts())
+            _create_targets(findings, extra=extra)
 
     # --check turns "nothing to scan here" into a non-zero exit, AFTER the report/create so the
     # output (and any target writes) still happen -- it only gates the exit code.

@@ -830,6 +830,45 @@ def proposed_targets(findings: list[Finding], cwd: Path) -> list[Target]:
     return targets
 
 
+# -- kube contexts -> live targets: register each reachable cluster ----------------------------
+#
+# `--create` also registers one `k8s-live` target per kube context, so a fleet of clusters you can
+# reach (a dir of kubeconfigs, or one config with many contexts) becomes named targets you can
+# `probe` -- the whole point of the live cluster-health path. kubectl reads/merges the kubeconfig(s)
+# and parses the YAML, so this stays stdlib-only; it degrades to no targets when kubectl is absent
+# or no context resolves, never blocking a create.
+
+_GET_CONTEXTS = ["kubectl", "config", "get-contexts", "-o", "name"]
+
+
+def context_targets(contexts: list[str]) -> list[Target]:
+    """One live (`k8s-live`) target per kube context. The target name is a slug of the context
+    (friendly to type in chat); the raw context drives kubectl and labels the alerts, and there's
+    no path (a live source reads live state). Pure -- the caller persists them."""
+    targets: list[Target] = []
+    for ctx in contexts:
+        name = _slug(ctx) or "cluster"
+        targets.append(
+            Target(name=name, source="k8s-live", path="", label=ctx, probe="auto", context=ctx)
+        )
+    return targets
+
+
+def kube_contexts() -> list[str]:
+    """The kube contexts visible to kubectl (`kubectl config get-contexts -o name`), in file order,
+    deduped. [] when kubectl is absent or no context resolves -- a local kubeconfig read, no cluster
+    contact. This is the I/O seam `--create` consumes via ``context_targets``."""
+    ok, out = _run(_GET_CONTEXTS)
+    if not ok:
+        return []
+    seen: dict[str, None] = {}
+    for line in out.splitlines():
+        name = line.strip()
+        if name:
+            seen.setdefault(name, None)
+    return list(seen)
+
+
 # -- CI emission: a GitHub Actions workflow tailored to what's here -----------------------------
 #
 # `--emit-ci` writes a workflow that scans the sources discovered in the cwd -- the durable home
