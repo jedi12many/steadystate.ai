@@ -16,6 +16,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 TARGETS_ENV = "STEADYSTATE_TARGETS"  # path to the targets JSON document
+# The default registry path when STEADYSTATE_TARGETS isn't set. Deliberately steadystate-specific
+# (not a bare ``targets.json``) so `discover --create` and the chat fallback never read or clobber
+# an unrelated `targets.json` that happens to be in the cwd.
+DEFAULT_TARGETS_FILE = "steadystate.targets.json"
 
 
 @dataclass(frozen=True)
@@ -62,10 +66,15 @@ def load_targets(path: str | Path) -> dict[str, Target]:
 
 
 def load_targets_from_env() -> dict[str, Target]:
-    """The targets registry from ``STEADYSTATE_TARGETS``, or ``{}`` when it isn't set -- so a
-    listener with no targets configured answers a probe request cleanly instead of erroring."""
+    """The targets registry: ``STEADYSTATE_TARGETS`` if set, else ``./steadystate.targets.json``
+    when it exists -- the same resolution `scan --target` / `targets` use, so a `discover --create`
+    registry is picked up by the local `chat` REPL without exporting an env var. ``{}`` when neither
+    resolves, so a listener with no targets answers a probe cleanly instead of erroring."""
     path = os.environ.get(TARGETS_ENV)
-    return load_targets(path) if path else {}
+    if path:
+        return load_targets(path)
+    default = Path(DEFAULT_TARGETS_FILE)
+    return load_targets(default) if default.exists() else {}
 
 
 def target_to_spec(target: Target) -> dict[str, str]:

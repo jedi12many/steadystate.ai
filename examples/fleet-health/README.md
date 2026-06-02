@@ -22,7 +22,7 @@ contexts), then let `discover --create` register each context as a target:
 
 ```sh
 export KUBECONFIG="$(ls -1 ~/.kube/clusters/*.yaml | paste -sd:)"   # a dir of kubeconfigs, merged
-steadystate discover --create        # writes one k8s-live target per context -> targets.json
+steadystate discover --create        # writes one k8s-live target per context -> steadystate.targets.json
 steadystate targets --check          # see your clusters
 
 #   prod-cluster        k8s-live   context=prod-cluster        [ok]
@@ -56,7 +56,7 @@ so you see *what changed since the last sweep*, not the same wall every time. Ru
 
 To ask `probe all` from Teams/Slack while away, run the [chat-listener](../chat-listener/) with two
 additions: **mount the kubeconfigs** so the listener can reach the clusters, and ship the
-**discovered `targets.json`** as the registry.
+**discovered `steadystate.targets.json`** as the registry.
 
 ```yaml
 # Additions to deploy/kubernetes/listener.yaml for fleet health
@@ -80,7 +80,7 @@ spec:
 ---
 # Generate the targets ConfigMap straight from discovery:
 #   steadystate discover --create && kubectl create configmap steadystate-targets \
-#     --from-file=targets.json -n steadystate
+#     --from-file=targets.json=steadystate.targets.json -n steadystate
 apiVersion: v1
 kind: ConfigMap
 metadata: { name: steadystate-targets, namespace: steadystate }
