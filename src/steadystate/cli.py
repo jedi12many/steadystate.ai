@@ -50,6 +50,7 @@ from .reconcile_state import reconcile
 from .sources import CAPABILITIES, DRIFT_SOURCES, PATHLESS_SOURCES, build_drift_source
 from .sources.base import SourceError
 from .state import PendingAction, StateStore
+from .sweep import render_sweep, sweep_targets
 from .targets import (
     TARGETS_ENV,
     Target,
@@ -695,6 +696,46 @@ def targets(
     if check and problems:
         typer.echo(f"{problems} target(s) with problems.", err=True)
         raise typer.Exit(1)
+
+
+@app.command()
+def sweep(
+    state: Path = typer.Option(
+        Path(DEFAULT_STATE_PATH),
+        "--state",
+        help="SQLite state db that makes the sweep memoryful (new/recurring/resolved across the "
+        "fleet). Auto-created; default under .steadystate/.",
+    ),
+    stateless: bool = typer.Option(
+        False,
+        "--stateless",
+        help="Skip the state store -- a pure snapshot of what's on fire now, no new/resolved.",
+    ),
+    verbose: bool = typer.Option(
+        False, "--verbose", "-v", help="List each fire's title under its cluster."
+    ),
+) -> None:
+    """Probe every target (cluster) and roll up what's on fire -- a stateful fleet sweep.
+
+    The batch counterpart to `scan --target <one>`: it runs every target in the registry
+    (STEADYSTATE_TARGETS, else ./targets.json) through the same engine and prints a digest --
+    which clusters are on fire, which are clear, and what recovered since the last sweep. One
+    cluster being unreachable is reported inline, never sinks the rest."""
+    target_file = _targets_file()
+    if not target_file.exists():
+        typer.echo(f"no targets file ({target_file}). Create one with `discover --create`.")
+        return
+    try:
+        registry = load_targets(target_file)
+    except (OSError, ValueError) as exc:
+        typer.echo(f"targets file {target_file} is malformed: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    if not registry:
+        typer.echo(f"{target_file} has no targets.")
+        return
+    result = sweep_targets(registry, state, datetime.now(UTC), stateless=stateless)
+    for line in render_sweep(result, verbose=verbose):
+        typer.echo(line)
 
 
 @app.command()

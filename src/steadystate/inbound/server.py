@@ -23,6 +23,7 @@ from ..reason.alert import Alert
 from ..reason.cost import roll_up, roll_up_by_period, scan_cost_line
 from ..reconcile_state import _fingerprints
 from ..state import StateStore
+from ..sweep import render_sweep, sweep_targets
 from ..targets import load_targets_from_env
 from .base import (
     APPROVE,
@@ -197,6 +198,8 @@ def _run_probe(target_name: str, state_path: str, flags: frozenset[str]) -> str:
     ``verbose`` adds the full evidence per alert; ``cost`` adds the per-caller spend breakdown.
     The reply carries a one-line spend footer. It never records or applies -- chat stays a
     trigger, not a bypass."""
+    if target_name == "all":  # `probe all` -> the stateful fleet sweep, not a single summon
+        return _run_sweep(state_path)
     targets = load_targets_from_env()
     if not targets:
         return "No targets configured (set STEADYSTATE_TARGETS to a targets file on the listener)."
@@ -231,6 +234,18 @@ def _run_probe(target_name: str, state_path: str, flags: frozenset[str]) -> str:
                 for r in roll_up(report.llm_calls)
             )
     return out
+
+
+def _run_sweep(state_path: str) -> str:
+    """`probe all`: the **stateful** fleet sweep -- every target probed, rolled up into one digest
+    of what's on fire across the fleet. Unlike the single `probe` (stateless), this records to the
+    store so each sweep compares to the last (new/resolved) -- the operator asked for the batch to
+    build history. Degrades to a stateless snapshot when the listener has no store path."""
+    targets = load_targets_from_env()
+    if not targets:
+        return "No targets configured (set STEADYSTATE_TARGETS to a targets file on the listener)."
+    result = sweep_targets(targets, state_path, datetime.now(UTC), stateless=not state_path)
+    return "\n".join(render_sweep(result, verbose=True))
 
 
 def run_command(command: Command, state_path: str) -> str:
