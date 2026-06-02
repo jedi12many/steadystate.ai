@@ -223,6 +223,24 @@ def test_symptom_title_names_the_namespace_and_cluster(monkeypatch):
     assert sym2.title == "web is CrashLoopBackOff in prod-cluster/prod"
 
 
+def test_symptom_carries_structured_evidence_for_the_raw_view(monkeypatch):
+    # The `raw <fp>` view reads these fields out of the store -- the probe must capture them.
+    pods = {"items": [_pod("web-abc", waiting="CrashLoopBackOff", restarts=9)]}
+    prober = _probe(monkeypatch, pods)
+    prober.use_context("prod-cluster")
+    [sym] = prober.probe([_resource()])  # _resource() lives in namespace "prod"
+    assert sym.evidence["namespace"] == "prod"
+    assert sym.evidence["cluster"] == "prod-cluster"
+    assert sym.evidence["workload"] == "web"
+    assert sym.evidence["unhealthy_pods"] == "1"
+    assert sym.evidence["pods"] == "web-abc"
+    assert sym.evidence["max_restarts"] == "9"
+    assert "missing DB_URL" in sym.evidence["last_log"]  # the raw error
+    # no context -> no cluster field (a single ambient cluster needs no qualifier)
+    [ambient] = _probe(monkeypatch, pods).probe([_resource()])
+    assert "cluster" not in ambient.evidence
+
+
 def test_probe_is_silent_on_a_healthy_workload(monkeypatch):
     prober = _probe(monkeypatch, {"items": [_pod("web-ok", phase="Running")]})
     assert prober.probe([_resource()]) == []

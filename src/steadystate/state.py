@@ -17,8 +17,11 @@ fingerprints + a (severity, title) pair to display. The scan-side reconciliation
 
 from __future__ import annotations
 
+import contextlib
+import json
 import sqlite3
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -42,7 +45,8 @@ CREATE TABLE IF NOT EXISTS findings (
     status        TEXT,
     snooze_until  TEXT,
     note          TEXT,
-    actor         TEXT
+    actor         TEXT,
+    details       TEXT
 )
 """
 
@@ -129,6 +133,10 @@ class Finding:
     snooze_until: str | None = None
     note: str | None = None
     actor: str | None = None
+    # Structured evidence captured when the finding was last recorded -- the key/value fields the
+    # `raw <fp>` view shows (namespace, cluster, pod count, last log line, ...). Empty until a
+    # probe records any, and for finding types that carry none.
+    details: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -203,6 +211,9 @@ class StateStore:
             self._conn.execute("ALTER TABLE pending_actions ADD COLUMN environment TEXT")
         if "patch" not in cols:
             self._conn.execute("ALTER TABLE pending_actions ADD COLUMN patch TEXT")
+        finding_cols = {row["name"] for row in self._conn.execute("PRAGMA table_info(findings)")}
+        if "details" not in finding_cols:  # structured per-fingerprint evidence (the `raw` view)
+            self._conn.execute("ALTER TABLE findings ADD COLUMN details TEXT")
 
     def close(self) -> None:
         self._conn.close()
@@ -220,6 +231,17 @@ class StateStore:
             "SELECT * FROM findings WHERE fingerprint = ?", (fingerprint,)
         ).fetchone()
         return _row_to_finding(row) if row is not None else None
+
+    def find_by_prefix(self, prefix: str) -> list[Finding]:
+        """Findings whose fingerprint starts with ``prefix`` -- so a chat user can pass a short,
+        copy-pasted fingerprint (`raw 4f72305e`) instead of all 64 hex chars. ``%``/``_`` are
+        escaped so they can't act as LIKE wildcards. Ordered for a stable 'ambiguous' message."""
+        escaped = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        rows = self._conn.execute(
+            "SELECT * FROM findings WHERE fingerprint LIKE ? ESCAPE '\\' ORDER BY fingerprint",
+            (escaped + "%",),
+        ).fetchall()
+        return [_row_to_finding(r) for r in rows]
 
     def status(self, fingerprint: str) -> str | None:
         """The stored status for ``fingerprint``, or None if we've never seen it."""
@@ -256,10 +278,18 @@ class StateStore:
 
     # -- the scan reconciliation ------------------------------------------------
 
-    def record(self, seen: dict[str, tuple[str, str]], now: datetime) -> dict[str, dict]:
+    def record(
+        self,
+        seen: dict[str, tuple[str, str]],
+        now: datetime,
+        evidence: Mapping[str, Mapping[str, str]] | None = None,
+    ) -> dict[str, dict]:
         """Upsert every fingerprint surfaced this scan; return per-fingerprint state.
 
-        ``seen`` maps fingerprint -> (severity, title). For each one:
+        ``seen`` maps fingerprint -> (severity, title). ``evidence`` optionally maps a fingerprint
+        to a small dict of structured fields (namespace, cluster, last log, ...) the `raw <fp>` view
+        shows; a re-sighting that carries none preserves whatever was last captured (COALESCE), so a
+        cheap stateless probe never erases a richer record. For each fingerprint:
 
         * new fingerprint -> insert with ``first_seen == last_seen == now``, ``open``;
         * known fingerprint -> refresh ``last_seen`` + severity/title, preserve the
@@ -276,14 +306,17 @@ class StateStore:
         a NEW marker vs an age, and to know the current status.
         """
         now_s = _iso(now)
+        evidence = evidence or {}
         out: dict[str, dict] = {}
         for fingerprint, (severity, title) in seen.items():
+            fields = evidence.get(fingerprint)
+            details_json = json.dumps(dict(fields)) if fields else None
             existing = self.get(fingerprint)
             if existing is None:
                 self._conn.execute(
                     "INSERT INTO findings (fingerprint, first_seen, last_seen, "
-                    "last_severity, last_title, status) VALUES (?, ?, ?, ?, ?, ?)",
-                    (fingerprint, now_s, now_s, severity, title, OPEN),
+                    "last_severity, last_title, status, details) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (fingerprint, now_s, now_s, severity, title, OPEN, details_json),
                 )
                 out[fingerprint] = {
                     "is_new": True,
@@ -293,9 +326,9 @@ class StateStore:
                 continue
             status, snooze_until = self._refreshed_status(existing, now_s)
             self._conn.execute(
-                "UPDATE findings SET last_seen = ?, last_severity = ?, "
-                "last_title = ?, status = ?, snooze_until = ? WHERE fingerprint = ?",
-                (now_s, severity, title, status, snooze_until, fingerprint),
+                "UPDATE findings SET last_seen = ?, last_severity = ?, last_title = ?, status = ?, "
+                "snooze_until = ?, details = COALESCE(?, details) WHERE fingerprint = ?",
+                (now_s, severity, title, status, snooze_until, details_json, fingerprint),
             )
             out[fingerprint] = {
                 "is_new": False,
@@ -555,6 +588,11 @@ class StateStore:
 
 
 def _row_to_finding(row: sqlite3.Row) -> Finding:
+    details: dict[str, str] = {}
+    raw = row["details"]  # always present: _migrate adds the column on every open
+    if raw:
+        with contextlib.suppress(ValueError, TypeError):  # a hand-corrupted row degrades to {}
+            details = json.loads(raw)
     return Finding(
         fingerprint=row["fingerprint"],
         first_seen=row["first_seen"],
@@ -565,6 +603,7 @@ def _row_to_finding(row: sqlite3.Row) -> Finding:
         snooze_until=row["snooze_until"],
         note=row["note"],
         actor=row["actor"],
+        details=details,
     )
 
 

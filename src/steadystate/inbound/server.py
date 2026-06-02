@@ -23,7 +23,7 @@ from ..engine import build_report
 from ..reason.alert import Alert
 from ..reason.cost import roll_up, roll_up_by_period, scan_cost_line
 from ..reason.report import Report
-from ..reconcile_state import _fingerprints, seen_findings
+from ..reconcile_state import _fingerprints, finding_evidence, seen_findings
 from ..state import StateStore
 from ..sweep import render_sweep, sweep_targets
 from ..targets import load_targets_from_env
@@ -37,6 +37,7 @@ from .base import (
     MUTE,
     PENDING,
     PROBE,
+    RAW,
     TARGETS,
     Command,
     InboundAdapter,
@@ -186,6 +187,40 @@ def _render_findings(state_path: str) -> str:
     return "\n".join(lines)
 
 
+def _render_raw(fingerprint: str, state_path: str) -> str:
+    """The chat view of `raw <fingerprint>`: a finding's captured evidence -- the structured fields
+    a probe recorded (namespace, cluster, pod count, the failing pod's last log line, ...) plus when
+    it was first and last seen, so an operator can answer "what exactly broke, and was it during the
+    window I care about?". Accepts a unique fingerprint prefix (they're long). Read-only.
+
+    Each error keeps its own fingerprint, so on a grouped finding you ask `raw` of any one member's
+    fingerprint and get that instance's detail -- one example is enough."""
+    if not state_path or not Path(state_path).exists():
+        return "No findings recorded yet -- run a `probe`/`scan` first."
+    with StateStore(state_path) as store:
+        finding = store.get(fingerprint)
+        if finding is None:  # not an exact id -> try a unique prefix (a copy-pasted short fp)
+            matches = store.find_by_prefix(fingerprint)
+            if len(matches) > 1:
+                return f"'{fingerprint}' matches {len(matches)} findings -- use more of the fp."
+            finding = matches[0] if matches else None
+    if finding is None:
+        return f"Unknown fingerprint '{fingerprint}'. Run `findings` to list them."
+    lines = [
+        finding.last_title,
+        f"  fingerprint   {finding.fingerprint}",
+        f"  status        {finding.status}   severity {finding.last_severity}",
+        f"  first seen    {finding.first_seen}",
+        f"  last seen     {finding.last_seen}",
+    ]
+    if finding.details:
+        lines.append("  -- evidence --")
+        lines += [f"  {key:<14} {value}" for key, value in finding.details.items()]
+    else:  # a finding recorded before evidence capture, or a type that carries none
+        lines.append("  (no raw evidence captured -- re-run a `probe`/`scan` to capture it)")
+    return "\n".join(lines)
+
+
 def _render_history(state_path: str) -> str:
     """The chat view of `steadystate history`: the remediation audit log, newest first -- what ran
     against real infra, who decided, and the outcome. Read-only."""
@@ -208,7 +243,7 @@ def _record_probe_findings(report: Report, state_path: str) -> None:
     with contextlib.suppress(Exception):
         Path(state_path).parent.mkdir(parents=True, exist_ok=True)
         with StateStore(state_path) as store:
-            store.record(seen_findings(report), datetime.now(UTC))
+            store.record(seen_findings(report), datetime.now(UTC), finding_evidence(report))
 
 
 def _run_probe(target_name: str, state_path: str, flags: frozenset[str]) -> str:
@@ -297,6 +332,8 @@ def run_command(command: Command, state_path: str) -> str:
         return _render_cost(state_path, command.argument)
     if command.verb == FINDINGS:
         return _render_findings(state_path)
+    if command.verb == RAW:
+        return _render_raw(command.argument, state_path)
     if command.verb == HISTORY:
         return _render_history(state_path)
     with StateStore(state_path) as store:

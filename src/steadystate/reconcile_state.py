@@ -76,6 +76,21 @@ def seen_findings(report: Report) -> dict[str, tuple[str, str]]:
     return seen
 
 
+def finding_evidence(report: Report) -> dict[str, dict[str, str]]:
+    """Every fingerprint -> a small dict of structured fields to remember for the `raw <fp>` view.
+    A Symptom contributes the probe's structured evidence (namespace, cluster, pod count, the
+    failing pod's last log line, ...); a Drift contributes its change type + kind. Pure; a finding
+    with no fields is omitted (the store then keeps whatever it last had)."""
+    out: dict[str, dict[str, str]] = {}
+    for item in report.items:
+        for drift in item.drifts:
+            out[drift.fingerprint] = {"change": drift.change_type.value, "kind": drift.kind}
+        for symptom in item.symptoms:
+            if symptom.evidence:
+                out[symptom.fingerprint] = dict(symptom.evidence)
+    return out
+
+
 def reconcile(
     report: Report, store: StateStore, now: datetime | None = None
 ) -> list[ResolvedFinding]:
@@ -92,8 +107,8 @@ def reconcile(
     #    count as "present", so a finding that drops below the Event bar isn't read as resolved).
     seen = seen_findings(report)
 
-    # 2. Record + read back per-fingerprint state.
-    state = store.record(seen, now)
+    # 2. Record + read back per-fingerprint state (plus structured evidence for the `raw` view).
+    state = store.record(seen, now, finding_evidence(report))
 
     # 3. Annotate + suppress Alerts (signals are left as a count).
     surviving: list[Alert] = []
