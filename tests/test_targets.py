@@ -31,10 +31,18 @@ def test_load_keeps_explicit_label_and_probe(tmp_path):
     assert target.label == "prod" and target.probe == "argocd"
 
 
-def test_load_rejects_a_target_missing_required_fields(tmp_path):
-    path = _write(tmp_path, {"bad": {"source": "k8s"}})  # no path
+def test_load_rejects_a_target_missing_source(tmp_path):
+    # source is the one required field; path is optional now (a live target reads live state).
+    path = _write(tmp_path, {"bad": {"path": "/m"}})  # no source
     with pytest.raises(ValueError, match="needs at least"):
         load_targets(path)
+
+
+def test_load_accepts_a_pathless_live_target_with_a_context(tmp_path):
+    path = _write(tmp_path, {"prod": {"source": "k8s-live", "context": "prod-cluster"}})
+    assert load_targets(path)["prod"] == Target(
+        name="prod", source="k8s-live", path="", label="prod", probe="auto", context="prod-cluster"
+    )
 
 
 def test_load_rejects_a_non_object_document(tmp_path):
@@ -73,6 +81,37 @@ def test_target_issues_flags_every_problem():
     assert any("unknown source" in i for i in issues)
     assert any("unknown probe" in i for i in issues)
     assert any("path not found" in i for i in issues)
+
+
+def test_target_issues_skips_path_check_for_a_pathless_live_target():
+    from steadystate.targets import target_issues
+
+    # A live target has no path; path_exists would say False, but a pathless source must not be
+    # flagged "path not found" -- its reachability is the probe's job at run time.
+    t = Target("prod", "k8s-live", context="prod-cluster")
+    issues = target_issues(
+        t, {"k8s-live"}, {"auto", "none"}, lambda _p: False, frozenset({"k8s-live"})
+    )
+    assert issues == []
+
+
+# -- target_to_spec: the round-trip back to JSON ----------------------------------------------
+
+
+def test_spec_round_trips_a_live_target_with_context_and_no_path():
+    from steadystate.targets import target_to_spec
+
+    t = Target("prod", "k8s-live", label="prod", context="prod-cluster")
+    spec = target_to_spec(t)
+    assert spec == {"source": "k8s-live", "context": "prod-cluster"}  # no path, label==name omitted
+    assert "path" not in spec
+
+
+def test_spec_omits_context_for_a_file_target():
+    from steadystate.targets import target_to_spec
+
+    spec = target_to_spec(Target("x", "k8s", "/m", "x"))
+    assert spec == {"source": "k8s", "path": "/m"} and "context" not in spec
 
 
 # -- CLI: `scan --target` and the `targets` command -------------------------------------------
@@ -160,3 +199,49 @@ def test_targets_no_file(monkeypatch, tmp_path):
     result = _run(monkeypatch, tmp_path, ["targets"])  # empty dir
     assert result.exit_code == 0
     assert "no targets file" in result.output
+
+
+# -- live (k8s-live) targets: a target = a cluster --------------------------------------------
+
+
+def _live_targets_dir(tmp_path):
+    (tmp_path / "targets.json").write_text(
+        json.dumps({"prod": {"source": "k8s-live", "context": "prod-cluster"}})
+    )
+    return tmp_path
+
+
+def test_scan_live_target_threads_its_context_to_kubectl(monkeypatch, tmp_path):
+    # `scan --target prod` resolves the live target and aims kubectl at its context -- no path.
+    seen: list[list[str]] = []
+    monkeypatch.setattr(
+        "steadystate.sources.k8s.run_tool",
+        lambda argv, **kw: seen.append(argv) or '{"kind": "List", "items": []}',
+    )
+    result = _run(
+        monkeypatch, _live_targets_dir(tmp_path), ["scan", "--target", "prod", "--stateless"]
+    )
+    assert result.exit_code == 0, result.output
+    assert seen and all(a[-2:] == ["--context", "prod-cluster"] for a in seen)
+
+
+def test_scan_live_target_explicit_context_wins(monkeypatch, tmp_path):
+    seen: list[list[str]] = []
+    monkeypatch.setattr(
+        "steadystate.sources.k8s.run_tool",
+        lambda argv, **kw: seen.append(argv) or '{"kind": "List", "items": []}',
+    )
+    result = _run(
+        monkeypatch,
+        _live_targets_dir(tmp_path),
+        ["scan", "--target", "prod", "--context", "staging", "--stateless"],
+    )
+    assert result.exit_code == 0, result.output
+    assert seen and all(a[-1] == "staging" for a in seen)  # --context overrides the target's
+
+
+def test_targets_check_ok_for_a_pathless_live_target(monkeypatch, tmp_path):
+    result = _run(monkeypatch, _live_targets_dir(tmp_path), ["targets", "--check"])
+    assert result.exit_code == 0  # no path, but a live target isn't flagged
+    assert "[ok]" in result.output
+    assert "context=prod-cluster" in result.output  # the cluster it reaches is shown

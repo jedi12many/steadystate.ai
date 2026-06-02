@@ -363,10 +363,12 @@ def scan(
             raise typer.BadParameter("pass a path or --target, not both.")
         tgt = _resolve_target(target)
         source = tgt.source
-        path = Path(tgt.path)
+        # A live target (k8s-live) has no path -- give the factory the placeholder it ignores.
+        path = Path(tgt.path) if tgt.path else Path(".")
         label = label or tgt.label
         if probe == "none":
             probe = tgt.probe
+        context = context or tgt.context  # explicit --context still wins
     elif path is None:
         # A pathless source (k8s-live) reads live state itself -- no file/dir to point at. Give the
         # factory a harmless placeholder it ignores; everything else still needs a path or --target.
@@ -675,9 +677,13 @@ def targets(
     typer.echo(f"{len(registry)} target(s) in {target_file}:")
     problems = 0
     for name, entry in sorted(registry.items()):
-        line = f"  {name:<26} {entry.source:<14} {entry.path}"
+        # A live target shows its context (the cluster it reaches); a file target shows its path.
+        locator = f"context={entry.context}" if entry.context else entry.path
+        line = f"  {name:<26} {entry.source:<14} {locator}"
         if check:
-            issues = target_issues(entry, known_sources, known_probes, lambda p: Path(p).exists())
+            issues = target_issues(
+                entry, known_sources, known_probes, lambda p: Path(p).exists(), PATHLESS_SOURCES
+            )
             if issues:
                 problems += 1
                 line += "  [" + "; ".join(issues) + "]"

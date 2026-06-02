@@ -155,7 +155,10 @@ def _render_targets() -> str:
     if not targets:
         return "No targets configured (set STEADYSTATE_TARGETS on the listener)."
     lines = [f"{len(targets)} target(s):"]
-    lines += [f"  {name:<14} {t.source:<14} {t.label}" for name, t in sorted(targets.items())]
+    lines += [
+        f"  {name:<14} {t.source:<14} {('context=' + t.context) if t.context else t.label}"
+        for name, t in sorted(targets.items())
+    ]
     return "\n".join(lines)
 
 
@@ -201,7 +204,15 @@ def _run_probe(target_name: str, state_path: str, flags: frozenset[str]) -> str:
     if target is None:
         return f"Unknown target '{target_name}'. Known: {', '.join(sorted(targets))}."
     try:
-        report = build_report(target.source, Path(target.path), probe="auto", label=target.label)
+        # A live target (k8s-live) has no path -- Path("") is "." which its source ignores; the
+        # context aims the source + probe at that one cluster.
+        report = build_report(
+            target.source,
+            Path(target.path),
+            probe="auto",
+            label=target.label,
+            context=target.context,
+        )
     except Exception as exc:  # a summon must report the failure, never crash the listener
         return f"Probe of '{target_name}' failed: {exc}"
     alerts = list(report.alerts)
