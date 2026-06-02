@@ -43,16 +43,51 @@ class PodHealth:
     restarts: int
 
 
+def _controller(pod: dict) -> tuple[str, str]:
+    """The pod's controller owner as ``(name, kind)`` -- the ReplicaSet for a Deployment, the
+    StatefulSet/DaemonSet/Job directly -- or ``("", "")`` for a bare pod with no controller (then
+    the caller falls back to the pod's own name). Pure."""
+    for ref in (pod.get("metadata") or {}).get("ownerReferences") or []:
+        if isinstance(ref, dict) and ref.get("controller"):
+            return str(ref.get("name") or ""), str(ref.get("kind") or "")
+    return "", ""
+
+
+def _owner_belongs(name: str, kind: str, workload: str) -> bool:
+    """Does a controller ``(name, kind)`` belong to ``workload``? A Deployment's pods are owned by a
+    ReplicaSet ``<workload>-<pod-template-hash>`` (the hash is a single dash-free segment) -- so we
+    require that exact shape, which distinguishes ``squid`` from a sibling ``squid-proxy`` (whose RS
+    leaves the suffix ``proxy-<hash>``, not a bare hash). Every other controller (StatefulSet,
+    DaemonSet, Job) owns its pods *directly*, so the owner name IS the workload. Pure."""
+    if kind == "ReplicaSet":
+        return name.startswith(f"{workload}-") and "-" not in name[len(workload) + 1 :]
+    return name == workload
+
+
+def _pod_belongs(pod: dict, workload: str) -> bool:
+    """Whether ``pod`` is part of ``workload``. Precise when the pod has a controller owner (the
+    normal case -- match the ReplicaSet/StatefulSet/DaemonSet, so ``squid`` never claims
+    ``squid-proxy``'s pods); falls back to the legacy name-prefix match for a bare pod with no
+    controller. Pure."""
+    name, kind = _controller(pod)
+    if name:
+        return _owner_belongs(name, kind, workload)
+    pod_name = (pod.get("metadata") or {}).get("name") or ""
+    return pod_name == workload or pod_name.startswith(f"{workload}-")
+
+
 def unhealthy_pods(pods: dict, workload: str) -> list[PodHealth]:
     """The unhealthy pods belonging to ``workload`` in a ``kubectl get pods -o json`` document.
 
-    A pod belongs to the workload if its name is the workload or starts with ``<workload>-``
-    (the Deployment/ReplicaSet/StatefulSet/Job naming). Unhealthy = a container stuck in a known
-    bad waiting state, a Failed phase, or a restart count over the threshold. Pure + testable."""
+    A pod belongs to the workload via its controller ``ownerReference`` (the ReplicaSet for a
+    Deployment, the StatefulSet/DaemonSet directly) -- so two deployments in one namespace with
+    overlapping names (``squid`` / ``squid-proxy``) never claim each other's pods; a bare pod with
+    no controller falls back to the name-prefix match. Unhealthy = a container stuck in a known bad
+    waiting state, a Failed phase, or a restart count over the threshold. Pure + testable."""
     out: list[PodHealth] = []
     for pod in pods.get("items") or []:
         name = (pod.get("metadata") or {}).get("name") or ""
-        if name != workload and not name.startswith(f"{workload}-"):
+        if not _pod_belongs(pod, workload):
             continue
         status = pod.get("status") or {}
         container_statuses = status.get("containerStatuses") or []
