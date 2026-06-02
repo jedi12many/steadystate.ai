@@ -60,19 +60,18 @@ the sweep is memoryful (new/recurring/resolved) run after run.
 ## 5. (Optional) schedule it — outbound only, no inbound endpoint
 
 A bastion behind a firewall can still **push** alerts without exposing a port: a cron entry that
-scans each cluster to your surface. (The fleet `sweep` is a console digest today — for outward
-alerting, scan per target with `--to`; `sweep --to` is a natural follow-up.)
+sweeps the whole fleet to your surface. `sweep --to` pushes every cluster's fires (each labeled
+with its cluster) in one command, and the digest still prints to the cron log:
 
 ```sh
-# /etc/cron.d/steadystate  -- hourly, push each cluster's fires to Slack
-0 * * * *  ops  KUBECONFIG=/home/ops/.kube/merged  bash -lc '\
-  for ctx in prod-cluster stg-cluster gke-eu-prod; do \
-    steadystate scan --target "$ctx" --to slack --state /home/ops/.steadystate/state.db ; \
-  done'
+# /etc/cron.d/steadystate  -- hourly, push the fleet's fires to Slack
+0 * * * *  ops  KUBECONFIG=/home/ops/.kube/merged  \
+  steadystate sweep --to slack --state /home/ops/.steadystate/state.db
 ```
 
 Set the surface's env var (`SLACK_WEBHOOK_URL` / `TEAMS_WEBHOOK_URL` / …) in the cron environment.
-Outbound HTTPS only — nothing listens.
+Outbound HTTPS only — nothing listens. (Prefer one cluster at a time? `scan --target <ctx> --to
+slack` works too.)
 
 ## 6. (Optional) chat-back — the listener as a systemd service
 
@@ -103,7 +102,7 @@ expose anything, stick to the local `chat` REPL (step 4) and the scheduled push 
 | **Shape** | a process on a Linux host you already use to reach the clusters — nothing in-cluster |
 | **Source** | `k8s-live` (the cluster's own workloads, health-checked) |
 | **Secrets** | a read-only (`view`) kubeconfig per cluster, on the host |
-| **Surface** | `chat` REPL + `sweep` (interactive) · `scan --target ... --to slack` (scheduled push) · the listener (chat-back) |
+| **Surface** | `chat` REPL + `sweep` (interactive) · `sweep --to slack` (scheduled push) · the listener (chat-back) |
 | **State** | a local SQLite file — memoryful sweeps with no infra |
 | **Act** | none — `k8s-live` is observe-only |
 
