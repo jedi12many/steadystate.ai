@@ -58,7 +58,11 @@ COMMANDS: dict[str, tuple[str, str]] = {
         "failing pod's last log) plus when it was first/last seen",
     ),
     HISTORY: ("history", "show the remediation audit log (newest first)"),
-    MUTE: ("mute <fingerprint>", "silence a finding (e.g. a benign probe result) on future scans"),
+    MUTE: (
+        "mute <fingerprint>",
+        "silence a finding on future scans -- a single fp, or a correlated group's `mute-all` fp "
+        "to silence the whole group at once",
+    ),
     APPROVE: ("approve <fingerprint>", "apply a pending remediation (guardrailed)"),
     DECLINE: ("decline <fingerprint>", "dismiss a pending remediation"),
 }

@@ -23,7 +23,7 @@ from ..engine import build_report
 from ..reason.alert import Alert
 from ..reason.cost import roll_up, roll_up_by_period, scan_cost_line
 from ..reason.report import Report
-from ..reconcile_state import _fingerprints, finding_evidence, seen_findings
+from ..reconcile_state import _fingerprints, alert_suppressed, finding_evidence, seen_findings
 from ..state import StateStore
 from ..sweep import render_sweep, sweep_targets
 from ..targets import load_targets_from_env
@@ -108,6 +108,10 @@ def _summarize(name: str, alerts: list[Alert], suppressed: int = 0, verbose: boo
             lines.append(f"           {a.why_it_matters}")
         if a.recommended_action and not verbose:  # the one-line fix, when there is one
             lines.append(f"           fix: {a.recommended_action}")
+        # On a correlated group, lead with the one 'mute-all' key -- mute it to silence the whole
+        # group at once (each member still keeps its own fp below, so detail isn't lost).
+        if a.correlation_fingerprint:
+            lines.append(f"           mute-all {a.correlation_fingerprint}  (silences this group)")
         # The fingerprint(s) so the finding is actionable -- `mute <fp>` a benign one, and a
         # diagnosis Alert (drift + symptom) lists both, since suppressing it needs both muted.
         for fp in _fingerprints(a):
@@ -143,16 +147,15 @@ def _render_cost(state_path: str, period: str) -> str:
 
 
 def _honor_mutes(alerts: list[Alert], state_path: str) -> tuple[list[Alert], int]:
-    """Drop alerts whose fingerprints are ALL muted or actively snoozed -- the exact rule the
-    stateful reconcile uses (reconcile_state), but READ-ONLY: it reads the suppression state and
-    writes nothing. Returns (kept, suppressed_count)."""
+    """Drop alerts the operator has silenced -- the group's correlation fp muted, or every member
+    muted/snoozed -- the exact rule the stateful reconcile uses (alert_suppressed), but READ-ONLY:
+    it reads the suppression state and writes nothing. Returns (kept, suppressed_count)."""
     kept: list[Alert] = []
     suppressed = 0
     now = datetime.now(UTC)
     with StateStore(state_path) as store:
         for alert in alerts:
-            fps = _fingerprints(alert)
-            if fps and all(store.is_suppressed(fp, now) for fp in fps):
+            if alert_suppressed(alert, store, now):
                 suppressed += 1
             else:
                 kept.append(alert)

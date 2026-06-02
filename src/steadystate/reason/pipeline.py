@@ -12,6 +12,7 @@ Events still fold into one Alert, not singleton noise.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
@@ -109,7 +110,17 @@ def _merge_symptoms(key: tuple[str, str, str], symptoms: list[Symptom]) -> Alert
         llm_backed=False,
         flagged_by=symptoms[0].provenance.source,
         symptoms=symptoms,
+        correlation_fingerprint=_correlation_fingerprint(key),
     )
+
+
+def _correlation_fingerprint(key: tuple[str, str, str]) -> str:
+    """A stable 'mute-all' fingerprint for a correlated group -- keyed on the grouping key
+    ``(kind, name, category)``, NOT on which places are present, so it's the same across scans even
+    as instances come and go. The ``correlated|`` prefix keeps it disjoint from a member's
+    ``source|identity|category`` fingerprint, so the two key spaces never collide. Pure."""
+    raw = "correlated|" + "|".join(key)
+    return hashlib.sha256(raw.encode()).hexdigest()
 
 
 # An Event awaiting correlation: the drift, its deterministic score, the domain that

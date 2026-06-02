@@ -394,6 +394,26 @@ def test_summarize_shows_the_description_by_default_and_evidence_when_verbose():
     assert "missing DB_URL" in verbose  # the full per-symptom evidence
 
 
+def test_summarize_shows_a_correlated_groups_mute_all_key():
+    from steadystate.inbound.server import _summarize
+
+    alert = Alert(
+        title="squid is CrashLoopBackOff in 2 place(s)",
+        severity=Severity.HIGH,
+        drifts=[],
+        why_it_matters="2 instances across: prod, stg.",
+        layer=Layer.ALERT,
+        correlation_fingerprint="d" * 64,
+    )
+    out = _summarize("prod", [alert])
+    assert "mute-all dddddddd" in out and "silences this group" in out  # the one key to mute it all
+    # an ordinary, single-finding alert shows no mute-all line.
+    plain = Alert(
+        title="x", severity=Severity.LOW, drifts=[], why_it_matters="y", layer=Layer.ALERT
+    )
+    assert "mute-all" not in _summarize("prod", [plain])
+
+
 def test_run_command_probe_unknown_target_lists_the_known_ones(monkeypatch, tmp_path):
     monkeypatch.setenv(
         "STEADYSTATE_TARGETS",

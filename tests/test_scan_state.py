@@ -114,6 +114,38 @@ def test_partially_suppressed_alert_survives_and_shows_status():
     assert report.alerts[0].status == "muted"
 
 
+def test_muting_the_correlation_fingerprint_silences_the_whole_group():
+    # A correlated group carries one `correlation_fingerprint` -- muting it drops the whole group
+    # at once, while muting a single member leaves the group firing. Detail isn't lost: each
+    # member keeps its own fingerprint either way.
+    store = StateStore()
+    d1, d2 = _drift(identity="aws_s3_bucket.a"), _drift(identity="aws_s3_bucket.b")
+    corr = "c" * 64
+
+    def grouped() -> Report:
+        alert = Alert(
+            title="2 correlated",
+            severity=Severity.HIGH,
+            drifts=[d1, d2],
+            why_it_matters="grouped",
+            layer=Layer.ALERT,
+            correlation_fingerprint=corr,
+        )
+        return _report(alert)
+
+    # muting ONE member leaves the group firing (the other is still live).
+    store.mute(d1.fingerprint, None, "alice", _t(1))
+    survives = grouped()
+    reconcile(survives, store, now=_t(2))
+    assert len(survives.alerts) == 1
+
+    # muting the correlation fp silences the whole group, even though d2 was never muted.
+    store.mute(corr, None, "alice", _t(2))
+    silenced = grouped()
+    reconcile(silenced, store, now=_t(3))
+    assert silenced.alerts == []
+
+
 def test_resolved_finding_is_reported_once():
     store = StateStore()
     drift = _drift()
