@@ -16,6 +16,7 @@ from rich.table import Table
 from .act import EXECUTORS, build_executor
 from .act.approve import apply_pending, decline_pending
 from .act.base import Proposer
+from .act.cleanup import record_cleanups
 from .act.deliver import build_deliveries
 from .catalog import gather_catalog, render_console, render_html
 from .discover import (
@@ -468,6 +469,9 @@ def scan(
                 recorded = _record_suggestions(store, source, path, report, now, label or None)
                 if autonomy == "auto":  # ...and, on auto, apply them through the same guardrails
                     _auto_apply(store, recorded)
+            # Offer approvable evicted-pod cleanups (approve-gated, never auto-run) -- independent
+            # of --autonomy, since the cleanup is a safe delete of dead tombstones a human OKs.
+            record_cleanups(store, report, now)
     if json_out:  # the machine-readable form: stdout is pure JSON, no surfaces, no spend footer
         payload = report_to_dict(report, resolved=resolved, spend=_spend_dict(report.llm_calls))
         typer.echo(json.dumps(payload, indent=2))
