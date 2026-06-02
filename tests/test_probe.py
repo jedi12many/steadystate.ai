@@ -112,6 +112,44 @@ def test_matches_only_workload_pods_by_prefix():
     assert [p.name for p in unhealthy_pods(pods, "web")] == ["web-abc"]
 
 
+def _owned_pod(
+    name: str, controller: str, *, kind: str = "ReplicaSet", waiting: str = "CrashLoopBackOff"
+) -> dict:
+    """A pod with a controller ownerReference (the ReplicaSet for a Deployment, or the
+    StatefulSet/DaemonSet directly) -- the real shape `kubectl get pods -o json` returns."""
+    pod = _pod(name, waiting=waiting)
+    pod["metadata"]["ownerReferences"] = [{"kind": kind, "name": controller, "controller": True}]
+    return pod
+
+
+def test_overlapping_names_do_not_claim_each_others_pods():
+    # Two deployments in ONE namespace: squid and squid-proxy. Their pods are named by their own
+    # ReplicaSets (squid-<hash> / squid-proxy-<hash>). Matching on the controller, squid must NOT
+    # claim squid-proxy's pod (whose owner suffix is `proxy-<hash>`, not a bare hash).
+    pods = _pods(
+        _owned_pod("squid-7d8f9-aa", "squid-7d8f9"),
+        _owned_pod("squid-proxy-1a2b3-bb", "squid-proxy-1a2b3"),
+    )
+    assert [p.name for p in unhealthy_pods(pods, "squid")] == ["squid-7d8f9-aa"]
+    assert [p.name for p in unhealthy_pods(pods, "squid-proxy")] == ["squid-proxy-1a2b3-bb"]
+
+
+def test_statefulset_pod_owner_is_the_workload_directly():
+    # A StatefulSet/DaemonSet pod's controller IS the workload (no ReplicaSet in between), so the
+    # sibling `db-proxy` StatefulSet must not be claimed by workload `db`.
+    pods = _pods(
+        _owned_pod("db-0", "db", kind="StatefulSet"),
+        _owned_pod("db-proxy-0", "db-proxy", kind="StatefulSet"),
+    )
+    assert [p.name for p in unhealthy_pods(pods, "db")] == ["db-0"]
+
+
+def test_bare_pod_without_a_controller_falls_back_to_name_prefix():
+    # No ownerReferences -> the legacy name-prefix match still applies (unchanged behavior).
+    pods = _pods(_pod("squid-x", waiting="CrashLoopBackOff"))
+    assert [p.name for p in unhealthy_pods(pods, "squid")] == ["squid-x"]
+
+
 def test_aggregates_restarts_across_containers():
     pod = {
         "metadata": {"name": "web-1"},
