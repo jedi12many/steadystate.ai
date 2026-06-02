@@ -191,6 +191,41 @@ def test_chat_probe_all_runs_a_stateful_sweep(monkeypatch, tmp_path):
     assert "Fleet sweep" in out and "1 on fire" in out
 
 
+def test_chat_probe_all_shows_finding_detail_and_honors_verbose(monkeypatch, tmp_path):
+    # the bug: `probe all` printed only a tally + a bare title -- no description, no fingerprints,
+    # and `verbose` did nothing. The digest must read like a single probe: WHAT is wrong + a fp.
+    import steadystate.sweep as sweep
+    from steadystate.inbound.base import command_from_text
+    from steadystate.inbound.server import run_command
+
+    tf = tmp_path / "targets.json"
+    tf.write_text(
+        json.dumps(
+            {
+                "prod": {"source": "k8s-live", "context": "prod-cluster"},
+                "stg": {"source": "k8s-live", "context": "stg-cluster"},
+            }
+        )
+    )
+    monkeypatch.setenv(TARGETS_ENV, str(tf))
+    # the same workload crash-looping in two clusters -> one correlated "in 2 place(s)" finding.
+    reports = {
+        "prod-cluster": _fire_report("prod-cluster/apps/Deployment/team-a/squid"),
+        "stg-cluster": _fire_report("stg-cluster/apps/Deployment/team-a/squid"),
+    }
+    monkeypatch.setattr(sweep, "build_report", _build_report(reports))
+
+    out = run_command(command_from_text("probe all", "tester"), "")
+    assert "squid is CrashLoopBackOff in 2 place(s)" in out  # the correlated title
+    assert "instances of Deployment squid" in out  # the DESCRIPTION, not just the title
+    assert "fp " in out  # the fingerprint(s) -- so the finding stays muteable
+    assert "1 pod" not in out  # the per-symptom evidence is verbose-only
+
+    verbose = run_command(command_from_text("probe all verbose", "tester"), "")
+    assert verbose != out  # the flag now actually changes the output
+    assert "1 pod" in verbose  # verbose swaps the description for the full per-symptom evidence
+
+
 # -- sweep --to: push the fleet's fires to surfaces -------------------------------------------
 
 
