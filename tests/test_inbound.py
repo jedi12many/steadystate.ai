@@ -22,6 +22,8 @@ from steadystate.inbound.base import (
     PENDING,
     PROBE,
     RAW,
+    SEND,
+    SURFACES_LIST,
     TARGETS,
     Command,
     command_from_text,
@@ -150,6 +152,8 @@ def test_render_help_lists_every_command():
         COST,
         FINDINGS,
         RAW,
+        SURFACES_LIST,
+        SEND,
         HISTORY,
         MUTE,
         APPROVE,
@@ -293,6 +297,78 @@ def test_run_command_raw_shows_evidence_and_timestamps(tmp_path):
     assert "2026-06-02T14:30" in msg  # first/last seen -- the window the operator asked about
 
     assert "Unknown fingerprint" in run_command(Command(RAW, "amy", "deadbeef"), db)
+
+
+# -- surfaces / send (dispatch a finding to an alert surface) -------------------
+
+
+def test_send_and_surfaces_grammar_and_help():
+    assert command_from_text("send fp7 servicenow", "amy") == Command(
+        SEND, "amy", "fp7", argument2="servicenow"
+    )
+    # a natural "send <fp> to <surface>" works -- the surface is the last token.
+    assert command_from_text("send fp7 to slack", "amy") == Command(
+        SEND, "amy", "fp7", argument2="slack"
+    )
+    assert command_from_text("send fp7", "amy") is None  # needs both a fp and a surface
+    assert command_from_text("surfaces", "amy") == Command(SURFACES_LIST, "amy")
+    text = render_help()
+    assert "send <fingerprint> <surface>" in text and "surfaces" in text
+
+
+def test_surfaces_lists_targets_and_marks_configured(monkeypatch):
+    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
+    out = run_command(Command(SURFACES_LIST, "amy"), ":memory:")
+    assert "console" in out and "configured" in out  # console is always available
+    assert "slack" in out and "not configured" in out  # no webhook set -> not configured
+
+
+def _record(db: str, fp: str) -> None:
+    with StateStore(db) as store:
+        store.record(
+            {fp: ("high", "squid is CrashLoopBackOff in prod/team-a")},
+            datetime(2026, 6, 2, 14, 30, tzinfo=UTC),
+            {fp: {"namespace": "team-a", "last_log": "missing DB_URL"}},
+        )
+
+
+def test_send_dispatches_a_finding_to_a_configured_surface(monkeypatch, tmp_path):
+    from steadystate.inbound import server
+
+    sent: list = []
+
+    class _Fake:
+        name = "fake"
+
+        def emit(self, report, resolved=None):
+            sent.append(report)
+
+    monkeypatch.setitem(server.SURFACES, "fake", _Fake)  # no capability entry -> treated as ready
+    db = str(tmp_path / "s.db")
+    fp = "a" * 64
+    _record(db, fp)
+
+    msg = run_command(Command(SEND, "amy", fp[:10], argument2="fake"), db)  # a prefix resolves
+    assert "Sent" in msg and "fake" in msg
+    assert len(sent) == 1
+    alert = sent[0].alerts[0]
+    assert alert.title == "squid is CrashLoopBackOff in prod/team-a"
+    assert alert.correlation_fingerprint == fp  # carries the fp so a surface can dedup on it
+    assert "missing DB_URL" in alert.why_it_matters  # the evidence rides along
+
+
+def test_send_rejects_unknown_surface_unconfigured_surface_and_unknown_fp(monkeypatch, tmp_path):
+    monkeypatch.delenv("STEADYSTATE_SERVICENOW_INSTANCE", raising=False)
+    db = str(tmp_path / "s.db")
+    fp = "a" * 64
+    _record(db, fp)
+    assert "Unknown surface" in run_command(Command(SEND, "amy", fp, argument2="nope"), db)
+    # a real but unconfigured surface refuses rather than silently sending nothing.
+    msg = run_command(Command(SEND, "amy", fp, argument2="servicenow"), db)
+    assert "isn't configured" in msg
+    assert "Unknown fingerprint" in run_command(
+        Command(SEND, "amy", "deadbeef", argument2="console"), db
+    )
 
 
 def test_run_command_approve_routes_to_core(monkeypatch, tmp_path):
