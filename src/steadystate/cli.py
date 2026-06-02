@@ -45,7 +45,7 @@ from .reason.cost import roll_up, roll_up_by_period, scan_cost_line
 from .reason.enrich import ENRICHERS
 from .reason.pipeline import CORRELATORS
 from .reconcile_state import reconcile
-from .sources import CAPABILITIES, DRIFT_SOURCES, build_drift_source
+from .sources import CAPABILITIES, DRIFT_SOURCES, PATHLESS_SOURCES, build_drift_source
 from .sources.base import SourceError
 from .state import PendingAction, StateStore
 from .targets import (
@@ -333,6 +333,13 @@ def scan(
         help="Environment label for this scan (e.g. prod-aws, staging) -- shown on every alert "
         "so an operator knows which environment it came from. Omit for none.",
     ),
+    context: str = typer.Option(
+        "",
+        "--context",
+        help="Aim a live source at a named backend context -- today a kube context, so "
+        "`--source k8s-live --context <ctx>` probes that one cluster for fires (a target = a "
+        "cluster). Ignored by sources that read a file/dir. Omit for the ambient context.",
+    ),
     cost: bool = typer.Option(
         False,
         "--cost",
@@ -361,7 +368,12 @@ def scan(
         if probe == "none":
             probe = tgt.probe
     elif path is None:
-        raise typer.BadParameter("give a path to scan, or --target <name>.")
+        # A pathless source (k8s-live) reads live state itself -- no file/dir to point at. Give the
+        # factory a harmless placeholder it ignores; everything else still needs a path or --target.
+        if source in PATHLESS_SOURCES:
+            path = Path(".")
+        else:
+            raise typer.BadParameter("give a path to scan, or --target <name>.")
     if autonomy not in ("observe", "suggest", "auto"):
         raise typer.BadParameter("autonomy must be: observe | suggest | auto")
     if autonomy == "auto" and stateless:
@@ -395,6 +407,7 @@ def scan(
             enrich=enrich,
             no_llm=no_llm,
             label=label,
+            context=context,
             llm_gate=gate,
         )
     except ValueError as exc:

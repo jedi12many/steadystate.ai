@@ -266,3 +266,60 @@ class KubernetesSource:
             tool="kubectl get",
         )
         return loads_json(stdout, tool="kubectl get")
+
+
+# The pod-owning controller kinds the live source enumerates -- exactly the workloads the kubectl
+# probe health-checks. Bare Pods are covered transitively (the probe reads each workload's pods).
+_LIVE_WORKLOAD_KINDS = "deployments,statefulsets,daemonsets"
+
+
+class KubernetesLiveSource:
+    """A live Kubernetes *health* source -- the "is anything on fire?" path for a cluster you can
+    reach but have no declared manifests for (locked-down IaC, cloud backend, templated repos).
+
+    It enumerates the cluster's own workloads (``kubectl get deploy,sts,ds -A``) and emits them as
+    BOTH declared and observed, so it yields **zero drift by construction** -- its job isn't drift,
+    it's to hand the kubectl probe a full list of live workloads to health-check. Point it at a
+    kube context (a target = a cluster) and ``--probe auto`` reports the crash-looping /
+    image-pull-failing / restart-storming workloads. Observe-only: it never acts.
+
+    The kubectl read happens in ``collect_declared`` (what the engine calls for the probe), so an
+    unreachable cluster surfaces as a loud `SourceError`, never a false "nothing on fire".
+    """
+
+    name = "k8s-live"
+    commands = Capabilities(
+        observe=(f"kubectl get {_LIVE_WORKLOAD_KINDS} --all-namespaces -o json",),
+    )
+
+    def __init__(self, observed: object | None = None, timeout: float = 30.0) -> None:
+        self._observed = observed  # injectable for tests; else read live
+        self._context: str | None = None
+        self.timeout = timeout
+
+    def use_context(self, context: str) -> None:
+        """Aim every kubectl read at this kube context (a target = a cluster). '' clears it (the
+        ambient current-context). This is the seam `build_report(context=...)` drives."""
+        self._context = context or None
+
+    def _workloads(self) -> list[Resource]:
+        doc = self._observed if self._observed is not None else self._run_kubectl()
+        return observed_resources_from_kubectl(doc)
+
+    def collect_declared(self) -> list[Resource]:
+        return self._workloads()
+
+    def collect_observed(self) -> list[Resource]:
+        return self._workloads()
+
+    def collect_drift(self) -> list[Drift]:
+        # declared == observed by construction -> always empty. The signal is health (Symptoms via
+        # the kubectl probe), not drift -- so this is an honest constant [], not a swallowed error.
+        return []
+
+    def _run_kubectl(self) -> object:
+        argv = ["kubectl", "get", _LIVE_WORKLOAD_KINDS, "--all-namespaces", "-o", "json"]
+        if self._context:
+            argv += ["--context", self._context]
+        stdout = run_tool(argv, timeout=self.timeout, tool="kubectl get")
+        return loads_json(stdout, tool="kubectl get")

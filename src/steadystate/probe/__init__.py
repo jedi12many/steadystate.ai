@@ -56,6 +56,7 @@ PROBE_CAPABILITIES: dict[str, Capabilities] = {
 # guards this so a key can never silently miss its source again.
 _AUTO: dict[str, str] = {
     "k8s": "kubectl",
+    "k8s-live": "kubectl",  # the live cluster-health source relies on the kubectl probe for fires
     "docker-compose": "docker",
     "argocd": "argocd",
 }
