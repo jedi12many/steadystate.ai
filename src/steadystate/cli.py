@@ -908,6 +908,33 @@ def _local_actor() -> str:
     return os.environ.get("USER") or os.environ.get("USERNAME") or "cli"
 
 
+def _load_history(history_path: Path) -> None:
+    """Give the chat prompt arrow-key recall + editing, seeded from a prior session's history.
+
+    Importing ``readline`` is enough to upgrade ``input()`` to a full line editor -- up/down through
+    prior commands, Ctrl-A/E, reverse-search -- so we just load the saved history. stdlib-only and
+    best-effort: ``readline`` ships with CPython on Linux/macOS but not on Windows, whose console
+    already provides its own up-arrow recall, so a missing module is a clean no-op, not an error."""
+    if sys.platform == "win32":  # no stdlib readline; the console gives its own recall
+        return
+    with contextlib.suppress(ImportError, OSError):  # readline not built; or no history yet
+        import readline
+
+        readline.read_history_file(history_path)
+        readline.set_history_length(1000)
+
+
+def _save_history(history_path: Path) -> None:
+    """Persist the session's commands so up-arrow recall survives a restart. Best-effort: a no-op
+    where readline is absent (Windows) or the file can't be written."""
+    if sys.platform == "win32":
+        return
+    with contextlib.suppress(ImportError, OSError):
+        import readline
+
+        readline.write_history_file(history_path)
+
+
 @app.command()
 def chat(state: Path = _STATE_OPTION) -> None:
     """A local chat client: drive the listener's command grammar from your terminal -- no Slack /
@@ -918,23 +945,28 @@ def chat(state: Path = _STATE_OPTION) -> None:
     Commands: `help`, `pending`, `probe <target>` (or `probe all` to sweep the fleet),
     `approve <fp>`, `decline <fp>`. Ctrl-D or `exit` to quit."""
     state.parent.mkdir(parents=True, exist_ok=True)
+    history_path = state.parent / "chat_history"
+    _load_history(history_path)  # up-arrow recall + editing, seeded from prior sessions
     actor = _local_actor()
     typer.echo("steadystate chat -- type `help`, or a command. Ctrl-D (or `exit`) to quit.")
-    while True:
-        try:
-            line = input("steadystate> ").strip()
-        except EOFError:
-            typer.echo("")
-            break
-        if not line:
-            continue
-        if line in ("exit", "quit"):
-            break
-        command = command_from_text(line, actor)
-        if command is None:
-            typer.echo("unrecognized -- type `help` for the commands this accepts.")
-            continue
-        typer.echo(run_command(command, str(state)))
+    try:
+        while True:
+            try:
+                line = input("steadystate> ").strip()
+            except EOFError:
+                typer.echo("")
+                break
+            if not line:
+                continue
+            if line in ("exit", "quit"):
+                break
+            command = command_from_text(line, actor)
+            if command is None:
+                typer.echo("unrecognized -- type `help` for the commands this accepts.")
+                continue
+            typer.echo(run_command(command, str(state)))
+    finally:
+        _save_history(history_path)  # persist so up-arrow survives a restart
 
 
 @app.command()

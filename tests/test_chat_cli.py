@@ -142,3 +142,44 @@ def test_chat_exits_cleanly_on_eof(runner, tmp_path):
 
     result = runner.invoke(app, ["chat", "--state", str(tmp_path / "s.db")], input="")
     assert result.exit_code == 0
+
+
+# -- command history (up-arrow recall) ------------------------------------------
+
+
+def test_chat_history_helpers_never_raise(tmp_path):
+    # The arrow-key history is best-effort: on Windows there's no stdlib readline (the console gives
+    # its own recall), so the load/save helpers must be clean no-ops, never crashing the REPL.
+    from steadystate.cli import _load_history, _save_history
+
+    _load_history(tmp_path / "absent_history")  # no file yet, maybe no readline -> no-op
+    _save_history(tmp_path / "absent_history")
+
+
+def test_chat_history_roundtrips_when_readline_present(tmp_path):
+    # Where readline exists (Linux/macOS, incl. the bastion/listener boxes), a command typed in one
+    # session is recalled (up-arrow) in the next -- proven by save -> clear -> load -> read back.
+    readline = pytest.importorskip("readline")
+    from steadystate.cli import _load_history, _save_history
+
+    history_path = tmp_path / "chat_history"
+    readline.clear_history()
+    readline.add_history("probe prod verbose")
+    _save_history(history_path)
+    assert history_path.exists()
+
+    readline.clear_history()
+    _load_history(history_path)
+    assert readline.get_history_item(1) == "probe prod verbose"
+
+
+def test_chat_writes_a_history_file_on_exit(runner, tmp_path):
+    # The REPL persists history under .steadystate/ next to the state db (a `finally`, so Ctrl-D
+    # still saves). On a readline-less platform this is a no-op -- so only assert when it's present.
+    from steadystate.cli import app
+
+    state = tmp_path / "state.db"
+    result = runner.invoke(app, ["chat", "--state", str(state)], input="help\nexit\n")
+    assert result.exit_code == 0
+    pytest.importorskip("readline")
+    assert (tmp_path / "chat_history").exists()
