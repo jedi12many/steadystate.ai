@@ -48,17 +48,17 @@ COMMANDS: dict[str, tuple[str, str]] = {
     TARGETS: ("targets", "list the probe targets this listener knows"),
     PENDING: ("pending", "show remediations awaiting approval, with their fingerprints"),
     PROBE: (
-        "probe <target>|all [verbose|cost|unmute|deep]",
+        "probe <target>|all [verbose|cost|unmute|deep|json]",
         "check a target's health now -- or `probe all` for the whole fleet; aliases "
         "`scan`/`refresh` (bare = the fleet); `verbose` shows evidence, `unmute` shows muted, "
-        "`deep` also scans pod logs for errors",
+        "`deep` also scans pod logs, `json` returns the report as JSON",
     ),
     COST: ("cost [day|week]", "show LLM spend -- a rollup, or a day/week trend"),
-    FINDINGS: ("findings", "list remembered findings: fingerprint, status, severity"),
+    FINDINGS: ("findings [json]", "list remembered findings: fingerprint, status, severity"),
     SHOW: (
-        "show <fingerprint>",
+        "show <fingerprint> [json]",
         "show a finding's captured evidence -- the fields (namespace, cluster, pod count, the "
-        "failing pod's last log) plus when it was first/last seen",
+        "failing pod's last log) plus when it was first/last seen; `json` returns it as JSON",
     ),
     HISTORY: ("history", "show the remediation audit log (newest first)"),
     SURFACES_LIST: (
@@ -94,13 +94,14 @@ _VERB_ALIASES = {"scan": PROBE, "refresh": PROBE}
 
 # Recognized modifier flags (with or without dashes) -> the canonical name a command checks for.
 # `verbose` = show the full evidence; `cost` = the per-caller spend breakdown; `unmute` = probe
-# bypasses mute/snooze suppression this run; `deep` = also scan pod logs for errors (costlier).
-# Adding a flag is one row here.
+# bypasses mute/snooze suppression this run; `deep` = also scan pod logs for errors (costlier);
+# `json` = return the result as JSON, not prose (for an agent -- probe/show/findings). One row each.
 _FLAG_ALIASES = {
     "unmute": "unmute", "--unmute": "unmute",
     "cost": "cost", "--cost": "cost",
     "verbose": "verbose", "--verbose": "verbose", "-v": "verbose",
     "deep": "deep", "--deep": "deep",
+    "json": "json", "--json": "json",
 }  # fmt: skip
 
 

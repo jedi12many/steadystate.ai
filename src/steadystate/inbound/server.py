@@ -27,6 +27,7 @@ from ..reason.alert import Alert, Layer, Severity
 from ..reason.cost import roll_up, roll_up_by_period, scan_cost_line
 from ..reason.report import Report
 from ..reconcile_state import _fingerprints, alert_suppressed, finding_evidence, seen_findings
+from ..serialize import finding_to_dict, report_to_dict
 from ..state import Finding, StateStore
 from ..sweep import render_sweep, sweep_targets
 from ..targets import load_targets_from_env
@@ -181,13 +182,28 @@ def _render_targets() -> str:
     return "\n".join(lines)
 
 
-def _render_findings(state_path: str) -> str:
+def _json(payload: object) -> str:
+    """A chat reply as JSON (for the `json` flag -- an agent-readable response)."""
+    return json.dumps(payload, indent=2)
+
+
+def _json_error(message: str) -> str:
+    """An error as JSON, so an agent in `json` mode always gets parseable output -- never a prose
+    error it has to special-case."""
+    return _json({"error": message})
+
+
+def _render_findings(state_path: str, flags: frozenset[str] = frozenset()) -> str:
     """The chat view of `steadystate findings`: every remembered finding, its fingerprint, status
-    (open/muted/snoozed/resolved) and last severity -- the keys for mute/approve. Read-only."""
+    (open/muted/snoozed/resolved) and last severity -- the keys for mute/approve. `json` returns the
+    list as JSON (for an agent). Read-only."""
+    want_json = "json" in flags
     if not state_path or not Path(state_path).exists():
-        return "No findings recorded yet."
+        return _json([]) if want_json else "No findings recorded yet."
     with StateStore(state_path) as store:
         rows = store.all_findings()
+    if want_json:
+        return _json([finding_to_dict(f) for f in rows])
     if not rows:
         return "No findings recorded yet."
     lines = [f"{len(rows)} finding(s):"]
@@ -195,20 +211,25 @@ def _render_findings(state_path: str) -> str:
     return "\n".join(lines)
 
 
-def _render_show(fingerprint: str, state_path: str) -> str:
+def _render_show(fingerprint: str, state_path: str, flags: frozenset[str] = frozenset()) -> str:
     """The chat view of `show <fingerprint>`: a finding's captured evidence -- the structured fields
     a probe recorded (namespace, cluster, pod count, the failing pod's last log line, ...) plus when
     it was first and last seen, so an operator can answer "what exactly broke, and was it during the
-    window I care about?". Accepts a unique fingerprint prefix (they're long). Read-only.
+    window I care about?". Accepts a unique fingerprint prefix (they're long); `json` returns the
+    finding as JSON. Read-only.
 
     Each error keeps its own fingerprint, so on a grouped finding you `show` any one member's
     fingerprint and get that instance's detail -- one example is enough."""
+    want_json = "json" in flags
     if not state_path or not Path(state_path).exists():
-        return "No findings recorded yet -- run a `probe`/`scan` first."
+        msg = "No findings recorded yet -- run a `probe`/`scan` first."
+        return _json_error(msg) if want_json else msg
     with StateStore(state_path) as store:
         finding, error = _lookup_finding(store, fingerprint)
     if finding is None:
-        return error
+        return _json_error(error) if want_json else error
+    if want_json:
+        return _json(finding_to_dict(finding))
     lines = [
         finding.last_title,
         f"  fingerprint   {finding.fingerprint}",
@@ -366,12 +387,16 @@ def _run_probe(target_name: str, state_path: str, flags: frozenset[str]) -> str:
     chat stays a trigger, not a bypass."""
     if target_name == "all":  # `probe all` -> the stateful fleet sweep, not a single summon
         return _run_sweep(state_path, flags)
+    want_json = "json" in flags
     try:
         report = probe_report(target_name, state_path, scan_logs="deep" in flags)
     except LookupError as exc:  # unresolvable target -> the human-readable reason it carries
-        return str(exc)
+        return _json_error(str(exc)) if want_json else str(exc)
     except Exception as exc:  # a summon must report the failure, never crash the listener
-        return f"Probe of '{target_name}' failed: {exc}"
+        msg = f"Probe of '{target_name}' failed: {exc}"
+        return _json_error(msg) if want_json else msg
+    if want_json:  # the agent-readable report -- the SAME shape as `scan --json`
+        return _json(report_to_dict(report, spend=None))
     alerts = list(report.alerts)
     suppressed = 0
     # Honor mutes by default, read-only -- but only when there's an existing store to read (opening
@@ -402,10 +427,13 @@ def _run_sweep(state_path: str, flags: frozenset[str]) -> str:
     a count. ``verbose`` swaps each finding's one-liner for its full evidence."""
     targets = load_targets_from_env()
     if not targets:
-        return "No targets configured -- run `discover --create` or set STEADYSTATE_TARGETS."
+        msg = "No targets configured -- run `discover --create` or set STEADYSTATE_TARGETS."
+        return _json_error(msg) if "json" in flags else msg
     result = sweep_targets(
         targets, state_path, datetime.now(UTC), stateless=not state_path, scan_logs="deep" in flags
     )
+    if "json" in flags:  # `probe all json` -> the fleet's (deduped) findings as the report shape
+        return _json(report_to_dict(result.report))
     # The tally; the CLI's terse "correlated" roll-up is replaced below by the full-detail findings.
     lines = render_sweep(result, correlated=False)
     if result.report.alerts:  # the deduped fleet findings, rendered like a single probe
@@ -429,9 +457,9 @@ def run_command(command: Command, state_path: str) -> str:
     if command.verb == COST:
         return _render_cost(state_path, command.argument)
     if command.verb == FINDINGS:
-        return _render_findings(state_path)
+        return _render_findings(state_path, command.flags)
     if command.verb == SHOW:
-        return _render_show(command.argument, state_path)
+        return _render_show(command.argument, state_path, command.flags)
     if command.verb == SURFACES_LIST:
         return _render_surfaces()
     if command.verb == SEND:
