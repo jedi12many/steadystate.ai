@@ -60,15 +60,23 @@ _LIVE: dict[str, Callable[[object], Callable[[], object]]] = {
 }
 
 
+# Probe-only sources: pathless sources whose drift path is a deliberate constant [] (no backend
+# I/O) -- the live read is the health *probe's* job, and a probe degrades to [] (never raises) by
+# design. They have no raising drift read to guard here, so they're exempt; a new one must be added
+# here on purpose. (ansible-live hosts the ansible health probe, like k8s-live hosts kubectl -- but
+# k8s-live's collect_declared still does a live kubectl read, so it stays in _LIVE.)
+_PROBE_ONLY: frozenset[str] = frozenset({"ansible-live"})
+
+
 def test_live_failure_wiring_covers_every_registered_source():
     # The guard's guard: if a source is registered but absent here, the parametrized test below
-    # would skip its live branch -- so require the two sets to match exactly.
-    assert set(_LIVE) == set(DRIFT_SOURCES), (
-        f"sources without live-failure wiring: {set(DRIFT_SOURCES) - set(_LIVE)}"
+    # would skip its live branch -- so require the two sets to match exactly (minus probe-only).
+    assert set(_LIVE) == set(DRIFT_SOURCES) - _PROBE_ONLY, (
+        f"sources without live-failure wiring: {set(DRIFT_SOURCES) - _PROBE_ONLY - set(_LIVE)}"
     )
 
 
-@pytest.mark.parametrize("name", sorted(DRIFT_SOURCES))
+@pytest.mark.parametrize("name", sorted(set(DRIFT_SOURCES) - _PROBE_ONLY))
 def test_every_live_source_raises_sourceerror_not_a_traceback(name, tmp_path, monkeypatch):
     # Make BOTH backends fail: subprocess sources hit a missing binary, HTTP sources an unreachable
     # server. Each source uses whichever it depends on; either way the scan must get a clean

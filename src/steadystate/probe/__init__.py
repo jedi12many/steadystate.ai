@@ -64,6 +64,7 @@ _AUTO: dict[str, str] = {
     "docker-compose": "docker",
     "argocd": "argocd",
     "ansible": "ansible",  # the ansible source's drift + live host/service health in one pass
+    "ansible-live": "ansible",  # pathless host-health target -- the ansible probe is the whole job
 }
 
 __all__ = [

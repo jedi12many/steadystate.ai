@@ -381,6 +381,7 @@ def probe_report(target_name: str, state_path: str, *, scan_logs: bool = False) 
         label=target.label,
         context=target.context,
         kubeconfig=target.kubeconfig,  # a cwd kubeconfig the context lives in (else "")
+        inventory=target.inventory,  # an ansible-live target's inventory (else "")
         scan_logs=scan_logs,  # `--deep` -> also scan pod logs for errors
     )
     if state_path:  # persist the findings (record-only) -- this also creates the db

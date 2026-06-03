@@ -45,6 +45,15 @@ class SupportsKubeconfig(Protocol):
 
 
 @runtime_checkable
+class SupportsInventory(Protocol):
+    """A source or prober that reads an Ansible inventory, pointable at a specific inventory file --
+    for the pathless ``ansible-live`` target, whose inventory is discovered from ansible.cfg/cwd.
+    Parallel to SupportsContext/SupportsKubeconfig; non-ansible components ignore it."""
+
+    def use_inventory(self, inventory: str) -> None: ...
+
+
+@runtime_checkable
 class SupportsLogScan(Protocol):
     """A prober that can do a deeper, log-content pass (`probe --deep`) on top of its status check.
     ``build_report(scan_logs=True)`` flips it on for whichever prober opts in; others ignore it."""
@@ -75,6 +84,7 @@ def build_report(
     label: str = "",
     context: str = "",
     kubeconfig: str = "",
+    inventory: str = "",
     scan_logs: bool = False,
     llm_gate: PromptGate | None = None,
 ) -> Report:
@@ -85,6 +95,8 @@ def build_report(
     context, so the live cluster-health source and the kubectl probe both read that one cluster; a
     component that doesn't support it ignores it. ``kubeconfig`` (when set) points kubectl at a
     specific kubeconfig file for that context -- for a context that isn't on the default path.
+    ``inventory`` (when set) points the ansible probe at a specific inventory file (the pathless
+    ``ansible-live`` target's, discovered from ``ansible.cfg``/cwd).
 
     ``scan_logs`` (`probe --deep`) turns on the prober's deeper log-content pass -- the kubectl
     probe then reads Running pods' log tails for error/fatal signatures, not just pod status.
@@ -109,6 +121,10 @@ def build_report(
         for component in (src, prober):
             if isinstance(component, SupportsKubeconfig):
                 component.use_kubeconfig(kubeconfig)
+    if inventory:  # point the ansible probe at a specific inventory (the ansible-live target's)
+        for component in (src, prober):
+            if isinstance(component, SupportsInventory):
+                component.use_inventory(inventory)
     if scan_logs and isinstance(prober, SupportsLogScan):  # `probe --deep`: read pod logs too
         prober.enable_log_scan()
 

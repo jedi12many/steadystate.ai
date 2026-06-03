@@ -29,6 +29,9 @@ def _inputs(tmp_path):
         "terraform": _sample(tmp_path, "plan.json", {"resource_changes": []}),
         "argocd": _sample(tmp_path, "app.json", {"status": {"resources": []}}),
         "ansible": _sample(tmp_path, "ansible.json", {"plays": []}),
+        # ansible-live is pathless (the path is ignored); its collect_drift is a constant [] -- the
+        # ansible health probe does the live read, so no ansible runs here.
+        "ansible-live": _sample(tmp_path, "ansible-live.json", {}),
         "docker-compose": _sample(tmp_path, "compose.json", {"config": {"services": {}}, "ps": []}),
         "k8s": _sample(tmp_path, "k8s.json", {"declared": [], "observed": []}),
         # k8s-live reads the cluster itself (no captured input); the path is ignored, and its
