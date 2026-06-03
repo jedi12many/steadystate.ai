@@ -117,3 +117,22 @@ class AnsibleSource:
         )
         parsed = loads_json(stdout, tool="ansible-playbook")
         return parsed if isinstance(parsed, dict) else {}
+
+
+class AnsibleLiveSource:
+    """A pathless live host-health source -- the ansible analog of ``k8s-live``.
+
+    It reports NO config drift: the ansible *drift* source (``AnsibleSource``) reads a captured
+    ``ansible-playbook --check`` instead. This exists purely so a **target** can run the read-only
+    ansible health probe against an inventory -- live host/service health, no captured playbook run
+    needed. Health is the probe's job (``ansible all -m service_facts`` via the auto-selected
+    ``ansible`` probe); this source just makes a probe-only ansible target possible, mirroring how
+    ``k8s-live`` hosts the kubectl probe. Pathless: it takes no input file, and the inventory is
+    threaded to the probe via ``build_report(inventory=...)``."""
+
+    name = "ansible-live"
+    # The probe declares the real read command; the source itself runs nothing.
+    commands = Capabilities(observe=("ansible all -m service_facts",))
+
+    def collect_drift(self) -> list[Drift]:
+        return []  # no declared playbook here -- drift is the captured-check source's job

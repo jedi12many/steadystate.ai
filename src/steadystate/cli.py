@@ -34,9 +34,7 @@ from .act.plan import can_run_unattended
 from .act.reflex import reflexes, run_hold
 from .catalog import gather_catalog, render_console, render_html
 from .discover import (
-    as_dict as discovery_as_dict,
-)
-from .discover import (
+    ansible_live_target,
     context_targets,
     deep_inspect,
     deep_targets,
@@ -48,6 +46,9 @@ from .discover import (
     proposed_targets,
     render_inspections,
     scannable_now,
+)
+from .discover import (
+    as_dict as discovery_as_dict,
 )
 from .discover import render as render_discovery
 from .engine import build_report
@@ -389,6 +390,12 @@ def scan(
         help="Read the context from this kubeconfig file (for a context not on kubectl's default "
         "path, e.g. one sitting in the project dir). Adds `--kubeconfig` to every kubectl call.",
     ),
+    inventory: str = typer.Option(
+        "",
+        "--inventory",
+        help="Ansible inventory for `--source ansible-live` (live host/service health). Passed to "
+        "the probe as `-i`. Omit to use ansible.cfg's default.",
+    ),
     cost: bool = typer.Option(
         False,
         "--cost",
@@ -467,6 +474,7 @@ def scan(
             label=label,
             context=context,
             kubeconfig=kubeconfig,
+            inventory=inventory,
             llm_gate=gate,
         )
     except ValueError as exc:
@@ -1367,9 +1375,9 @@ def _create_targets(findings: list, extra: list | None = None) -> None:
     # compose project *in* the cwd isn't registered twice under two names. Key on (source, path,
     # context, kubeconfig): live cluster targets share an empty path, so context (+ which kubeconfig
     # it lives in) is what distinguishes them.
-    seen = {(t.source, t.path, t.context, t.kubeconfig) for t in proposed}
+    seen = {(t.source, t.path, t.context, t.kubeconfig, t.inventory) for t in proposed}
     for target in extra or []:
-        key = (target.source, target.path, target.context, target.kubeconfig)
+        key = (target.source, target.path, target.context, target.kubeconfig, target.inventory)
         if key not in seen:
             proposed.append(target)
             seen.add(key)
@@ -1476,6 +1484,9 @@ def discover(
                 + context_targets(kube_contexts())
                 + kubeconfig_targets(Path.cwd())
             )
+            ansible_live = ansible_live_target(Path.cwd())  # a live host-health target if inventory
+            if ansible_live is not None:
+                extra.append(ansible_live)
             _create_targets(findings, extra=extra)
 
     # --check turns "nothing to scan here" into a non-zero exit, AFTER the report/create so the

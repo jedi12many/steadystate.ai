@@ -41,6 +41,9 @@ class Target:
     # kubeconfig sitting in the project dir, not merged into ~/.kube/config). Empty = the ambient
     # kubeconfig. When set, every kubectl read for this target adds ``--kubeconfig <file>``.
     kubeconfig: str = ""
+    # The Ansible inventory file an ``ansible-live`` target reads host/service health from (empty
+    # for other sources). Discovered from ansible.cfg/cwd; passed to the ansible probe as ``-i``.
+    inventory: str = ""
 
 
 def load_targets(path: str | Path) -> dict[str, Target]:
@@ -66,6 +69,7 @@ def load_targets(path: str | Path) -> dict[str, Target]:
             probe=str(spec.get("probe") or "auto"),
             context=str(spec.get("context") or ""),
             kubeconfig=str(spec.get("kubeconfig") or ""),
+            inventory=str(spec.get("inventory") or ""),
         )
     return out
 
@@ -97,6 +101,8 @@ def target_to_spec(target: Target) -> dict[str, str]:
         spec["context"] = target.context
     if target.kubeconfig:
         spec["kubeconfig"] = target.kubeconfig
+    if target.inventory:
+        spec["inventory"] = target.inventory
     return spec
 
 

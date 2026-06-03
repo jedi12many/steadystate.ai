@@ -91,6 +91,7 @@ def sweep_targets(
                 label=target.label,
                 context=target.context,
                 kubeconfig=target.kubeconfig,  # a cwd kubeconfig the context lives in (else "")
+                inventory=target.inventory,  # an ansible-live target's inventory (else "")
                 scan_logs=scan_logs,
             )
             built.append((name, report, ""))

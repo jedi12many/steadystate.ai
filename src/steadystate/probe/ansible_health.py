@@ -113,6 +113,13 @@ class AnsibleHealthProbe:
         self.inventory = inventory or os.environ.get("STEADYSTATE_ANSIBLE_INVENTORY")
         self.timeout = timeout
 
+    def use_inventory(self, inventory: str) -> None:
+        """Read host/service health from this inventory file (an ansible-live target carries its
+        own, discovered from ``ansible.cfg``/cwd). '' falls back to the env var / ansible.cfg
+        default. The seam `build_report(inventory=...)` drives -- parallel to the kubectl probe's
+        ``use_context``."""
+        self.inventory = inventory or os.environ.get("STEADYSTATE_ANSIBLE_INVENTORY")
+
     def probe(self, resources: list[Resource]) -> list[Symptom]:
         # Host health isn't tied to the declared k8s resources the seam passes (those are for the
         # kubectl probe); we read the fleet directly, like kubectl's node-level symptoms.

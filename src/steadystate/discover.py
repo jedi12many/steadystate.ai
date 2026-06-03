@@ -15,6 +15,7 @@ without a real shell or filesystem.
 
 from __future__ import annotations
 
+import configparser
 import json
 import os
 import re
@@ -990,6 +991,91 @@ def kubeconfig_targets(cwd: Path) -> list[Target]:
                 )
             )
     return targets
+
+
+# An Ansible inventory has no reliable content signature (it can be INI, YAML, a bare host list, or
+# a dynamic script), so -- unlike a kubeconfig -- we can't sniff it. Instead we resolve it the way
+# Ansible itself does: ``ansible.cfg``'s declared ``inventory`` first (the authoritative answer),
+# then conventional filenames, and we *validate* each candidate by handing it to ``ansible-inventory
+# --list`` (kubectl-style: let the real tool parse it). The result becomes a pathless ansible-live
+# target carrying its inventory, so `discover --create` registers live host-health right next to the
+# kube clusters -- one `sweep` then covers the whole cwd: clusters from kubeconfigs, hosts here.
+
+# Conventional Ansible inventory filenames, in the order Ansible/operators reach for them.
+_ANSIBLE_INVENTORY_NAMES = (
+    "inventory",
+    "inventory.ini",
+    "inventory.yml",
+    "inventory.yaml",
+    "hosts",
+    "hosts.ini",
+)
+
+
+def _inventory_from_cfg(cwd: Path) -> str | None:
+    """The inventory ``ansible.cfg`` declares (``[defaults] inventory = ...``), resolved against
+    ``cwd`` -- the authoritative source, since it's exactly how Ansible itself finds it. The first
+    entry when comma-separated. None when there's no ansible.cfg, no inventory key, or it's
+    malformed / the path doesn't exist."""
+    cfg = cwd / "ansible.cfg"
+    if not cfg.is_file():
+        return None
+    parser = configparser.ConfigParser()
+    try:
+        parser.read(cfg, encoding="utf-8")
+    except (configparser.Error, OSError, UnicodeDecodeError):
+        return None
+    declared = parser.get("defaults", "inventory", fallback="").split(",")[0].strip()
+    if not declared:
+        return None
+    resolved = Path(declared) if Path(declared).is_absolute() else cwd / declared
+    return str(resolved) if resolved.exists() else None
+
+
+def _inventory_ok(inventory: str) -> bool:
+    """True if ``ansible-inventory --list`` parses ``inventory`` into something with hosts -- the
+    validate step, so a non-inventory file with a conventional name isn't registered. When
+    ``ansible-inventory`` is absent we can't validate, so the caller trusts the cfg/conventional
+    signal instead (discover may run on a box without ansible)."""
+    doc = _run_json([*_INVENTORY_LIST, "-i", inventory])
+    return bool(inventory_hosts(doc)) if doc is not None else False
+
+
+_INVENTORY_LIST = ["ansible-inventory", "--list"]
+
+
+def cwd_inventory(cwd: Path) -> str | None:
+    """The Ansible inventory to use for ``cwd``: ``ansible.cfg``'s declared inventory if present,
+    else the first conventional filename that exists -- validated through ``ansible-inventory`` when
+    it's installed (else trusted on the cfg/name signal). None when nothing resolves. The I/O the
+    create path consumes via ``ansible_live_target``."""
+    candidates: list[str] = []
+    cfg = _inventory_from_cfg(cwd)
+    if cfg:
+        candidates.append(cfg)
+    candidates += [str(cwd / name) for name in _ANSIBLE_INVENTORY_NAMES if (cwd / name).exists()]
+    if not candidates:
+        return None
+    if shutil.which("ansible-inventory") is None:  # can't validate -> trust the strongest signal
+        return candidates[0]
+    return next((c for c in candidates if _inventory_ok(c)), None)
+
+
+def ansible_live_target(cwd: Path) -> Target | None:
+    """A pathless ``ansible-live`` target for the inventory discovered in ``cwd`` (carrying that
+    inventory so a later `probe`/`sweep` reads it), or None when no inventory resolves. The host
+    counterpart to ``context_targets`` -- live host/service health with no captured playbook run."""
+    inventory = cwd_inventory(cwd)
+    if inventory is None:
+        return None
+    return Target(
+        name="ansible-hosts",
+        source="ansible-live",
+        path="",
+        label="ansible-hosts",
+        probe="auto",
+        inventory=inventory,
+    )
 
 
 # -- CI emission: a GitHub Actions workflow tailored to what's here -----------------------------

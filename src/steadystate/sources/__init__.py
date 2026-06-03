@@ -16,7 +16,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from ..plugins import merged
-from .ansible import AnsibleSource
+from .ansible import AnsibleLiveSource, AnsibleSource
 from .argocd import ArgoCDSource
 from .base import Capabilities, DriftSource
 from .docker_compose import DockerComposeSource
@@ -74,6 +74,13 @@ def _k8s_live(path: Path) -> DriftSource:
     return KubernetesLiveSource()
 
 
+def _ansible_live(path: Path) -> DriftSource:
+    # PATHLESS: a live host-health source -- it reports no drift and exists so a target can run the
+    # ansible health probe against an inventory (threaded via build_report(inventory=...)). The path
+    # is ignored; the CLI supplies a placeholder.
+    return AnsibleLiveSource()
+
+
 def _k8s_baseline(path: Path) -> DriftSource:
     # PATHLESS: config drift vs a captured baseline (loaded by context from .steadystate/). Reads
     # live workloads + the baseline file; the path is ignored.
@@ -87,6 +94,7 @@ _BUILTIN_SOURCES: dict[str, Callable[[Path], DriftSource]] = {
     "terraform": _terraform,
     "argocd": _argocd,
     "ansible": _ansible,
+    "ansible-live": _ansible_live,
     "docker-compose": _docker_compose,
     "k8s": _k8s,
     "k8s-live": _k8s_live,
@@ -97,7 +105,7 @@ _BUILTIN_SOURCES: dict[str, Callable[[Path], DriftSource]] = {
 
 # Sources that take NO path input -- they read live state themselves (a reachable cluster), so
 # `scan --source <name>` needs no positional path and no target. The CLI passes them a placeholder.
-PATHLESS_SOURCES: frozenset[str] = frozenset({"k8s-live", "k8s-baseline"})
+PATHLESS_SOURCES: frozenset[str] = frozenset({"k8s-live", "k8s-baseline", "ansible-live"})
 
 # Per-plugin command manifests: observe (pre-approved, read-only) vs destructive (needs
 # approval). Keyed like the source registry -- adding a source means declaring its commands too.
@@ -105,6 +113,7 @@ _BUILTIN_CAPABILITIES: dict[str, Capabilities] = {
     "terraform": TerraformSource.commands,
     "argocd": ArgoCDSource.commands,
     "ansible": AnsibleSource.commands,
+    "ansible-live": AnsibleLiveSource.commands,
     "docker-compose": DockerComposeSource.commands,
     "k8s": KubernetesSource.commands,
     "k8s-live": KubernetesLiveSource.commands,
