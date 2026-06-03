@@ -23,11 +23,14 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Protocol, runtime_checkable
 
 from ..probe.base import Symptom
-from .bounds import DEFAULT_BOUND, BoundPolicy, Envelope, within_bounds
+from ..state import PendingAction, StateStore
+from .bounds import BoundPolicy, Envelope, bound_from_env, within_bounds
 from .catalog import ACTIONS, catalog_action, catalog_menu
+from .execute import CATALOG_SOURCE
 
 # A gated proposal's verdict.
 AUTHORIZED = "authorized"  # in the catalog, command valid, envelope within the bound -> may act
@@ -60,11 +63,14 @@ class GatedProposal:
     envelope: Envelope | None  # the catalog envelope (None when the action isn't in the catalog)
 
 
-def gate_proposal(proposal: ProposedAction, policy: BoundPolicy = DEFAULT_BOUND) -> GatedProposal:
+def gate_proposal(proposal: ProposedAction, policy: BoundPolicy | None = None) -> GatedProposal:
     """The deterministic gate every proposal passes through, blind to who proposed it. Rejects a
     proposal that names no catalog action or whose command fails that action's allow-pattern;
     escalates one whose (trusted, catalog) envelope is outside the bound; authorizes the rest.
-    Pure -- the whole safety case for an LLM decider is that this function never sees the model."""
+    Pure -- the whole safety case for an LLM decider is that this function never sees the model.
+    ``policy`` defaults to the active bound (``bound_from_env``), so the decider honors the same
+    ``STEADYSTATE_BOUND`` dial the reflexes and break-glass do."""
+    policy = bound_from_env() if policy is None else policy
     action = catalog_action(proposal.action)
     if action is None:  # a proposer can only choose from the vetted menu -- never invent an action
         return GatedProposal(
@@ -127,12 +133,14 @@ _SYSTEM = (
 )
 
 
-def _user_prompt(symptom: Symptom) -> str:
+def _user_prompt(symptom: Symptom, context: str = "") -> str:
     evidence = "\n".join(f"  {k}: {v}" for k, v in symptom.evidence.items())
+    grounding = f"How THIS fleet has handled this before:\n{context}\n\n" if context else ""
     return (
         f"Finding: {symptom.title}\n"
         f"category: {symptom.category}\nidentity: {symptom.identity}\n"
         f"evidence:\n{evidence}\n\n"
+        f"{grounding}"
         f"Vetted action menu:\n{catalog_menu()}\n\n"
         "Choose the one menu action that fixes this (or null), and the exact command."
     )
@@ -152,13 +160,22 @@ class LLMDecider:
 
     name = "llm"
 
-    def __init__(self, complete: Callable[[str, str, str], str | None]) -> None:
+    def __init__(
+        self,
+        complete: Callable[[str, str, str], str | None],
+        context_for: Callable[[Symptom], str] | None = None,
+    ) -> None:
         self._complete = complete
+        # Optional grounding: a function that returns "how this fleet has handled this category
+        # before" for a finding, folded into the prompt -- so the model reasons from YOUR
+        # operational history, not generic k8s. None = no grounding (prompt is catalog + finding).
+        self._context_for = context_for
 
     def propose(self, symptom: Symptom) -> ProposedAction | None:
         from ..reason.llm import _extract_json  # reuse the analyst's lenient JSON extraction
 
-        text = self._complete(_SYSTEM, _user_prompt(symptom), "decide")
+        context = self._context_for(symptom) if self._context_for is not None else ""
+        text = self._complete(_SYSTEM, _user_prompt(symptom, context), "decide")
         if not text:
             return None  # no model / egress declined / failure -> honest degrade
         data = _extract_json(text)
@@ -180,9 +197,7 @@ class LLMDecider:
         )
 
 
-def propose_for(
-    report, decider: Decider, policy: BoundPolicy = DEFAULT_BOUND
-) -> list[GatedProposal]:
+def propose_for(report, decider: Decider, policy: BoundPolicy | None = None) -> list[GatedProposal]:
     """Run ``decider`` over every malfunction a report carries that hold has no reflex for, and gate
     each proposal -- the read-only 'what would an autonomous decider do here?' view. Pure given a
     pure decider; the CatalogDecider keeps it fully deterministic, an LLMDecider makes it advisory.
@@ -198,3 +213,59 @@ def propose_for(
             if proposal is not None:
                 gated.append(gate_proposal(proposal, policy))
     return gated
+
+
+def environment_context(findings: list, acted: set[str], category: str) -> str:
+    """A compact 'how THIS fleet has handled <category> before', for grounding the LLM decider in
+    your operational history instead of generic k8s knowledge -- the difference between a smart
+    guess and an expert one. Built from the *learned lessons* (what resolved out-of-band, what
+    self-heals) and the *recurrence* record (a category whose fixes didn't hold). '' when there's no
+    history yet, so a cold store simply gives an un-grounded prompt. Pure given the store reads."""
+    from .learn import learn
+    from .reflex import reflex_for_category, reflex_recurrence
+
+    lines = [
+        f"- {lesson.recommendation}"
+        for lesson in learn(findings, acted)
+        if lesson.category == category
+    ]
+    reflex = reflex_for_category(category)
+    if reflex is not None:
+        recurred = reflex_recurrence(findings, acted).get(reflex.name, 0)
+        if recurred:
+            lines.append(
+                f"- caution: {recurred} past '{reflex.name}' fix(es) recurred (didn't hold)"
+            )
+    return "\n".join(lines)
+
+
+def record_proposals(
+    store: StateStore, gated: list[GatedProposal], now: datetime
+) -> tuple[list[GatedProposal], list[GatedProposal], list[GatedProposal]]:
+    """Wire the read-only decider into the act loop at the safest rung -- "propose to pending". For
+    each gated proposal: AUTHORIZED (within bound) -> record an approvable pending the operator
+    confirms with `approve`/`fix` (the LLM drives *what*, the human stays the trigger); ESCALATE
+    (out of bound) -> *advisory only*, never auto-recorded (a human initiates break-glass);
+    REJECTED -> dropped. Returns ``(recorded, advised, dropped)`` -- the caller surfaces the
+    proposer at record time, and the audit records the human who approves (decision = APPROVED)."""
+    recorded: list[GatedProposal] = []
+    advised: list[GatedProposal] = []
+    dropped: list[GatedProposal] = []
+    for g in gated:
+        if g.verdict == AUTHORIZED:
+            store.record_pending(
+                PendingAction(
+                    fingerprint=g.proposal.fingerprint,
+                    source=CATALOG_SOURCE,
+                    path="",
+                    drift_identity=g.proposal.identity,
+                    command=g.proposal.command,
+                ),
+                now,
+            )
+            recorded.append(g)
+        elif g.verdict == ESCALATE:
+            advised.append(g)
+        else:
+            dropped.append(g)
+    return recorded, advised, dropped

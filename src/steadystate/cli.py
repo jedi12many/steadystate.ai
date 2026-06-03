@@ -16,7 +16,6 @@ from rich.table import Table
 from .act import EXECUTORS, build_executor
 from .act.approve import apply_pending, decline_pending
 from .act.base import Proposer
-from .act.bounds import bound_from_env
 from .act.cleanup import record_cleanups
 from .act.decide import (
     AUTHORIZED,
@@ -25,7 +24,9 @@ from .act.decide import (
     CatalogDecider,
     Decider,
     LLMDecider,
+    environment_context,
     propose_for,
+    record_proposals,
 )
 from .act.deliver import build_deliveries
 from .act.learn import ADOPT
@@ -944,19 +945,28 @@ def propose(
         help="Ask the configured model to decide (egress-gated; honest degrade to the catalog "
         "decider when no model is set). Without it, the deterministic catalog decider is used.",
     ),
+    record: bool = typer.Option(
+        False,
+        "--record",
+        help="Record the AUTHORIZED (within-bound) proposals as approvable pendings -- the LLM "
+        "drives, you confirm with `approve`/`fix`. Out-of-bound ones stay advisory. Without it, "
+        "this is read-only.",
+    ),
     deep: bool = typer.Option(False, "--deep", help="Probe deep (pod logs + node disk %) first."),
 ) -> None:
-    """Read-only: what an autonomous **decider** would do for findings `hold` can't answer.
+    """What an autonomous **decider** would do for findings `hold` can't answer -- read-only, or
+    `--record` to put the safe ones in `pending` for you to approve.
 
-    This is the LLM-as-decider seam, run in dry, advisory mode. A decider *proposes* a remediation
-    for a novel finding; the deterministic **gate** then authorizes it -- and the gate is blind to
-    who proposed. A proposal is REJECTED unless it names a vetted **catalog** action and its command
-    passes that action's allow-pattern; it ESCALATES if the action's (trusted, catalog) envelope is
-    outside your bound; otherwise it's AUTHORIZED. So `--llm` can never widen its own blast radius
-    or run an un-vetted command -- it picks from the menu, the gate re-checks everything.
+    A decider *proposes* a remediation for a novel finding; the deterministic **gate** then
+    authorizes it -- blind to who proposed. A proposal is REJECTED unless it names a vetted
+    **catalog** action whose command passes the allow-pattern; ESCALATES if the action's envelope is
+    outside your bound; otherwise AUTHORIZED. So `--llm` can never widen its own blast radius or run
+    an un-vetted command. With `--llm`, the model is **grounded** in how *this* fleet handled the
+    category before (learned lessons + recurrence), so its proposals reflect your history.
 
-    It never acts: acting on an authorized proposal is a later graduation (the same propose->auto
-    path the reflexes took), so a decider's first job is to be right on paper, watched."""
+    `--record` is the safe first rung of acting: AUTHORIZED proposals become **pendings** an
+    operator confirms with `approve`/`fix` (the model drives *what*, the human stays the trigger);
+    out-of-bound ones stay advisory (you run those via break-glass). It never acts on its own."""
     target_file = _targets_file()
     if not target_file.exists():
         typer.echo(f"no targets file ({target_file}). Create one with `discover --create`.")
@@ -970,12 +980,37 @@ def propose(
         typer.echo(f"{target_file} has no targets.")
         return
     result = sweep_targets(registry, str(state), datetime.now(UTC), scan_logs=deep)
-    if llm:
-        analyst = LLMAnalyst(gate=_confirm_llm_egress)
-        decider: Decider = LLMDecider(analyst._complete)
-    else:
-        decider = CatalogDecider()
-    gated = propose_for(result.report, decider, bound_from_env())  # honor the operator's bound dial
+    with _open_store(state) as store:
+        if llm:
+            analyst = LLMAnalyst(gate=_confirm_llm_egress)
+            # ground the model in THIS fleet's history of the category (lessons + recurrence)
+            findings, acted = store.all_findings(), store.acted_fingerprints()
+            decider: Decider = LLMDecider(
+                analyst._complete,
+                context_for=lambda s: environment_context(findings, acted, s.category),
+            )
+        else:
+            decider = CatalogDecider()
+        gated = propose_for(result.report, decider)  # propose_for honors the operator's bound dial
+        if record:
+            recorded, advised, _dropped = record_proposals(store, gated, datetime.now(UTC))
+            typer.echo(
+                f"propose --record ({decider.name}): {len(recorded)} recorded to pending, "
+                f"{len(advised)} advisory (break-glass)."
+            )
+            for g in recorded:
+                typer.echo(f"  [pending] {g.proposal.identity}  ->  {g.proposal.action}")
+                typer.echo(f"      approve {g.proposal.fingerprint}   ({g.proposal.command})")
+            for g in advised:
+                typer.echo(
+                    f"  [advisory] {g.proposal.identity}  ->  {g.proposal.action}  ({g.reason})"
+                )
+                typer.echo(f"      a human runs this via break-glass: run {g.proposal.action} <fp>")
+            if not recorded and not advised:
+                typer.echo(
+                    "  nothing to record -- no within-bound proposal for an unhandled finding."
+                )
+            return
     typer.echo(
         f"propose ({decider.name} decider): {len(gated)} proposal(s) for findings hold can't."
     )
