@@ -15,11 +15,43 @@ one action steadystate fully possesses: the evicted-pod cleanup.)
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from .bounds import Envelope
+from .bounds import Envelope, Impact, Reversibility
 from .cleanup import CLEANUP_ENVELOPE, is_safe_cleanup
+
+# -- per-action command allow-patterns ---------------------------------------------------------
+# Each is anchored (^...$) and character-classed so no alternate verb, extra flag, selector, or
+# shell metacharacter can slip through: the regex IS the action's blast-radius guarantee. Two rules
+# every k8s entry follows: pin EXACTLY ONE namespace (`-n <ns>` -- never `-A`/`--all-namespaces`,
+# the difference between one tenant and the whole fleet), and forbid `--all`/selectors (which would
+# silently widen the impact the envelope claims). Re-checked at the gate (decide.gate_proposal).
+
+# delete Succeeded (completed) pod tombstones in one namespace -- lossless, like the evicted clean.
+_SAFE_COMPLETED_CLEANUP = re.compile(
+    r"^kubectl delete pods(?: -n [\w.-]+)? "
+    r"--field-selector=status\.phase=Succeeded(?: --context [\w.@:/-]+)?$"
+)
+
+# rollout-restart ONE deployment in one namespace. The `deployment/<name>` shape is the safety: the
+# command can only target a Deployment (a controller), so the restart is self-healing BY
+# CONSTRUCTION -- a bare pod can't be named here, so the envelope can't be lied into.
+_SAFE_ROLLOUT_RESTART = re.compile(
+    r"^kubectl rollout restart deployment/[\w.-]+ -n [\w.-]+(?: --context [\w.@:/-]+)?$"
+)
+
+
+def is_safe_completed_cleanup(command: str) -> bool:
+    """True iff ``command`` is exactly the Succeeded-phase pod cleanup shape. Pure."""
+    return bool(_SAFE_COMPLETED_CLEANUP.match(command.strip()))
+
+
+def is_safe_rollout_restart(command: str) -> bool:
+    """True iff ``command`` is exactly a single-deployment, single-namespace rollout restart. Pure.
+    The `deployment/<name>` shape guarantees the target is a controller (self-healing)."""
+    return bool(_SAFE_ROLLOUT_RESTART.match(command.strip()))
 
 
 @dataclass(frozen=True)
@@ -45,6 +77,35 @@ _BUILTIN_ACTIONS: tuple[CatalogAction, ...] = (
             "pods were evicted by node memory/disk pressure. Lossless: the pods are already dead. "
             "Command shape: kubectl delete pods -n <ns> --field-selector=status.phase=Failed "
             "[--context <ctx>]"
+        ),
+    ),
+    CatalogAction(
+        name="delete-completed-pods",
+        # Succeeded-phase pods are finished work (a Job's pods, a one-shot) -- deleting the
+        # tombstones destroys nothing of value, in one namespace. Same envelope as the evicted one.
+        envelope=Envelope(Reversibility.LOSSLESS, Impact.TENANT),
+        validate=is_safe_completed_cleanup,
+        description=(
+            "delete Succeeded (completed) pod tombstones in one namespace -- finished Job/one-shot "
+            "pods piling up. Lossless: the work is done, nothing running is touched. Command "
+            "shape: kubectl delete pods -n <ns> --field-selector=status.phase=Succeeded "
+            "[--context <ctx>]"
+        ),
+    ),
+    CatalogAction(
+        name="rollout-restart-deployment",
+        # A rolling restart is controller-managed and data-safe (the platform brings new pods up,
+        # honoring surge/maxUnavailable) -> self-healing; it touches one workload -> service. The
+        # `deployment/<name>` command shape guarantees the target is a Deployment, so this envelope
+        # cannot be applied to a non-self-healing resource.
+        envelope=Envelope(Reversibility.SELF_HEALING, Impact.SERVICE),
+        validate=is_safe_rollout_restart,
+        description=(
+            "roll-restart ONE Deployment in one namespace -- for a workload wedged in a way a "
+            "fresh set of pods clears (a stuck rollout, a leaked connection/cache), NOT a "
+            "CrashLoopBackOff (restarting a crash loop just loops again -- that needs a real fix). "
+            "Self-healing: the Deployment controller manages it, no data loss. Command shape: "
+            "kubectl rollout restart deployment/<name> -n <ns> [--context <ctx>]"
         ),
     ),
 )
