@@ -298,6 +298,7 @@ class KubernetesLiveSource:
     def __init__(self, observed: object | None = None, timeout: float = 30.0) -> None:
         self._observed = observed  # injectable for tests; else read live
         self._context: str | None = None
+        self._kubeconfig: str | None = None
         self.timeout = timeout
         self._cache: list[Resource] | None = None  # one live read per scan, reused
 
@@ -305,6 +306,11 @@ class KubernetesLiveSource:
         """Aim every kubectl read at this kube context (a target = a cluster). '' clears it (the
         ambient current-context). This is the seam `build_report(context=...)` drives."""
         self._context = context or None
+
+    def use_kubeconfig(self, kubeconfig: str) -> None:
+        """Read from a specific kubeconfig file (a context off the default path). '' clears it (the
+        ambient kubeconfig). The seam `build_report(kubeconfig=...)` drives."""
+        self._kubeconfig = kubeconfig or None
 
     def _qualify(self, resource: Resource) -> Resource:
         """Prefix this resource's identity with the (sanitized) context, so the SAME workload on two
@@ -344,6 +350,8 @@ class KubernetesLiveSource:
         argv = ["kubectl", "get", _LIVE_WORKLOAD_KINDS, "--all-namespaces", "-o", "json"]
         if self._context:
             argv += ["--context", self._context]
+        if self._kubeconfig:
+            argv += ["--kubeconfig", self._kubeconfig]
         stdout = run_tool(argv, timeout=self.timeout, tool="kubectl get")
         return loads_json(stdout, tool="kubectl get")
 

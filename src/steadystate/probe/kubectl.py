@@ -304,6 +304,7 @@ class KubectlProbe:
         self.log_tail = log_tail
         self.timeout = timeout
         self._context: str | None = None
+        self._kubeconfig: str | None = None
         # Log scanning is opt-in (`probe --deep`): it costs one `kubectl logs` per pod, so it's off
         # on the fast path. ``_scan_tail`` lines per pod, raise at ``_log_threshold`` error lines
         # (a FATAL signature always trips), and cap how many pods per workload we read.
@@ -318,6 +319,12 @@ class KubectlProbe:
         `build_report(context=...)`; matches the live source's same-named seam."""
         self._context = context or None
 
+    def use_kubeconfig(self, kubeconfig: str) -> None:
+        """Point every `kubectl` call at this kubeconfig file (a context off the default path, e.g.
+        a kubeconfig in the project dir). '' clears it (the ambient kubeconfig). Driven by
+        `build_report(kubeconfig=...)`; matches the live source's same-named seam."""
+        self._kubeconfig = kubeconfig or None
+
     def enable_log_scan(self) -> None:
         """Turn on the deep log-content pass (`probe --deep` / `build_report(scan_logs=True)`): scan
         the Running pods' log tails for error/fatal signatures, not just pod status. Off by default
@@ -325,10 +332,12 @@ class KubectlProbe:
         self._scan_logs = True
 
     def _kubectl(self, *args: str) -> list[str]:
-        """A `kubectl` argv with `--context` appended when one is set."""
+        """A `kubectl` argv with `--context` / `--kubeconfig` appended when set."""
         argv = ["kubectl", *args]
         if self._context:
             argv += ["--context", self._context]
+        if self._kubeconfig:
+            argv += ["--kubeconfig", self._kubeconfig]
         return argv
 
     def probe(self, resources: list[Resource]) -> list[Symptom]:

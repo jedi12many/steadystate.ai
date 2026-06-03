@@ -37,6 +37,10 @@ class Target:
     label: str = ""  # the environment stamped on the alerts; defaults to the name
     probe: str = "auto"  # the health probe to run; "auto" matches the source
     context: str = ""  # a live backend context (a kube context) -- aims source + probe at it
+    # The kubeconfig file this target's context lives in, when it isn't on the default path (e.g. a
+    # kubeconfig sitting in the project dir, not merged into ~/.kube/config). Empty = the ambient
+    # kubeconfig. When set, every kubectl read for this target adds ``--kubeconfig <file>``.
+    kubeconfig: str = ""
 
 
 def load_targets(path: str | Path) -> dict[str, Target]:
@@ -61,6 +65,7 @@ def load_targets(path: str | Path) -> dict[str, Target]:
             label=str(spec.get("label") or name),
             probe=str(spec.get("probe") or "auto"),
             context=str(spec.get("context") or ""),
+            kubeconfig=str(spec.get("kubeconfig") or ""),
         )
     return out
 
@@ -90,6 +95,8 @@ def target_to_spec(target: Target) -> dict[str, str]:
         spec["probe"] = target.probe
     if target.context:
         spec["context"] = target.context
+    if target.kubeconfig:
+        spec["kubeconfig"] = target.kubeconfig
     return spec
 
 

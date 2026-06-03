@@ -43,6 +43,7 @@ from .discover import (
     emit_github_actions,
     emittable_sources,
     kube_contexts,
+    kubeconfig_targets,
     probe_environment,
     proposed_targets,
     render_inspections,
@@ -382,6 +383,12 @@ def scan(
         "`--source k8s-live --context <ctx>` probes that one cluster for fires (a target = a "
         "cluster). Ignored by sources that read a file/dir. Omit for the ambient context.",
     ),
+    kubeconfig: str = typer.Option(
+        "",
+        "--kubeconfig",
+        help="Read the context from this kubeconfig file (for a context not on kubectl's default "
+        "path, e.g. one sitting in the project dir). Adds `--kubeconfig` to every kubectl call.",
+    ),
     cost: bool = typer.Option(
         False,
         "--cost",
@@ -459,6 +466,7 @@ def scan(
             no_llm=no_llm,
             label=label,
             context=context,
+            kubeconfig=kubeconfig,
             llm_gate=gate,
         )
     except ValueError as exc:
@@ -1357,10 +1365,11 @@ def _create_targets(findings: list, extra: list | None = None) -> None:
     proposed = proposed_targets(findings, Path.cwd())
     # Fold in the live-discovered targets, but drop any the cwd-local pass already covers -- so a
     # compose project *in* the cwd isn't registered twice under two names. Key on (source, path,
-    # context): live cluster targets share an empty path, so context is what distinguishes them.
-    seen = {(t.source, t.path, t.context) for t in proposed}
+    # context, kubeconfig): live cluster targets share an empty path, so context (+ which kubeconfig
+    # it lives in) is what distinguishes them.
+    seen = {(t.source, t.path, t.context, t.kubeconfig) for t in proposed}
     for target in extra or []:
-        key = (target.source, target.path, target.context)
+        key = (target.source, target.path, target.context, target.kubeconfig)
         if key not in seen:
             proposed.append(target)
             seen.add(key)
@@ -1458,9 +1467,15 @@ def discover(
         for line in lines:
             typer.echo(line)
         if create:
-            # Live targets to fold in: deep-discovered compose projects (with --deep), plus one
-            # k8s-live target per kube context -- so `discover --create` registers your clusters.
-            extra = deep_targets(inspections) + context_targets(kube_contexts())
+            # Live targets to fold in: deep-discovered compose projects (with --deep), one k8s-live
+            # target per kube context, plus one per context in any kubeconfig sitting in the cwd
+            # (each carrying its kubeconfig so `probe` can reach it) -- so `discover --create`
+            # registers your clusters, including the ones not on kubectl's default path.
+            extra = (
+                deep_targets(inspections)
+                + context_targets(kube_contexts())
+                + kubeconfig_targets(Path.cwd())
+            )
             _create_targets(findings, extra=extra)
 
     # --check turns "nothing to scan here" into a non-zero exit, AFTER the report/create so the
