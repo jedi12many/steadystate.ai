@@ -17,6 +17,15 @@ from .act import EXECUTORS, build_executor
 from .act.approve import apply_pending, decline_pending
 from .act.base import Proposer
 from .act.cleanup import record_cleanups
+from .act.decide import (
+    AUTHORIZED,
+    ESCALATE,
+    REJECTED,
+    CatalogDecider,
+    Decider,
+    LLMDecider,
+    propose_for,
+)
 from .act.deliver import build_deliveries
 from .act.learn import ADOPT
 from .act.learn import learn as derive_lessons
@@ -49,6 +58,7 @@ from .onboarding import SECTIONS, Status, audit, read_env_file, summary, write_e
 from .probe import PROBE_CAPABILITIES, PROBES
 from .reason.cost import roll_up, roll_up_by_period, scan_cost_line
 from .reason.enrich import ENRICHERS
+from .reason.llm import LLMAnalyst
 from .reason.pipeline import CORRELATORS
 from .reconcile_state import reconcile
 from .serialize import report_to_dict
@@ -891,6 +901,63 @@ def _render_hold(outcome, *, apply: bool) -> list[str]:
     if not apply and plan.to_act:
         lines.append("  dry run -- re-run with --apply to execute the auto reflexes.")
     return lines
+
+
+@app.command()
+def propose(
+    state: Path = typer.Option(
+        Path(DEFAULT_STATE_PATH), "--state", help="State db for the sweep (auto-created)."
+    ),
+    llm: bool = typer.Option(
+        False,
+        "--llm",
+        help="Ask the configured model to decide (egress-gated; honest degrade to the catalog "
+        "decider when no model is set). Without it, the deterministic catalog decider is used.",
+    ),
+    deep: bool = typer.Option(False, "--deep", help="Probe deep (pod logs + node disk %) first."),
+) -> None:
+    """Read-only: what an autonomous **decider** would do for findings `hold` can't answer.
+
+    This is the LLM-as-decider seam, run in dry, advisory mode. A decider *proposes* a remediation
+    for a novel finding; the deterministic **gate** then authorizes it -- and the gate is blind to
+    who proposed. A proposal is REJECTED unless it names a vetted **catalog** action and its command
+    passes that action's allow-pattern; it ESCALATES if the action's (trusted, catalog) envelope is
+    outside your bound; otherwise it's AUTHORIZED. So `--llm` can never widen its own blast radius
+    or run an un-vetted command -- it picks from the menu, the gate re-checks everything.
+
+    It never acts: acting on an authorized proposal is a later graduation (the same propose->auto
+    path the reflexes took), so a decider's first job is to be right on paper, watched."""
+    target_file = _targets_file()
+    if not target_file.exists():
+        typer.echo(f"no targets file ({target_file}). Create one with `discover --create`.")
+        return
+    try:
+        registry = load_targets(target_file)
+    except (OSError, ValueError) as exc:
+        typer.echo(f"targets file {target_file} is malformed: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    if not registry:
+        typer.echo(f"{target_file} has no targets.")
+        return
+    result = sweep_targets(registry, str(state), datetime.now(UTC), scan_logs=deep)
+    if llm:
+        analyst = LLMAnalyst(gate=_confirm_llm_egress)
+        decider: Decider = LLMDecider(analyst._complete)
+    else:
+        decider = CatalogDecider()
+    gated = propose_for(result.report, decider)
+    typer.echo(
+        f"propose ({decider.name} decider): {len(gated)} proposal(s) for findings hold can't."
+    )
+    for g in gated:
+        mark = {AUTHORIZED: "+", ESCALATE: "!", REJECTED: "x"}.get(g.verdict, "?")
+        typer.echo(f"  [{mark} {g.verdict}] {g.proposal.identity}  ->  {g.proposal.action}")
+        typer.echo(f"      {g.proposal.command}")
+        typer.echo(f"      why: {g.proposal.rationale}  ({g.reason})")
+    if not gated:
+        typer.echo(
+            "  nothing to propose -- every malfunction either has a reflex or no vetted fix."
+        )
 
 
 @app.command()
