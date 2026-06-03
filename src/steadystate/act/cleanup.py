@@ -34,9 +34,16 @@ CLEANUP_SOURCE = "kubectl-cleanup"
 # The ONE command shape we will execute: the evicted/Failed-phase pod cleanup the probe composes.
 # Anchored + character-classed so no shell metacharacter or alternate verb can slip through -- the
 # namespace and context are k8s-validated names. Re-checked at run time (defense in depth).
+# --context / --kubeconfig tails shared by every k8s action allow-pattern. Both are a SINGLE
+# token with a constrained char class (no spaces, no shell metacharacters -- and we run argv with
+# no shell anyway), so a context name or a kubeconfig path can ride along but nothing can be
+# chained/injected. The kubeconfig path allows `/ . ~` (paths) on top of the context's char set.
+_CONTEXT_TAIL = r"(?: --context [\w.@:/-]+)?"
+_KUBECONFIG_TAIL = r"(?: --kubeconfig [\w.@:/~-]+)?"
+
 _SAFE_CLEANUP = re.compile(
     r"^kubectl delete pods(?: -n [\w.-]+)? "
-    r"--field-selector=status\.phase=Failed(?: --context [\w.@:/-]+)?$"
+    r"--field-selector=status\.phase=Failed" + _CONTEXT_TAIL + _KUBECONFIG_TAIL + r"$"
 )
 
 

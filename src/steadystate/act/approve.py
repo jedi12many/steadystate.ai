@@ -27,6 +27,7 @@ from ..state import (
 from . import build_executor
 from .base import RemediationResult
 from .cleanup import CLEANUP_SOURCE, run_cleanup
+from .execute import CATALOG_SOURCE, run_catalog_action
 
 
 def _audit(
@@ -55,12 +56,15 @@ def apply_pending(
     action = store.get_pending(fingerprint)
     if action is None or action.status != PENDING:
         return "no pending remediation for that fingerprint.", None
-    if action.source == CLEANUP_SOURCE:  # a symptom remediation: a direct, re-validated cleanup
+    if action.source in (CLEANUP_SOURCE, CATALOG_SOURCE):  # a direct, re-validated catalog command
         # Claim before the irreversible step (same race guard as the drift path), then run the
-        # allow-listed kubectl delete and audit it. No drift source/executor -- the command is it.
+        # allow-listed command and audit it. No drift source/executor -- the command is it. Both
+        # the evicted cleanup and the general `fix`/`run` actions route here through the same gate.
         if not store.claim_pending(fingerprint, PENDING, APPROVED, actor):
             return "no pending remediation for that fingerprint.", None
-        result = run_cleanup(action)
+        result = (
+            run_cleanup(action) if action.source == CLEANUP_SOURCE else run_catalog_action(action)
+        )
         outcome = VERIFIED if result.verified else APPLIED if result.applied else FAILED
         store.record_audit(_audit(action, actor, APPROVED, outcome, result.detail), now)
         return result.detail, result

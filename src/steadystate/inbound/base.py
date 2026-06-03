@@ -39,6 +39,9 @@ FINDINGS = "findings"
 SHOW = "show"
 SURFACES_LIST = "surfaces"
 SEND = "send"
+FIX = "fix"
+RUN = "run"
+ACTIONS_LIST = "actions"
 
 # The command grammar, in the order ``help`` lists them: verb -> (usage, one-line summary).
 # ``help`` renders itself from this table, so a newly added verb is discoverable the moment it
@@ -79,15 +82,29 @@ COMMANDS: dict[str, tuple[str, str]] = {
         "silence a finding on future scans -- a single fp, or a correlated group's `mute-all` fp "
         "to silence the whole group at once",
     ),
+    FIX: (
+        "fix <fingerprint>",
+        "apply the OFFERED fix for a finding (e.g. roll-restart a wedged workload) -- a vetted, "
+        "bounded action, run through the guardrail + audited",
+    ),
+    RUN: (
+        "run <action> <fingerprint>",
+        "run a specific vetted action against a finding (e.g. `run rollout-restart-workload <fp>`) "
+        "-- when you want to pick the action rather than take the offered one; see `actions`",
+    ),
+    ACTIONS_LIST: (
+        "actions",
+        "list the vetted actions you can `fix`/`run` -- name, what it does, and its blast radius",
+    ),
     APPROVE: ("approve <fingerprint>", "apply a pending remediation (guardrailed)"),
     DECLINE: ("decline <fingerprint>", "dismiss a pending remediation"),
 }
 # Verbs that require an argument to mean anything (a fingerprint for approve/decline/mute, a
 # target name for probe); the rest take none or an optional one.
-_NEEDS_ARGUMENT = frozenset({APPROVE, DECLINE, PROBE, MUTE, SHOW})
-# Verbs that need TWO arguments: `send <fingerprint> <surface>`. The surface is the *last* plain
-# token, so a natural `send <fp> to servicenow` works (the "to" is ignored as a middle token).
-_NEEDS_TWO = frozenset({SEND})
+_NEEDS_ARGUMENT = frozenset({APPROVE, DECLINE, PROBE, MUTE, SHOW, FIX})
+# Verbs that need TWO arguments: `send <fingerprint> <surface>`, `run <action> <fingerprint>`. The
+# second plain token is the *last* one, so a natural filler word in the middle is ignored.
+_NEEDS_TWO = frozenset({SEND, RUN})
 # Verbs that take an *optional* argument (cost's period; findings' status filter); absent it, they
 # still dispatch.
 _OPTIONAL_ARGUMENT = frozenset({COST, FINDINGS})
@@ -147,6 +164,9 @@ _TOOL_ARGS: dict[str, tuple[tuple[str, bool], ...]] = {
     HISTORY: (),
     SURFACES_LIST: (),
     SEND: (("fingerprint", True), ("surface", True)),
+    FIX: (("fingerprint", True),),
+    RUN: (("action", True), ("fingerprint", True)),
+    ACTIONS_LIST: (),
     MUTE: (("fingerprint", True),),
     APPROVE: (("fingerprint", True),),
     DECLINE: (("fingerprint", True),),
@@ -165,6 +185,9 @@ _TOOL_EFFECT: dict[str, str] = {
     HISTORY: "read-only",
     SURFACES_LIST: "read-only",
     SEND: "external-send",  # emits a finding to an external alert surface
+    FIX: "guardrailed-write",  # applies the offered vetted action (allow-pattern + bound + audit)
+    RUN: "guardrailed-write",  # applies a chosen vetted action (allow-pattern + bound + audit)
+    ACTIONS_LIST: "read-only",
     MUTE: "state-write",
     APPROVE: "guardrailed-write",  # applies a pending remediation (executor-guardrailed)
     DECLINE: "state-write",
