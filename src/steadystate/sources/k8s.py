@@ -23,6 +23,7 @@ reconcile on presence alone, so neither shows as false drift.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -375,20 +376,33 @@ def _slug(context: str) -> str:
     return out.strip("-") or "default"
 
 
-def baseline_path(context: str) -> Path:
-    """Where a cluster's baseline snapshot lives -- one file per context under ``.steadystate/``,
-    alongside the state db. Pure."""
-    return Path(_BASELINE_DIR) / f"baseline-{_slug(context)}.json"
+def baseline_path(context: str, kubeconfig: str = "") -> Path:
+    """Where a cluster's baseline snapshot lives -- one file per (context, kubeconfig) under
+    ``.steadystate/``, alongside the state db. The kubeconfig is folded into the name (a short hash)
+    so two clusters that share a context NAME across different kubeconfigs -- a common default like
+    ``kubernetes-admin@kubernetes`` -- don't collide on one baseline file (which would diff each
+    cluster against the other's workloads). Backward-compatible: an ambient-kubeconfig target keeps
+    the old context-only name. Pure."""
+    name = f"baseline-{_slug(context)}"
+    if kubeconfig:
+        name += "-" + hashlib.sha256(kubeconfig.encode()).hexdigest()[:8]
+    return Path(_BASELINE_DIR) / f"{name}.json"
 
 
-def capture_baseline(context: str, *, timeout: float = 30.0) -> tuple[Path, int]:
+def capture_baseline(
+    context: str, *, kubeconfig: str = "", timeout: float = 30.0
+) -> tuple[Path, int]:
     """Snapshot the cluster's current workloads (the live `kubectl get deploy,sts,ds -A`) to the
-    baseline file for ``context`` -- the "known-good" later scans diff against. Returns the path
-    written and the workload count. Refreshing is just re-running this. I/O."""
+    baseline file for ``(context, kubeconfig)`` -- the "known-good" later scans diff against. The
+    ``kubeconfig`` (a cwd kubeconfig the context lives in) is passed straight through to kubectl, so
+    a discovered target baselines without it being on the default path. Returns the path written and
+    the workload count. Refreshing is just re-running this. I/O."""
     src = KubernetesLiveSource(timeout=timeout)
     src.use_context(context)
+    if kubeconfig:
+        src.use_kubeconfig(kubeconfig)
     doc = src._run_kubectl()  # the raw List of workloads
-    path = baseline_path(context)
+    path = baseline_path(context, kubeconfig)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(doc, indent=2), encoding="utf-8")
     items = doc.get("items") if isinstance(doc, dict) else None
@@ -430,7 +444,9 @@ class KubernetesBaselineSource(KubernetesLiveSource):
         file that's present but corrupt is a loud `SourceError`, never a silent empty diff."""
         if self._baseline is not None:
             return self._baseline
-        path = baseline_path(self._context or "")
+        # Same (context, kubeconfig) key the capture wrote under -- both inherited from the live
+        # source, so a baseline target with a cwd kubeconfig loads its own snapshot, not a clash.
+        path = baseline_path(self._context or "", self._kubeconfig or "")
         if not path.exists():
             return None
         try:

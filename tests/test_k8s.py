@@ -343,6 +343,52 @@ def test_capture_baseline_writes_the_snapshot(tmp_path, monkeypatch):
     assert path.exists() and json.loads(path.read_text())["items"]
 
 
+def test_capture_baseline_passes_the_kubeconfig_and_keys_the_file_on_it(tmp_path, monkeypatch):
+    from steadystate.sources import k8s as k8smod
+
+    monkeypatch.chdir(tmp_path)
+    captured: dict = {}
+
+    def fake_run_tool(argv, **kw):
+        captured["argv"] = argv
+        return json.dumps({"kind": "List", "items": [_deployment("nginx:1")]})
+
+    monkeypatch.setattr(k8smod, "run_tool", fake_run_tool)
+    path, _ = k8smod.capture_baseline("prod", kubeconfig="/cwd/prod.kubeconfig")
+    # the cwd kubeconfig is passed straight to kubectl (so an off-default-path context baselines)...
+    argv = captured["argv"]
+    assert "--kubeconfig" in argv and argv[argv.index("--kubeconfig") + 1] == "/cwd/prod.kubeconfig"
+    # ...and the snapshot is keyed on it, distinct from the ambient-kubeconfig name.
+    assert path == k8smod.baseline_path("prod", "/cwd/prod.kubeconfig")
+    assert path != k8smod.baseline_path("prod")
+
+
+def test_baseline_path_distinguishes_a_shared_context_across_kubeconfigs():
+    from steadystate.sources.k8s import baseline_path
+
+    # The collision this prevents: two clusters with the SAME default context name in different
+    # kubeconfigs would otherwise diff each against the other's workloads.
+    a = baseline_path("kubernetes-admin@kubernetes", "/cwd/cluster-a.kubeconfig")
+    b = baseline_path("kubernetes-admin@kubernetes", "/cwd/cluster-b.kubeconfig")
+    assert a != b
+    assert a == baseline_path("kubernetes-admin@kubernetes", "/cwd/cluster-a.kubeconfig")  # stable
+
+
+def test_baseline_source_loads_its_kubeconfig_keyed_snapshot(tmp_path, monkeypatch):
+    from steadystate.sources import k8s as k8smod
+
+    monkeypatch.chdir(tmp_path)
+    workloads = {"kind": "List", "items": [_deployment("nginx:1")]}
+    monkeypatch.setattr(k8smod, "run_tool", lambda argv, **kw: json.dumps(workloads))
+    k8smod.capture_baseline("prod", kubeconfig="/cwd/prod.kubeconfig")
+    # a baseline source aimed at the SAME (context, kubeconfig) loads that snapshot -> live matches
+    # the captured baseline -> no drift. (Proves capture + load share the keyed path.)
+    src = k8smod.KubernetesBaselineSource()
+    src.use_context("prod")
+    src.use_kubeconfig("/cwd/prod.kubeconfig")
+    assert src.collect_drift() == []
+
+
 def test_baseline_corrupt_file_is_a_loud_error(tmp_path, monkeypatch):
     import pytest
 
