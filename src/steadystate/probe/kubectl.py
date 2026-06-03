@@ -157,6 +157,40 @@ def category_and_severity(sick: list[PodHealth]) -> tuple[str, Severity]:
     return worst.reason, severity
 
 
+# -- node health ------------------------------------------------------------------------------
+# A node's own `status.conditions` are the cluster-infra signal the pod checks miss. A *pressure*
+# condition reading "True" means the kubelet is at/over an eviction threshold: DiskPressure (the
+# disk is filling -- e.g. logs/images -- which is what *causes* pod evictions), MemoryPressure,
+# PIDPressure. And Ready != "True" means the node is down/unreachable. One `kubectl get nodes`.
+_NODE_PRESSURE = ("DiskPressure", "MemoryPressure", "PIDPressure")
+
+
+@dataclass(frozen=True)
+class NodeIssue:
+    """A node condition worth flagging: the node, the category, and the kubelet's message."""
+
+    node: str
+    category: str  # DiskPressure | MemoryPressure | PIDPressure | NotReady
+    message: str
+
+
+def node_issues(nodes_doc: dict) -> list[NodeIssue]:
+    """Every flagged condition across the nodes in a `kubectl get nodes -o json` doc: each pressure
+    condition that's "True", plus a node whose Ready condition isn't "True". Pure + testable."""
+    out: list[NodeIssue] = []
+    for node in nodes_doc.get("items") or []:
+        name = (node.get("metadata") or {}).get("name") or ""
+        conditions = {c.get("type"): c for c in (node.get("status") or {}).get("conditions") or []}
+        for pressure in _NODE_PRESSURE:
+            cond = conditions.get(pressure)
+            if cond and cond.get("status") == "True":
+                out.append(NodeIssue(name, pressure, cond.get("message") or pressure))
+        ready = conditions.get("Ready")
+        if ready is not None and ready.get("status") != "True":
+            out.append(NodeIssue(name, "NotReady", ready.get("message") or "node not Ready"))
+    return out
+
+
 # -- log-content detection (`probe --deep`) ---------------------------------------------------
 # A pod can be Running + Ready yet failing in its LOGS -- a panic loop caught and restarted, a
 # flood of errors, an OOM trace. Status detection misses that; a `--deep` probe reads the tail
@@ -218,7 +252,11 @@ class KubectlProbe:
     # is honest -- `kubectl logs` (the failing pod's evidence) hits the `pods/log` subresource,
     # which a least-privilege RBAC must grant `pods` AND `pods/log` for.
     commands = Capabilities(
-        observe=("kubectl get pods -A -o json", "kubectl logs --tail --previous"),
+        observe=(
+            "kubectl get pods -A -o json",
+            "kubectl get nodes -o json",
+            "kubectl logs --tail --previous",
+        ),
     )
 
     def __init__(self, log_tail: int = 20, timeout: float = 10.0) -> None:
@@ -274,6 +312,9 @@ class KubectlProbe:
                 log_symptom = self._log_symptom(resource, namespace, pods, workload)
                 if log_symptom is not None:
                     symptoms.append(log_symptom)
+        # Cluster-infra health: a node out of disk (DiskPressure -- often logs filling up), memory,
+        # or PIDs, or one gone NotReady. One `kubectl get nodes`; the root cause behind evictions.
+        symptoms.extend(self._node_symptoms())
         return symptoms
 
     def _symptom(self, resource: Resource, namespace: str, sick: list[PodHealth]) -> Symptom:
@@ -399,6 +440,40 @@ class KubectlProbe:
             namespace = (pod.get("metadata") or {}).get("namespace") or "default"
             grouped.setdefault(namespace, {"items": []})["items"].append(pod)
         return grouped
+
+    def _node_symptoms(self) -> list[Symptom]:
+        """A Symptom per flagged node condition (DiskPressure / MemoryPressure / PIDPressure /
+        NotReady) from ONE `kubectl get nodes -o json`. Best-effort: a failed/denied read (`get
+        nodes` is cluster-scoped RBAC) degrades to no node symptoms, never crashes the scan."""
+        text = self._run_text(self._kubectl("get", "nodes", "-o", "json"))
+        if not text:
+            return []
+        try:
+            doc = json.loads(text)
+        except ValueError:
+            return []
+        return [self._node_symptom(issue) for issue in node_issues(doc)]
+
+    def _node_symptom(self, issue: NodeIssue) -> Symptom:
+        # A node finding -- cluster-scoped, so identity carries the context (a target = a cluster)
+        # but no namespace. DiskPressure/MemoryPressure/PIDPressure/NotReady are all serious (active
+        # eviction / a down node) -> HIGH, so they surface, not just count.
+        where = f"{self._context}/" if self._context else ""
+        identity = f"{where}Node/{issue.node}"
+        on = f" on {self._context}" if self._context else ""
+        evidence = {"node": issue.node, "condition": issue.category, "message": issue.message}
+        if self._context:
+            evidence["cluster"] = self._context
+        return Symptom(
+            identity=identity,
+            kind="Node",
+            category=issue.category,
+            severity=Severity.HIGH,
+            title=f"node {issue.node} has {issue.category}{on}",
+            detail=issue.message,
+            provenance=Provenance(source="kubernetes", address=identity),
+            evidence=evidence,
+        )
 
     def _last_log_line(self, namespace: str, pod: str) -> str:
         # Best-effort evidence: a failed `kubectl logs` is routine -- the `--previous` attempt has
