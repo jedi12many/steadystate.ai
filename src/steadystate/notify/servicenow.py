@@ -7,17 +7,21 @@ Alert maps to one incident, keyed by the Alert's fingerprint in ``correlation_id
 the ITSM analog of PagerDuty's ``dedup_key``. A correlated group rides on its single
 ``correlation_fingerprint``, so the same workload failing in N places is **one** incident, not N.
 A finding whose incident was resolved/closed and then recurs opens a fresh one (the lookup is
-scoped to ``active`` records).
+scoped to ``active`` records). And the other half of the loop: when a finding **clears**, the
+surface **auto-resolves** its open incident (state -> Resolved, with close notes) -- so a
+scheduled scan closes tickets it opened, no manual cleanup. Matches on ``correlation_id``, so a
+grouped finding's incident resolves when the whole group clears.
 
 Config (HTTP Basic auth against the Table API):
-  STEADYSTATE_SERVICENOW_INSTANCE   instance ("dev12345") or a full base URL
-  STEADYSTATE_SERVICENOW_USER       the integration user
-  STEADYSTATE_SERVICENOW_PASSWORD   that user's password (or token)
-  STEADYSTATE_SERVICENOW_TABLE      target table (default "incident")
+  STEADYSTATE_SERVICENOW_INSTANCE     instance ("dev12345") or a full base URL
+  STEADYSTATE_SERVICENOW_USER         the integration user
+  STEADYSTATE_SERVICENOW_PASSWORD     that user's password (or token)
+  STEADYSTATE_SERVICENOW_TABLE        target table (default "incident")
+  STEADYSTATE_SERVICENOW_CLOSE_CODE   close_code for auto-resolve (default "Solved (Permanently)")
+  STEADYSTATE_SERVICENOW_AUTOCLOSE    set false/0/no to disable auto-resolve (default on)
 
 Outbound only; stdlib urllib, http(s)-gated by ``safe_urlopen``. Honest degrade when
-unconfigured -- says so once and sends nothing, never pretends it delivered. (Auto-closing an
-incident when its finding resolves is a follow-up, like the PagerDuty resolve path.)
+unconfigured -- says so once and sends nothing, never pretends it delivered.
 """
 
 from __future__ import annotations
@@ -45,6 +49,14 @@ logger = logging.getLogger(__name__)
 # steadystate Severity -> ServiceNow urgency/impact (1 = High, 2 = Medium, 3 = Low). ServiceNow
 # derives an incident's Priority from urgency x impact, so setting both is enough.
 _SN_URGENCY = {"critical": "1", "high": "1", "medium": "2", "low": "3"}
+
+# ServiceNow incident state for an auto-resolve (6 = Resolved). We resolve rather than Close (7),
+# the conventional, reversible step a tool should take -- a human still owns the final close.
+_RESOLVED_STATE = "6"
+
+
+def _falsey(value: str | None) -> bool:
+    return (value or "").strip().lower() in {"false", "0", "no", "off"}
 
 
 def _correlation_id(alert: Alert) -> str:
@@ -106,6 +118,12 @@ class ServiceNowSurface:
         self.password = password or os.environ.get("STEADYSTATE_SERVICENOW_PASSWORD")
         self.table = table or os.environ.get("STEADYSTATE_SERVICENOW_TABLE") or "incident"
         self.timeout = timeout
+        # Auto-resolve an incident when its finding clears (default on). close_code is instance-
+        # configurable; the OOB default works on a stock instance.
+        self.autoclose = not _falsey(os.environ.get("STEADYSTATE_SERVICENOW_AUTOCLOSE"))
+        self.close_code = (
+            os.environ.get("STEADYSTATE_SERVICENOW_CLOSE_CODE") or "Solved (Permanently)"
+        )
 
     def _configured(self) -> bool:
         return bool(self.instance and self.user and self.password)
@@ -133,6 +151,12 @@ class ServiceNowSurface:
             return
         for alert in report.alerts:
             self._upsert(format_servicenow_incident(alert))
+        # The other half of the loop: a finding that cleared this scan -> resolve its open incident,
+        # so the surface closes tickets it opened. Stateful scans pass `resolved`; a stateless one
+        # passes none, and there's nothing to close.
+        if self.autoclose:
+            for finding in resolved or ():
+                self._resolve_incident(finding)
 
     def _upsert(self, fields: dict) -> None:
         """Create the incident, or -- if one is already open for this correlation_id -- add a work
@@ -157,6 +181,28 @@ class ServiceNowSurface:
                 self._request("POST", self._table_url(), fields)
         except (urllib.error.URLError, OSError) as exc:
             logger.warning("ServiceNow delivery failed: %s", exc)
+
+    def _resolve_incident(self, finding: ResolvedFinding) -> None:
+        """Auto-resolve the open incident for a cleared finding (state -> Resolved, with close
+        notes). Matches on ``correlation_id`` -- the same key the incident was opened with -- so a
+        grouped finding's incident resolves when the group clears. No open incident -> nothing to
+        do. Best-effort: a failed lookup/resolve is logged, never raised."""
+        try:
+            sys_id = self._find_open(finding.fingerprint)
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            logger.warning("ServiceNow resolve lookup failed for %s: %s", finding.fingerprint, exc)
+            return
+        if sys_id is None:  # no open incident for this finding (never filed, or already closed)
+            return
+        body = {
+            "state": _RESOLVED_STATE,
+            "close_code": self.close_code,
+            "close_notes": f"steadystate: finding cleared -- {finding.title}",
+        }
+        try:
+            self._request("PATCH", f"{self._table_url()}/{sys_id}", body)
+        except (urllib.error.URLError, OSError) as exc:
+            logger.warning("ServiceNow resolve failed: %s", exc)
 
     def _find_open(self, correlation_id: str) -> str | None:
         """The sys_id of an existing *active* incident for this correlation_id, or None. Scoped to

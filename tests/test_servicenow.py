@@ -146,6 +146,49 @@ def test_emit_updates_the_open_incident_instead_of_duplicating(monkeypatch):
     assert "work_notes" in patch_body  # a note on the existing incident, not a new record
 
 
+# -- auto-close: resolve an incident when its finding clears --------------------
+
+
+def _resolved(fingerprint: str = "f" * 64, title: str = "squid cleared"):
+    from steadystate.reconcile_state import ResolvedFinding
+
+    return ResolvedFinding(fingerprint=fingerprint, title=title)
+
+
+def test_emit_auto_resolves_an_incident_when_its_finding_clears(monkeypatch):
+    calls = _fake(monkeypatch, existing_sys_id="abc123")  # an open incident exists for it
+    _sn().emit(Report(items=[]), resolved=[_resolved()])
+    assert [c[0] for c in calls] == ["GET", "PATCH"]
+    patch_url, patch_body = calls[1][1], calls[1][2]
+    assert patch_url.endswith("/api/now/table/incident/abc123")
+    assert patch_body["state"] == "6"  # Resolved
+    assert patch_body["close_code"] and "cleared" in patch_body["close_notes"]
+
+
+def test_emit_resolve_skips_when_no_incident_is_open(monkeypatch):
+    calls = _fake(monkeypatch)  # GET finds nothing -> nothing to close
+    _sn().emit(Report(items=[]), resolved=[_resolved()])
+    assert [c[0] for c in calls] == ["GET"]  # no PATCH
+
+
+def test_autoclose_can_be_disabled(monkeypatch):
+    monkeypatch.setenv("STEADYSTATE_SERVICENOW_AUTOCLOSE", "false")
+    calls = _fake(monkeypatch, existing_sys_id="abc123")
+    ServiceNowSurface(instance="dev12345", user="u", password="p").emit(
+        Report(items=[]), resolved=[_resolved()]
+    )
+    assert calls == []  # autoclose off -> no lookup, no resolve
+
+
+def test_close_code_is_configurable(monkeypatch):
+    monkeypatch.setenv("STEADYSTATE_SERVICENOW_CLOSE_CODE", "Closed/Resolved by Caller")
+    calls = _fake(monkeypatch, existing_sys_id="abc123")
+    ServiceNowSurface(instance="dev12345", user="u", password="p").emit(
+        Report(items=[]), resolved=[_resolved()]
+    )
+    assert calls[1][2]["close_code"] == "Closed/Resolved by Caller"
+
+
 def test_emit_skips_on_a_failed_lookup_to_avoid_duplicates(monkeypatch):
     calls = _fake(monkeypatch, get_raises=True)
     _sn().emit(Report(items=[_alert()]))
