@@ -10,6 +10,7 @@ from steadystate.act.bounds import (
     Envelope,
     Impact,
     Reversibility,
+    bound_from_env,
     within_bounds,
 )
 
@@ -75,3 +76,37 @@ def test_a_terraform_plan_and_a_kubectl_cleanup_share_the_envelope_vocabulary():
     assert modified is not None and not within_bounds(modified)
     # the kubectl cleanup, described in the SAME terms, is lossless/tenant -> within the bound.
     assert within_bounds(CLEANUP_ENVELOPE)
+
+
+# -- the operator's bound dial: STEADYSTATE_BOUND overlays DEFAULT_BOUND -----------------------
+
+
+def test_bound_from_env_empty_is_the_default():
+    assert bound_from_env("") == DEFAULT_BOUND
+
+
+def test_bound_from_env_widens_recoverable_to_re_enable_auto():
+    policy = bound_from_env("recoverable=service")
+    recoverable_modify = Envelope(Reversibility.RECOVERABLE, Impact.SERVICE)
+    assert not within_bounds(recoverable_modify)  # escalates under the default
+    assert within_bounds(recoverable_modify, policy)  # but runs once the operator widens
+    # untouched reversibilities keep their default ceiling
+    assert policy[Reversibility.LOSSLESS] == DEFAULT_BOUND[Reversibility.LOSSLESS]
+
+
+def test_bound_from_env_none_narrows():
+    policy = bound_from_env("lossless=none")
+    lossless_tenant = Envelope(Reversibility.LOSSLESS, Impact.TENANT)  # the cleanup's envelope
+    assert within_bounds(lossless_tenant)  # lossless/tenant is fine by default
+    assert not within_bounds(lossless_tenant, policy)  # but the operator forbade lossless auto
+
+
+def test_bound_from_env_skips_garbage_never_widening_on_a_typo():
+    # A typo'd reversibility or impact must leave the bound conservative, never silently open it.
+    assert bound_from_env("recoverble=fleet,recoverable=notatier,=service,junk") == DEFAULT_BOUND
+
+
+def test_bound_from_env_accepts_multiple_pairs_and_separators():
+    policy = bound_from_env("recoverable=service; irreversible=one")
+    assert policy[Reversibility.RECOVERABLE] == Impact.SERVICE
+    assert policy[Reversibility.IRREVERSIBLE] == Impact.ONE

@@ -199,6 +199,34 @@ def test_assess_modified_eligible_medium_and_targets_address():
     assert "aws_s3_bucket.logs" in plan.command
 
 
+# --- can_run_unattended: eligible (human-approvable) vs. the bound (auto-runnable) ---
+
+
+def test_can_run_unattended_separates_approvable_from_auto():
+    from steadystate.act.bounds import DEFAULT_BOUND, bound_from_env
+    from steadystate.act.plan import can_run_unattended
+
+    removed = assess(_drift(ChangeType.REMOVED))
+    modified = assess(_drift(ChangeType.MODIFIED))
+    # REMOVED isn't even approvable -> never unattended.
+    assert can_run_unattended(removed, DEFAULT_BOUND) is False
+    # MODIFIED is approvable (eligible) but recoverable -> held from auto under the default bound...
+    assert modified.eligible is True
+    assert can_run_unattended(modified, DEFAULT_BOUND) is False
+    # ...and runs unattended once the operator widens the bound to allow it.
+    assert can_run_unattended(modified, bound_from_env("recoverable=service")) is True
+
+
+def test_can_run_unattended_falls_back_to_eligible_without_an_envelope():
+    from steadystate.act.plan import RemediationPlan, Risk, can_run_unattended
+
+    # An un-migrated executor (no envelope) keeps its prior behavior: eligible -> may auto-run.
+    no_envelope = RemediationPlan("h", eligible=True, risk=Risk.MEDIUM, reason="", envelope=None)
+    assert can_run_unattended(no_envelope) is True
+    ineligible = RemediationPlan("h", eligible=False, risk=Risk.HIGH, reason="", envelope=None)
+    assert can_run_unattended(ineligible) is False
+
+
 # -- verify retry: cloud settings are eventually consistent ---------------------
 
 

@@ -38,37 +38,40 @@ def test_removed_drift_recorded_with_patch_but_not_auto_applied(tmp_path):
     store = StateStore(":memory:")
     report = _report(_drift(ChangeType.REMOVED))
 
-    eligible = cli._record_suggestions(
+    auto, held = cli._record_suggestions(
         store, "terraform", tmp_path, report, datetime.now(UTC), None
     )
 
-    assert eligible == []  # REMOVED is never apply-eligible -> never reaches auto-apply
+    assert auto == [] and held == []  # REMOVED isn't eligible -> neither auto nor held-for-approval
     [pending] = store.all_pending()
     assert pending.command == ""  # no enforce direction
     assert pending.patch is not None and 'resource "aws_s3_bucket" "logs"' in pending.patch
     assert "import {" not in pending.patch
 
 
-def test_eligible_drift_recorded_with_command_and_returned(tmp_path):
+def test_eligible_recoverable_drift_is_recorded_but_held_from_auto(tmp_path):
+    # MODIFIED is human-approvable (eligible) but RECOVERABLE -- outside the default bound -- so it
+    # is recorded as a pending enforce suggestion yet HELD from auto, not returned for auto-apply.
     store = StateStore(":memory:")
     report = _report(_drift(ChangeType.MODIFIED))
 
-    eligible = cli._record_suggestions(
+    auto, held = cli._record_suggestions(
         store, "terraform", tmp_path, report, datetime.now(UTC), None
     )
 
-    assert eligible == [_drift(ChangeType.MODIFIED).fingerprint]  # enforce path unchanged
+    assert auto == []  # recoverable -> not auto under the default bound
+    assert held == [_drift(ChangeType.MODIFIED).fingerprint]  # escalated to a human instead
     [pending] = store.all_pending()
-    assert "terraform apply" in pending.command
+    assert "terraform apply" in pending.command  # still recorded for `approve`
     assert pending.patch is None  # MODIFIED has no codify renderer yet
 
 
 def test_observe_only_source_records_nothing(tmp_path):
     store = StateStore(":memory:")
-    eligible = cli._record_suggestions(
+    result = cli._record_suggestions(
         store, "k8s", tmp_path, _report(_drift(ChangeType.REMOVED)), datetime.now(UTC), None
     )
-    assert eligible == []
+    assert result == ([], [])
     assert store.all_pending() == []  # no executor -> nothing to enforce or accept
 
 

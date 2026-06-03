@@ -143,9 +143,24 @@ def _auto_scan(tmp_path, plan_obj=_PLAN, source="terraform", extra=None):
 _FP = hashlib.sha256(b"terraform|aws_s3_bucket.logs|modified").hexdigest()
 
 
-def test_auto_applies_an_eligible_drift_without_a_human(tmp_path):
-    # auto records the eligible MODIFIED drift AND drives it through the same guardrailed
-    # approval core -- so it lands APPROVED, actored "auto", with nothing left pending.
+def test_auto_holds_a_recoverable_drift_under_the_default_bound(tmp_path, monkeypatch):
+    # A MODIFIED terraform drift is eligible (human-approvable) but RECOVERABLE -- outside the
+    # default autonomous bound -- so auto does NOT apply it: it's left pending for a human, and the
+    # run says so. The bound, not just `eligible`, now governs unattended action.
+    monkeypatch.delenv("STEADYSTATE_BOUND", raising=False)
+    result, db = _auto_scan(tmp_path)
+    assert result.exit_code == 0
+    assert "held 1 eligible change(s) for approval" in result.stdout
+    with StateStore(db) as store:
+        action = store.get_pending(_FP)
+    assert action is not None
+    assert action.status == PENDING  # held, not auto-approved
+
+
+def test_auto_applies_a_recoverable_drift_when_the_bound_is_widened(tmp_path, monkeypatch):
+    # Widening the bound (the operator's trust dial) lets the same recoverable change run unattended
+    # again: it lands APPROVED, actored "auto", nothing left pending. Proves the knob is wired.
+    monkeypatch.setenv("STEADYSTATE_BOUND", "recoverable=service")
     result, db = _auto_scan(tmp_path)
     assert result.exit_code == 0
     assert "autonomy=auto" in result.stdout

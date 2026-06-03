@@ -5,14 +5,21 @@ does this touch, and can I undo it?* -- and it does not depend on whether the ch
 `kubectl delete`, a `terraform apply`, or an ansible play. So that calculus lives here, once,
 backend-agnostic: every action declares an ``Envelope`` (its reversibility and its blast radius on
 a generic scale), and a human declares the **bound** -- which envelopes may run unattended. The
-gate (``within_bounds``) sees only the envelope, never a backend, so the same grid governs every
-source steadystate can act on.
+gate (``within_bounds``) sees only the envelope, never a backend.
+
+What the bound governs today: the autonomous paths -- reflexes (``hold``), the decider
+(``propose``), and the drift ``--autonomy auto`` path for any executor that declares an envelope
+(terraform does; ``can_run_unattended`` in act/plan.py is the gate). An executor that has not yet
+declared envelopes (ansible) falls back to the older ``eligible`` boolean -- the migration is
+incremental, and absence of an envelope only keeps prior behavior, never loosens it. So this is on
+its way to "one grid governs every source", and is honest that it is not all the way there yet.
 
 This is the spine the autonomy story stands on. A reflex today, an LLM tomorrow, decides *what to
 do*; the bound decides *how much it is ever allowed to break*. The decider proposes an action and
 its envelope; the gate checks that envelope against the human's bound; out-of-bound escalates no
 matter how confident the decider is. The one decision that never goes to the code or the model is
-the bound itself -- a human sets it, and flipping a reflex to ``auto`` can never cross it.
+the bound itself -- a human sets it (the conservative default, widened via ``STEADYSTATE_BOUND`` as
+trust grows), and flipping a reflex to ``auto`` can never cross it.
 
 The two axes are deliberately generic; each backend maps its own nouns onto them:
 
@@ -34,6 +41,7 @@ The two axes are deliberately generic; each backend maps its own nouns onto them
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from enum import IntEnum
 
@@ -95,3 +103,39 @@ def within_bounds(envelope: Envelope, policy: BoundPolicy = DEFAULT_BOUND) -> bo
     default for any reversibility the policy doesn't permit."""
     ceiling = policy.get(envelope.reversibility)
     return ceiling is not None and envelope.impact <= ceiling
+
+
+_REVERSIBILITY_BY_NAME = {r.name.lower(): r for r in Reversibility}
+_IMPACT_BY_NAME = {i.name.lower(): i for i in Impact}
+
+
+def bound_from_env(raw: str | None = None) -> BoundPolicy:
+    """The *active* bound: ``DEFAULT_BOUND`` overlaid with the operator's ``STEADYSTATE_BOUND`` knob
+    -- the widen/narrow dial, the same env-overlay idiom reflex promotion uses
+    (``STEADYSTATE_REFLEX_AUTO``). Every autonomy gate reads this, so one dial governs the whole
+    tool: drift auto-apply, reflexes, and the decider all honor it.
+
+    Format: comma-separated ``reversibility=impact`` pairs, each naming the HIGHEST impact tier that
+    may run unattended for that reversibility (``none`` forbids it entirely). The reversibility
+    names are ``lossless`` / ``self_healing`` / ``recoverable`` / ``irreversible``; the impact names
+    ``one`` / ``service`` / ``tenant`` / ``node`` / ``fleet``. e.g.
+    ``STEADYSTATE_BOUND="recoverable=service"`` lets a recoverable change up to one service auto-run
+    (the dial a terraform operator turns to re-enable `--autonomy auto` after watching it be right).
+
+    Unparseable tokens are **skipped**, never applied -- a typo can only leave the bound at the
+    conservative default, never silently widen it (the same 'never escalate on uncertainty' the
+    enrichers take). Pure given ``raw`` (reads ``STEADYSTATE_BOUND`` only when ``raw`` is None)."""
+    raw = os.environ.get("STEADYSTATE_BOUND", "") if raw is None else raw
+    policy = dict(DEFAULT_BOUND)
+    for token in raw.replace(";", ",").split(","):
+        key, sep, value = token.partition("=")
+        reversibility = _REVERSIBILITY_BY_NAME.get(key.strip().lower())
+        if not sep or reversibility is None:
+            continue  # not a `reversibility=...` pair, or an unknown reversibility -> skip
+        v = value.strip().lower()
+        if v in ("none", "never", ""):
+            policy[reversibility] = None  # explicitly forbid auto for this reversibility
+        elif v in _IMPACT_BY_NAME:
+            policy[reversibility] = _IMPACT_BY_NAME[v]
+        # else: an unknown impact name -> skip (stay conservative; never widen on a typo)
+    return policy

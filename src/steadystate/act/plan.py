@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from ..model import ChangeType, Drift
-from .bounds import Envelope, Impact, Reversibility
+from .bounds import BoundPolicy, Envelope, Impact, Reversibility, bound_from_env, within_bounds
 
 
 class Risk(str, Enum):
@@ -39,6 +39,24 @@ class RemediationPlan:
     # a kubectl cleanup or an ansible play. None on a plan that predates the envelope (the human
     # approve path still works; only the autonomous gate needs it).
     envelope: Envelope | None = None
+
+
+def can_run_unattended(plan: RemediationPlan, policy: BoundPolicy | None = None) -> bool:
+    """May this remediation run WITHOUT a human -- the gate the autonomous (`--autonomy auto`) path
+    adds on top of ``eligible``. The two questions are different: ``eligible`` answers *"may a human
+    approve this?"* (never a destroy); this answers the stricter *"may it run unattended?"* -- it
+    must ALSO sit within the operator's bound (act/bounds.py). So a recoverable change a human can
+    approve still escalates under ``auto`` until the operator widens the bound.
+
+    A plan with no declared ``envelope`` falls back to ``eligible`` alone -- its executor has not
+    been migrated to the bound (terraform declares an envelope; ansible does not yet), so this never
+    *loosens* the prior behavior, only tightens it where an envelope exists. ``policy`` defaults to
+    the active env bound (``bound_from_env``); inject one in tests to stay pure."""
+    if not plan.eligible:
+        return False
+    if plan.envelope is None:
+        return True  # eligible already True; un-migrated executor keeps its prior auto behavior
+    return within_bounds(plan.envelope, policy if policy is not None else bound_from_env())
 
 
 def assess(drift: Drift) -> RemediationPlan:
