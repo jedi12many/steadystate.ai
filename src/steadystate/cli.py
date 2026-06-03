@@ -16,6 +16,7 @@ from rich.table import Table
 from .act import EXECUTORS, build_executor
 from .act.approve import apply_pending, decline_pending
 from .act.base import Proposer
+from .act.bounds import bound_from_env
 from .act.cleanup import record_cleanups
 from .act.decide import (
     AUTHORIZED,
@@ -29,6 +30,7 @@ from .act.decide import (
 from .act.deliver import build_deliveries
 from .act.learn import ADOPT
 from .act.learn import learn as derive_lessons
+from .act.plan import can_run_unattended
 from .act.reflex import reflexes, run_hold
 from .catalog import gather_catalog, render_console, render_html
 from .discover import (
@@ -131,19 +133,23 @@ def _open_store(state: Path) -> StateStore:
 
 def _record_suggestions(
     store: StateStore, source: str, path: Path, report, now: datetime, environment: str | None
-) -> list[str]:
+) -> tuple[list[str], list[str]]:
     """Under `--autonomy suggest`/`auto`, record a suggestion per drift. A suggestion carries
     whichever directions exist: the *enforce* command (when apply-eligible) and/or an
     *accept-reality* patch (a code change for the same drift, when the executor can render one).
 
-    Returns only the **apply-eligible** fingerprints -- the set `auto` then applies. A patch-only
-    suggestion (e.g. a REMOVED drift, where enforcing would destroy the resource) is recorded for
-    review but never returned, so it can never reach the auto-apply path: the model is still not
-    in the loop and `auto` still never destroys. An observe-only source has nothing to record."""
+    Returns ``(auto, held)``: the eligible fingerprints **within the autonomous bound** that `auto`
+    applies, and the eligible-but-out-of-bound ones it records as pending and leaves for a human.
+    Eligibility (human-approvable) and the bound (auto-runnable) are different gates: a recoverable
+    terraform change is recorded for approval but, under the default bound, *held* from auto -- so
+    `auto` never runs a change the operator hasn't allowed unattended (widen `STEADYSTATE_BOUND` to
+    opt in). A patch-only suggestion (a REMOVED drift, where enforcing would destroy) is recorded
+    for review but is in neither list, so it never auto-applies. Observe-only source -> nothing."""
     executor = build_executor(source, path)
     if executor is None:
-        return []
-    eligible: list[str] = []
+        return [], []
+    auto: list[str] = []
+    held: list[str] = []
     for alert in report.alerts:
         for drift in alert.drifts:
             plan = executor.plan_for(drift)
@@ -165,8 +171,8 @@ def _record_suggestions(
                 now,
             )
             if plan.eligible:
-                eligible.append(drift.fingerprint)
-    return eligible
+                (auto if can_run_unattended(plan) else held).append(drift.fingerprint)
+    return auto, held
 
 
 def _deliver(source: str, path: Path, report, deliver_names: list[str]) -> None:
@@ -479,9 +485,17 @@ def scan(
                 for call in report.llm_calls:
                     store.record_llm_call(call, now)
             if autonomy in ("suggest", "auto"):  # offer an eligible remediation per drift
-                recorded = _record_suggestions(store, source, path, report, now, label or None)
+                recorded, held = _record_suggestions(
+                    store, source, path, report, now, label or None
+                )
                 if autonomy == "auto":  # ...and, on auto, apply them through the same guardrails
                     _auto_apply(store, recorded)
+                    if held:  # eligible but outside the autonomous bound -> left for a human
+                        typer.echo(
+                            f"autonomy=auto: held {len(held)} eligible change(s) for approval -- "
+                            "they exceed the autonomous bound (recoverable/irreversible). "
+                            "Run `approve`, or widen STEADYSTATE_BOUND to opt in."
+                        )
             # Offer approvable evicted-pod cleanups (approve-gated, never auto-run) -- independent
             # of --autonomy, since the cleanup is a safe delete of dead tombstones a human OKs.
             record_cleanups(store, report, now)
@@ -945,7 +959,7 @@ def propose(
         decider: Decider = LLMDecider(analyst._complete)
     else:
         decider = CatalogDecider()
-    gated = propose_for(result.report, decider)
+    gated = propose_for(result.report, decider, bound_from_env())  # honor the operator's bound dial
     typer.echo(
         f"propose ({decider.name} decider): {len(gated)} proposal(s) for findings hold can't."
     )

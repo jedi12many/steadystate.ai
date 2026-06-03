@@ -212,6 +212,18 @@ def test_an_in_bounds_envelope_at_auto_still_acts():
     assert plan_hold(_report(_evicted("prod", pods=2)), safe).to_act
 
 
+def test_plan_hold_honors_a_narrowed_bound_policy():
+    # The operator's bound dial reaches reflexes too: narrowing lossless to SERVICE makes the
+    # seed cleanup (lossless/TENANT, normally in-bounds) escalate -- one bound governs every path.
+    from steadystate.act.bounds import bound_from_env
+
+    safe = _reflex(AUTO, envelope=Envelope(Reversibility.LOSSLESS, Impact.TENANT))
+    narrowed = bound_from_env("lossless=service")
+    plan = plan_hold(_report(_evicted("prod", pods=2)), safe, policy=narrowed)
+    [decision] = plan.decisions
+    assert decision.decision == ESCALATE and "outside the autonomous bound" in decision.reason
+
+
 # -- recurrence-as-confidence (the self-correcting trust loop) -------------------
 
 

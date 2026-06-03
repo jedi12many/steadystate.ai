@@ -31,7 +31,7 @@ from ..reason.report import Report
 from ..state import OPEN, Finding, StateStore
 from .approve import apply_pending
 from .base import RemediationResult
-from .bounds import Envelope, within_bounds
+from .bounds import DEFAULT_BOUND, BoundPolicy, Envelope, bound_from_env, within_bounds
 from .cleanup import CLEANUP_ENVELOPE, is_safe_cleanup
 
 # A reflex's earned autonomy, lowest to highest. ``observe`` is the dormant default a brand-new or
@@ -168,7 +168,10 @@ class HoldPlan:
 
 
 def plan_hold(
-    report: Report, active: tuple[Reflex, ...], recurrence: dict[str, int] | None = None
+    report: Report,
+    active: tuple[Reflex, ...],
+    recurrence: dict[str, int] | None = None,
+    policy: BoundPolicy = DEFAULT_BOUND,
 ) -> HoldPlan:
     """Decide, per actionable finding, whether a reflex acts, watches, or escalates -- the control
     loop's whole judgement, with NO side effects (so it's exhaustively testable and a dry `hold`
@@ -231,7 +234,7 @@ def plan_hold(
             decisions.append(
                 ReflexDecision(**base, decision=ESCALATE, reflex=reflex.name, reason=reason)
             )
-        elif not within_bounds(reflex.envelope):
+        elif not within_bounds(reflex.envelope, policy):
             # The bound is supreme: an action outside the human's impact/reversibility envelope
             # escalates even at `auto` -- flipping a reflex on can never cross the bound.
             reason = (
@@ -306,7 +309,7 @@ def run_hold(
     now = now or datetime.now(UTC)
     active = reflexes()
     recurrence = reflex_recurrence(store.all_findings(), store.acted_fingerprints(), active)
-    plan = plan_hold(report, active, recurrence)
+    plan = plan_hold(report, active, recurrence, bound_from_env())
     applied: list[tuple[ReflexDecision, RemediationResult | None]] = []
     if apply:
         for decision in plan.to_act:
