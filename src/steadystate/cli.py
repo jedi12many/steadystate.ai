@@ -1042,7 +1042,9 @@ def baseline(
             "/ k8s-baseline)."
         )
     try:
-        path, count = capture_baseline(tgt.context)
+        # Pass the target's kubeconfig (a cwd kubeconfig the context lives in, from discovery) so a
+        # context not on kubectl's default path still baselines -- mirrors the probe/scan path.
+        path, count = capture_baseline(tgt.context, kubeconfig=tgt.kubeconfig)
     except SourceError as exc:
         typer.secho(f"baseline failed: {exc}", fg="red", err=True)
         raise typer.Exit(1) from None
