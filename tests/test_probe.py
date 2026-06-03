@@ -398,13 +398,14 @@ def test_non_fatal_log_errors_are_medium(monkeypatch):
 def test_log_scan_is_off_unless_deep_is_enabled(monkeypatch):
     # without enable_log_scan(), a Running pod's logs are never read -- the fast path is unchanged.
     prober = KubectlProbe()
-    fetched: list[int] = []
+    argvs: list[list[str]] = []
     monkeypatch.setattr(prober, "_all_pods", lambda: {"prod": {"items": [_pod("web-abc")]}})
+    monkeypatch.setattr(prober, "_node_symptoms", list)  # isolate the log-scan behavior
     monkeypatch.setattr(
-        prober, "_run_text", lambda argv, best_effort=False: fetched.append(1) or "panic: boom"
+        prober, "_run_text", lambda argv, best_effort=False: argvs.append(argv) or "panic: boom"
     )
-    assert prober.probe([_resource()]) == []  # status-healthy -> no symptom, no log read
-    assert fetched == []
+    assert prober.probe([_resource()]) == []  # status-healthy -> no symptom
+    assert not any("logs" in argv for argv in argvs)  # ...and no `kubectl logs` read
 
 
 def test_deep_does_not_double_report_a_status_unhealthy_workload(monkeypatch):
@@ -417,6 +418,138 @@ def test_deep_does_not_double_report_a_status_unhealthy_workload(monkeypatch):
     monkeypatch.setattr(prober, "_last_log_line", lambda namespace, pod: "panic: boom")
     [sym] = prober.probe([_resource()])
     assert sym.category == "CrashLoopBackOff"  # status wins; no Erroring duplicate
+
+
+# -- node health ----------------------------------------------------------------
+
+
+def _node(name: str, **conditions: tuple[str, str]) -> dict:
+    conds = [{"type": t, "status": s, "message": m} for t, (s, m) in conditions.items()]
+    return {"metadata": {"name": name}, "status": {"conditions": conds}}
+
+
+def test_node_issues_flags_pressure_and_notready():
+    from steadystate.probe.kubectl import node_issues
+
+    doc = {
+        "items": [
+            _node("n1", DiskPressure=("True", "disk full"), Ready=("True", "")),
+            _node("n2", Ready=("False", "kubelet stopped posting status")),  # NotReady
+            _node("n3", DiskPressure=("False", ""), Ready=("True", "")),  # healthy -> nothing
+        ]
+    }
+    assert {(i.node, i.category) for i in node_issues(doc)} == {
+        ("n1", "DiskPressure"),
+        ("n2", "NotReady"),
+    }
+
+
+def _nodes_probe(monkeypatch, nodes: dict) -> KubectlProbe:
+    prober = KubectlProbe()
+    monkeypatch.setattr(prober, "_all_pods", dict)  # no workload pods this test
+    monkeypatch.setattr(
+        prober,
+        "_run_text",
+        lambda argv, best_effort=False: __import__("json").dumps(nodes) if "nodes" in argv else "",
+    )
+    return prober
+
+
+def test_probe_flags_a_node_with_disk_pressure(monkeypatch):
+    # the user's case: logs fill the disk -> kubelet sets DiskPressure -> we flag it (the root cause
+    # behind the evicted pods). Cluster-scoped, so the identity carries the context, no namespace.
+    nodes = {"items": [_node("ip-10-0-1-5", DiskPressure=("True", "kubelet has disk pressure"))]}
+    prober = _nodes_probe(monkeypatch, nodes)
+    prober.use_context("prod-cluster")
+    [sym] = prober.probe([_resource()])
+    assert sym.kind == "Node" and sym.category == "DiskPressure" and sym.severity is Severity.HIGH
+    assert sym.identity == "prod-cluster/Node/ip-10-0-1-5"
+    assert "DiskPressure" in sym.title and sym.evidence["node"] == "ip-10-0-1-5"
+
+
+def test_node_read_is_best_effort(monkeypatch):
+    # a denied/failed `get nodes` (cluster-scoped RBAC) -> no node symptoms, never crashes a probe.
+    prober = KubectlProbe()
+    monkeypatch.setattr(prober, "_all_pods", dict)
+    monkeypatch.setattr(prober, "_run_text", lambda argv, best_effort=False: "")
+    assert prober.probe([_resource()]) == []
+
+
+# -- node disk % (the proactive `--deep` pass) ----------------------------------
+
+
+def test_node_disk_pct_takes_the_worst_filesystem():
+    from steadystate.probe.kubectl import node_disk_pct
+
+    assert node_disk_pct({"node": {"fs": {"capacityBytes": 100, "usedBytes": 85}}}) == 85
+    # imageFs (computed from availableBytes) is worse -> it wins.
+    worst = {
+        "node": {
+            "fs": {"capacityBytes": 100, "usedBytes": 50},
+            "runtime": {"imageFs": {"capacityBytes": 100, "availableBytes": 8}},
+        }
+    }
+    assert node_disk_pct(worst) == 92
+    assert node_disk_pct({}) is None  # nothing readable -> no warning
+
+
+def _deep_nodes_probe(monkeypatch, nodes: dict, summary: dict) -> KubectlProbe:
+    prober = KubectlProbe()
+    prober.enable_log_scan()  # --deep gates the per-node disk read
+    monkeypatch.setattr(prober, "_all_pods", dict)
+
+    def run(argv, best_effort=False):
+        joined = " ".join(argv)
+        if "summary" in joined:
+            return __import__("json").dumps(summary)
+        if "nodes" in joined:
+            return __import__("json").dumps(nodes)
+        return ""
+
+    monkeypatch.setattr(prober, "_run_text", run)
+    return prober
+
+
+def test_deep_flags_a_node_filling_up_before_disk_pressure(monkeypatch):
+    # condition-healthy node (no DiskPressure yet) but 88% full -> a proactive MEDIUM warning.
+    nodes = {"items": [_node("n1", Ready=("True", ""))]}
+    summary = {"node": {"fs": {"capacityBytes": 100, "usedBytes": 88}}}
+    [sym] = _deep_nodes_probe(monkeypatch, nodes, summary).probe([_resource()])
+    assert sym.category == "DiskFilling" and sym.severity is Severity.MEDIUM
+    assert "88% full" in sym.title and sym.evidence["disk_percent"] == "88"
+
+
+def test_deep_disk_near_full_is_high(monkeypatch):
+    nodes = {"items": [_node("n1", Ready=("True", ""))]}
+    summary = {"node": {"fs": {"capacityBytes": 100, "usedBytes": 95}}}
+    [sym] = _deep_nodes_probe(monkeypatch, nodes, summary).probe([_resource()])
+    assert sym.severity is Severity.HIGH  # near full -> HIGH
+
+
+def test_disk_pct_is_off_without_deep(monkeypatch):
+    # the per-node summary read is gated behind --deep; the fast path never makes it.
+    nodes = {"items": [_node("n1", Ready=("True", ""))]}
+    prober = KubectlProbe()  # NOT --deep
+    monkeypatch.setattr(prober, "_all_pods", dict)
+    argvs: list[list[str]] = []
+    monkeypatch.setattr(
+        prober,
+        "_run_text",
+        lambda argv, best_effort=False: (
+            argvs.append(argv)
+            or (__import__("json").dumps(nodes) if "nodes" in " ".join(argv) else "")
+        ),
+    )
+    assert prober.probe([_resource()]) == []
+    assert not any("summary" in " ".join(a) for a in argvs)  # no per-node summary call
+
+
+def test_deep_does_not_double_report_a_node_already_at_disk_pressure(monkeypatch):
+    # a node already flagged DiskPressure (HIGH condition) must NOT also get a DiskFilling symptom.
+    nodes = {"items": [_node("n1", DiskPressure=("True", "disk pressure"), Ready=("True", ""))]}
+    summary = {"node": {"fs": {"capacityBytes": 100, "usedBytes": 99}}}
+    syms = _deep_nodes_probe(monkeypatch, nodes, summary).probe([_resource()])
+    assert [s.category for s in syms] == ["DiskPressure"]  # one finding, not two
 
 
 # -- the registry ---------------------------------------------------------------

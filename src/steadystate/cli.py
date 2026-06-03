@@ -1118,8 +1118,9 @@ def probe(
     deep: bool = typer.Option(
         False,
         "--deep",
-        help="Also scan Running pods' logs for error/fatal signatures (one `kubectl logs` per pod "
-        "-- catches a pod that's up but erroring). Off by default.",
+        help="Also scan Running pods' logs for errors (a `kubectl logs` per pod) AND each node's "
+        "disk usage % (a `stats/summary` per node) -- a pod up-but-erroring, and a node filling up "
+        "before it evicts. Off by default.",
     ),
     json_out: bool = typer.Option(
         False,
