@@ -11,6 +11,11 @@ The generic, service-agnostic rule (slice 1): a unit in the **failed** systemd s
 (HIGH), and a service that is **enabled** (meant to come up at boot) but is **not running** is a
 Symptom (MEDIUM) -- it's supposed to be up and isn't. We don't need to know *what* the host runs;
 a later slice can add operator-declared per-service checks (e.g. keepalived's VRRP state) on top.
+
+Plus the second classic host malfunction: a **filling disk**. A second read-only gather (the
+`setup` module's `ansible_mounts`) reports each filesystem's size; a mount at/over 80% used is a
+Symptom (MEDIUM), 90% HIGH -- the same thresholds as the kubectl probe's node disk %. A full root
+or /var is what *causes* a service to wedge, so this is the proactive signal under the service one.
 """
 
 from __future__ import annotations
@@ -32,6 +37,11 @@ logger = logging.getLogger(__name__)
 # running" signal. "failed" is handled separately (it's a Symptom regardless of enabled-ness).
 _DOWN_STATES = frozenset({"stopped", "inactive", "dead"})
 _RUNNING_STATES = frozenset({"running", "active"})
+
+# Filesystem-fill thresholds, mirroring the kubectl node disk % check: warn at 80% used, HIGH at
+# 90%. A filling root/var is what tips a host into the failures the service check then sees.
+_DISK_WARN_PCT = 80
+_DISK_HIGH_PCT = 90
 
 
 def _services_by_host(doc: object) -> dict[str, dict]:
@@ -98,6 +108,74 @@ def _symptom(host: str, service: str, category: str, severity: Severity, state: 
     )
 
 
+def _mounts_by_host(doc: object) -> dict[str, list]:
+    """Pull ``{host: [mount, ...]}`` out of an `ansible ... -m setup` run (JSON callback): each
+    host's ``ansible_facts.ansible_mounts`` list. Defensive at every level -- a partial/odd document
+    yields what it can, never raises. Pure."""
+    out: dict[str, list] = {}
+    if not isinstance(doc, dict):
+        return out
+    for play in doc.get("plays") or []:
+        tasks = play.get("tasks") if isinstance(play, dict) else None
+        for task in tasks or []:
+            hosts = task.get("hosts") if isinstance(task, dict) else None
+            if not isinstance(hosts, dict):
+                continue
+            for host, result in hosts.items():
+                mounts = (result.get("ansible_facts") or {}).get("ansible_mounts")
+                if isinstance(result, dict) and isinstance(mounts, list):
+                    out[host] = mounts
+    return out
+
+
+def _disk_pct(mount: dict) -> int | None:
+    """Percent used of one ``ansible_mounts`` entry from ``size_total``/``size_available`` (bytes),
+    or None when the numbers are missing/zero/non-numeric (a pseudo-fs, an odd fact) -- so a
+    bad/partial mount is skipped, never miscounted. Pure."""
+    total, avail = mount.get("size_total"), mount.get("size_available")
+    if not isinstance(total, (int, float)) or not isinstance(avail, (int, float)):
+        return None
+    if total <= 0 or isinstance(total, bool) or isinstance(avail, bool):
+        return None
+    return int((total - avail) / total * 100)
+
+
+def disk_symptoms(mounts_by_host: dict[str, list]) -> list[Symptom]:
+    """A Symptom per filling filesystem across the fleet: a mount at/over 80% used -> MEDIUM, 90% ->
+    HIGH. Mirrors the kubectl probe's node disk %. A mount below the warn line, or one whose size
+    facts are missing, yields nothing. Pure + testable."""
+    symptoms: list[Symptom] = []
+    for host in sorted(mounts_by_host):
+        for mount in mounts_by_host[host] or []:
+            if not isinstance(mount, dict):
+                continue
+            pct = _disk_pct(mount)
+            if pct is None or pct < _DISK_WARN_PCT:
+                continue
+            symptoms.append(_disk_symptom(host, str(mount.get("mount") or "?"), pct, mount))
+    return symptoms
+
+
+def _disk_symptom(host: str, mount: str, pct: int, info: dict) -> Symptom:
+    identity = f"{host}:{mount}"
+    evidence = {"host": host, "mount": mount, "percent_used": str(pct)}
+    total, avail = info.get("size_total"), info.get("size_available")
+    if isinstance(total, (int, float)) and not isinstance(total, bool):
+        evidence["size_total"] = str(int(total))
+    if isinstance(avail, (int, float)) and not isinstance(avail, bool):
+        evidence["size_available"] = str(int(avail))
+    return Symptom(
+        identity=identity,
+        kind="Filesystem",
+        category="DiskFilling",
+        severity=Severity.HIGH if pct >= _DISK_HIGH_PCT else Severity.MEDIUM,
+        title=f"{mount} is {pct}% full on {host}",
+        detail=f"{mount} on {host} is {pct}% full -- free space before it wedges services",
+        provenance=Provenance(source="ansible", address=identity),
+        evidence=evidence,
+    )
+
+
 class AnsibleHealthProbe:
     """Reads the live service health of an Ansible inventory into Symptoms. Read-only: it runs the
     ad-hoc `service_facts` module (gathers, never changes), so it carries no remediation and needs
@@ -105,9 +183,14 @@ class AnsibleHealthProbe:
     symptoms" (never invent a problem, never break a scan), exactly like the kubectl probe."""
 
     name = "ansible"
-    # Observe-only: one read-only ad-hoc module run across the inventory. Declared so the manifest
-    # is honest and an operator can scope access.
-    commands = Capabilities(observe=("ansible all -m service_facts",))
+    # Observe-only: two read-only ad-hoc gathers across the inventory (service health + disk fill).
+    # Declared so the manifest is honest and an operator can scope access.
+    commands = Capabilities(
+        observe=(
+            "ansible all -m service_facts",
+            "ansible all -m setup -a gather_subset=hardware filter=ansible_mounts",
+        )
+    )
 
     def __init__(self, inventory: str | None = None, timeout: float = 30.0) -> None:
         self.inventory = inventory or os.environ.get("STEADYSTATE_ANSIBLE_INVENTORY")
@@ -122,16 +205,27 @@ class AnsibleHealthProbe:
 
     def probe(self, resources: list[Resource]) -> list[Symptom]:
         # Host health isn't tied to the declared k8s resources the seam passes (those are for the
-        # kubectl probe); we read the fleet directly, like kubectl's node-level symptoms.
-        doc = self._collect()
-        return host_health_symptoms(_services_by_host(doc)) if doc is not None else []
+        # kubectl probe); we read the fleet directly, like kubectl's node-level symptoms. Two
+        # independent read-only gathers: service health, then disk fill. Each degrades on its own --
+        # a failed disk gather never sinks the service findings, and vice versa.
+        symptoms: list[Symptom] = []
+        services = self._run_module("service_facts")
+        if services is not None:
+            symptoms += host_health_symptoms(_services_by_host(services))
+        disks = self._run_module("setup", "gather_subset=hardware filter=ansible_mounts")
+        if disks is not None:
+            symptoms += disk_symptoms(_mounts_by_host(disks))
+        return symptoms
 
-    def _collect(self) -> object | None:
-        """Run the read-only collection and parse the JSON-callback output. None on any failure
-        (ansible missing / inventory unresolved / unparseable) -> the probe degrades to []."""
+    def _run_module(self, module: str, args: str = "") -> object | None:
+        """Run one read-only ad-hoc ansible module across the inventory and parse its JSON-callback
+        output. None on any failure (ansible missing / inventory unresolved / unparseable) -> that
+        gather degrades to nothing, never an invented problem or a broken scan."""
         if shutil.which("ansible") is None:
             return None
-        argv = ["ansible", "all", "-m", "service_facts"]
+        argv = ["ansible", "all", "-m", module]
+        if args:
+            argv += ["-a", args]
         if self.inventory:
             argv += ["-i", self.inventory]
         # The JSON stdout callback gives structured output; ad-hoc runs need the load-callbacks
@@ -147,7 +241,7 @@ class AnsibleHealthProbe:
                 argv, capture_output=True, text=True, timeout=self.timeout, env=env
             )
         except (OSError, subprocess.SubprocessError) as exc:
-            logger.warning("ansible health probe failed: %s", exc)
+            logger.warning("ansible health probe (%s) failed: %s", module, exc)
             return None
         try:
             return json.loads(result.stdout)
