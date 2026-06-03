@@ -16,6 +16,8 @@ without a real shell or filesystem.
 from __future__ import annotations
 
 import json
+import os
+import re
 import shutil
 import subprocess
 from dataclasses import asdict, dataclass
@@ -593,6 +595,42 @@ def ansible_capture_command(cwd: Path) -> str:
     )
 
 
+# `ansible-playbook --list-tasks` prints role-prefixed task lines: ``  rolename : task name``. The
+# role is the single identifier before the first `` : ``. We require a no-space identifier so a
+# colon inside a plain (role-less) task name can't be mistaken for a role -- a heuristic that's fine
+# because the result is only an *advisory suggestion* a human confirms, never a fact the system acts
+# on. (Ansible parses the playbook; we read its output -- we never parse the YAML ourselves.)
+_ROLE_TASK = re.compile(r"^\s+([\w.-]+) : ")
+
+
+def playbook_roles(list_tasks_output: str) -> list[str]:
+    """The distinct role names in `ansible-playbook --list-tasks` output, first-seen order. Pure.
+    A role is the strongest hint of *what a playbook manages* (an `haproxy` role -> haproxy) -- used
+    to SUGGEST services to watch, never to assert them."""
+    roles: dict[str, None] = {}
+    for line in list_tasks_output.splitlines():
+        match = _ROLE_TASK.match(line)
+        if match:
+            roles.setdefault(match.group(1), None)
+    return list(roles)
+
+
+def _playbook_roles(cwd: Path) -> list[str]:
+    """Run the read-only `ansible-playbook --list-tasks` on a playbook in ``cwd`` and return the
+    role names it applies, or [] (no playbook, ansible absent, parse/role-resolution failure).
+    `--list-tasks` only lists -- it executes nothing -- so it's safe in a preflight, unlike the
+    `--check` reconcile. Inventory is passed through when set, as a host pattern may need it."""
+    playbook = _ansible_playbook(cwd)
+    if playbook is None or shutil.which("ansible-playbook") is None:
+        return []
+    argv = ["ansible-playbook", "--list-tasks", str(cwd / playbook)]
+    inventory = os.environ.get("STEADYSTATE_ANSIBLE_INVENTORY")
+    if inventory:
+        argv += ["-i", inventory]
+    ok, out = _run(argv)
+    return playbook_roles(out) if ok else []
+
+
 # -- I/O: run the read-only commands ----------------------------------------------------------
 
 
@@ -752,8 +790,18 @@ def inspect_ansible(cwd: Path) -> Inspection:
     facts = [f"inventory: {summarize_inventory(inventory)}"]
     if hosts:
         facts.append(f"hosts: {', '.join(hosts[:12])}")
-    recs = ("capture --check drift for --source ansible:", ansible_capture_command(cwd))
-    return Inspection("ansible", ok=True, facts=tuple(facts), recommendations=recs)
+    recs = ["capture --check drift for --source ansible:", ansible_capture_command(cwd)]
+    # Advisory only: read the playbook's roles (via Ansible's own --list-tasks, never YAML-parsing)
+    # to SUGGEST what services the fleet runs, so `--probe ansible` has somewhere to look. A hint a
+    # human confirms -- it drives no detection or action, so a wrong guess just gets ignored.
+    roles = _playbook_roles(cwd)
+    if roles:
+        facts.append(f"playbook roles: {', '.join(roles[:12])}")
+        recs.append(
+            f"these roles suggest services to watch (advisory) -- `--probe ansible` reports any "
+            f"that are failing/down: {', '.join(roles[:12])}"
+        )
+    return Inspection("ansible", ok=True, facts=tuple(facts), recommendations=tuple(recs))
 
 
 def deep_inspect(cwd: Path | None = None) -> list[Inspection]:

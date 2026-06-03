@@ -619,6 +619,61 @@ def test_inspect_ansible_skips_when_no_inventory(monkeypatch, tmp_path):
     assert "no inventory resolved" in result.note
 
 
+# -- playbook role suggestion (advisory; rides `ansible-playbook --list-tasks`) ---------------
+
+_LIST_TASKS = """
+playbook: site.yml
+
+  play #1 (all): all\tTAGS: []
+    tasks:
+      common : Set hostname\tTAGS: []
+      haproxy : Install haproxy\tTAGS: []
+      haproxy : Configure haproxy\tTAGS: []
+      keepalived : Configure VRRP\tTAGS: []
+      Run a one-off task without a role\tTAGS: []
+"""
+
+
+def test_playbook_roles_extracts_distinct_roles_in_order():
+    from steadystate.discover import playbook_roles
+
+    # distinct, first-seen order; the role-less task line is ignored (no `<id> : ` prefix)
+    assert playbook_roles(_LIST_TASKS) == ["common", "haproxy", "keepalived"]
+
+
+def test_playbook_roles_empty_on_no_role_lines():
+    from steadystate.discover import playbook_roles
+
+    assert playbook_roles("") == []
+    assert playbook_roles("playbook: x\n  play #1 (all): all\n") == []  # no role-prefixed tasks
+
+
+def test_playbook_roles_skips_when_no_playbook_or_no_binary(monkeypatch, tmp_path):
+    from steadystate import discover as disc
+
+    # no playbook file in cwd -> [] without even needing ansible-playbook
+    monkeypatch.setattr(disc.shutil, "which", lambda _b: "/usr/bin/ansible-playbook")
+    assert disc._playbook_roles(tmp_path) == []
+    # playbook present but the binary is absent -> still []
+    (tmp_path / "site.yml").write_text("- hosts: all")
+    monkeypatch.setattr(disc.shutil, "which", lambda _b: None)
+    assert disc._playbook_roles(tmp_path) == []
+
+
+def test_inspect_ansible_suggests_roles_advisorily(monkeypatch, tmp_path):
+    from steadystate import discover as disc
+
+    (tmp_path / "site.yml").write_text("- hosts: all")
+    monkeypatch.setattr(disc.shutil, "which", lambda _b: "/usr/bin/ansible")
+    monkeypatch.setattr(disc, "_run_json", lambda _argv: {"_meta": {"hostvars": {"web1": {}}}})
+    monkeypatch.setattr(disc, "_run", lambda _argv: (True, _LIST_TASKS))  # --list-tasks output
+
+    result = disc.inspect_ansible(tmp_path)
+    assert result.ok is True
+    assert any("playbook roles:" in f and "haproxy" in f for f in result.facts)
+    assert any("advisory" in rec and "keepalived" in rec for rec in result.recommendations)
+
+
 # -- target creation (--create) ---------------------------------------------------------------
 
 
