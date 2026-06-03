@@ -836,6 +836,10 @@ def hold(
     anything novel, or out of envelope (an abnormal pod count, or a fleet-wide storm of the same
     finding), is ESCALATED -- left pending for a human. Knowing when *not* to act is the point.
 
+    Self-correcting: a reflex whose own past fixes keep RECURRING (you cleaned it, it came back)
+    loses trust and escalates instead of churning -- a fix that won't hold is a root-cause problem
+    a cleanup can't reach (evicted pods that keep re-evicting are a capacity problem).
+
     Reflexes ship at `propose` (dry-run): out of the box this holds nothing. Promote one you've
     watched be right with `STEADYSTATE_REFLEX_AUTO=reclaim-evicted`, then `hold --apply`."""
     target_file = _targets_file()
