@@ -31,7 +31,8 @@ from ..reason.report import Report
 from ..state import OPEN, Finding, StateStore
 from .approve import apply_pending
 from .base import RemediationResult
-from .cleanup import is_safe_cleanup
+from .bounds import Envelope, within_bounds
+from .cleanup import CLEANUP_ENVELOPE, is_safe_cleanup
 
 # A reflex's earned autonomy, lowest to highest. ``observe`` is the dormant default a brand-new or
 # distrusted reflex sits at; ``propose`` is the watch mode (show what it *would* do, touch nothing);
@@ -58,6 +59,10 @@ class Reflex:
     max_per_action: int  # escalate a single finding that would touch more resources than this
     max_per_tick: int  # escalate the whole batch when more than this many match at once (storm)
     description: str
+    # The action's blast-radius + reversibility, gated against the human's bound (act/bounds.py)
+    # BEFORE autonomy is honored: a reflex whose envelope is outside the bound escalates even at
+    # `auto`, so flipping a reflex on can never cross the bound. Defaults to the evicted cleanup's.
+    envelope: Envelope = CLEANUP_ENVELOPE
     # The trust budget: once this many of the reflex's own past fixes are open AGAIN (we acted,
     # it recurred), stop acting and escalate -- a fix that won't hold is a root-cause problem a
     # cleanup can't solve. Default 3; a higher number tolerates more churn before handing off.
@@ -78,6 +83,7 @@ _BUILTIN_REFLEXES: tuple[Reflex, ...] = (
         max_per_action=50,  # a namespace with >50 evicted tombstones is abnormal -> a human looks
         max_per_tick=10,  # >10 namespaces evicting at once is systemic (node/capacity) -> escalate
         description="reclaim Evicted (Failed-phase) pod tombstones via the prober's safe cleanup",
+        envelope=CLEANUP_ENVELOPE,  # lossless / tenant -- within the default bound
     ),
 )
 
@@ -221,6 +227,16 @@ def plan_hold(
             reason = (
                 f"reflex '{reflex.name}' has {recurred} fix(es) recurring "
                 f"(>= {reflex.distrust_after}) -- it isn't holding; a root cause for a human"
+            )
+            decisions.append(
+                ReflexDecision(**base, decision=ESCALATE, reflex=reflex.name, reason=reason)
+            )
+        elif not within_bounds(reflex.envelope):
+            # The bound is supreme: an action outside the human's impact/reversibility envelope
+            # escalates even at `auto` -- flipping a reflex on can never cross the bound.
+            reason = (
+                f"envelope {reflex.envelope.label} is outside the autonomous bound -- "
+                "a human approves (flipping to auto can't cross the bound)"
             )
             decisions.append(
                 ReflexDecision(**base, decision=ESCALATE, reflex=reflex.name, reason=reason)

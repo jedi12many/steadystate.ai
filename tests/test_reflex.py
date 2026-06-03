@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from unittest import mock
 
+from steadystate.act.bounds import Envelope, Impact, Reversibility
 from steadystate.act.cleanup import record_cleanups
 from steadystate.act.reflex import (
     ACT,
@@ -190,6 +191,25 @@ def test_an_escalated_finding_is_never_executed_by_a_hold(monkeypatch):
         outcome = run_hold(store, report, apply=True, now=_NOW)
     run.assert_not_called()  # even with --apply, an out-of-envelope finding is left for a human
     assert outcome.plan.escalated and outcome.held == 0
+
+
+# -- the bound is supreme (out-of-envelope escalates even at auto) ---------------
+
+
+def test_an_out_of_bounds_envelope_escalates_even_when_the_reflex_is_auto():
+    # A reflex pointed at an irreversible, fleet-wide action, switched fully on -- and within size,
+    # storm, and recurrence. The bound still escalates it: flipping a reflex to auto can never cross
+    # the human's impact/reversibility bound.
+    danger = _reflex(AUTO, envelope=Envelope(Reversibility.IRREVERSIBLE, Impact.FLEET))
+    plan = plan_hold(_report(_evicted("prod", pods=2)), danger)
+    [decision] = plan.decisions
+    assert decision.decision == ESCALATE and "outside the autonomous bound" in decision.reason
+    assert not plan.to_act
+
+
+def test_an_in_bounds_envelope_at_auto_still_acts():
+    safe = _reflex(AUTO, envelope=Envelope(Reversibility.LOSSLESS, Impact.TENANT))
+    assert plan_hold(_report(_evicted("prod", pods=2)), safe).to_act
 
 
 # -- recurrence-as-confidence (the self-correcting trust loop) -------------------
