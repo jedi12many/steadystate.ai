@@ -917,6 +917,81 @@ def kube_contexts() -> list[str]:
     return list(seen)
 
 
+# A kubeconfig the operator dropped in the working dir isn't on kubectl's default path, so
+# ``kubectl config get-contexts`` never sees it -- `discover` would miss a cluster you clearly want
+# probed. So we look for kubeconfig files in the cwd, enumerate each one's contexts (handing the
+# file to kubectl via ``--kubeconfig`` so kubectl still does the YAML parse -- stdlib-only), and
+# make each a target that REMEMBERS its kubeconfig, so a later `probe` adds ``--kubeconfig`` and can
+# actually reach the cluster. Content-sniffed, not name-matched: a kubeconfig is reliably
+# ``kind: Config``, so an arbitrarily-named file (``admin.conf``, ``prod-cluster``) is still found.
+
+# How many bytes of a candidate file to sniff for the kubeconfig signature, and the cap above which
+# a file is too big to be a hand-dropped kubeconfig (don't read a multi-GB blob to sniff it).
+_KUBECONFIG_SNIFF_BYTES = 4096
+_KUBECONFIG_MAX_BYTES = 1_000_000
+
+
+def _looks_like_kubeconfig(path: Path) -> bool:
+    """True if ``path``'s head carries the kubeconfig signature (``kind: Config``). A cheap content
+    sniff so we only hand real candidates to kubectl -- never matches on filename, so an
+    arbitrarily-named kubeconfig is still found, and a same-named non-kubeconfig is not."""
+    try:
+        if path.stat().st_size > _KUBECONFIG_MAX_BYTES:
+            return False
+        with path.open("r", encoding="utf-8") as fh:
+            head = fh.read(_KUBECONFIG_SNIFF_BYTES)
+    except (OSError, UnicodeDecodeError):
+        return False  # unreadable / binary -> not a kubeconfig
+    return "kind: Config" in head
+
+
+def cwd_kubeconfigs(cwd: Path) -> list[Path]:
+    """The kubeconfig files in ``cwd`` (top level only, content-sniffed), sorted for stable order.
+    Pure-ish (a directory read); the I/O the create path consumes via ``kubeconfig_targets``."""
+    try:
+        entries = sorted(cwd.iterdir())
+    except OSError:
+        return []
+    return [p for p in entries if p.is_file() and _looks_like_kubeconfig(p)]
+
+
+def _contexts_in(kubeconfig: Path) -> list[str]:
+    """The contexts defined in one kubeconfig file -- ``kubectl config get-contexts --kubeconfig``,
+    so kubectl does the YAML parse and a non-kubeconfig (or kubectl-absent) yields []."""
+    ok, out = _run([*_GET_CONTEXTS, "--kubeconfig", str(kubeconfig)])
+    if not ok:
+        return []
+    return [line.strip() for line in out.splitlines() if line.strip()]
+
+
+def kubeconfig_targets(cwd: Path) -> list[Target]:
+    """One live (`k8s-live`) target per context found in a cwd kubeconfig, each carrying the
+    ``kubeconfig`` it came from so a later `probe` can actually reach the cluster (adds
+    ``--kubeconfig``). Names are slugged from the context and de-duplicated *within this set* (two
+    cwd kubeconfigs can share a context name -- the file stem disambiguates) so a real second
+    cluster isn't silently dropped. Pure given the kubectl reads; the caller persists them."""
+    targets: list[Target] = []
+    used: set[str] = set()
+    for kc in cwd_kubeconfigs(cwd):
+        for ctx in _contexts_in(kc):
+            name = _slug(ctx) or "cluster"
+            if name in used:  # same context name in another cwd kubeconfig -> disambiguate
+                name = f"{name}-{_slug(kc.stem)}" or name
+            used.add(name)
+            targets.append(
+                Target(
+                    name=name,
+                    source="k8s-live",
+                    path="",
+                    label=ctx,
+                    probe="auto",
+                    context=ctx,
+                    kubeconfig=str(kc),
+                )
+            )
+    return targets
+
+
 # -- CI emission: a GitHub Actions workflow tailored to what's here -----------------------------
 #
 # `--emit-ci` writes a workflow that scans the sources discovered in the cwd -- the durable home

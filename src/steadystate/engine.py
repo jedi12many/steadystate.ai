@@ -36,6 +36,15 @@ class SupportsContext(Protocol):
 
 
 @runtime_checkable
+class SupportsKubeconfig(Protocol):
+    """A source or prober whose backend (kubectl) can be pointed at a specific kubeconfig file --
+    for a context that isn't on the default path (a kubeconfig in the project dir, say). Parallel to
+    SupportsContext: ``build_report`` applies it to components that opt in; the rest ignore it."""
+
+    def use_kubeconfig(self, kubeconfig: str) -> None: ...
+
+
+@runtime_checkable
 class SupportsLogScan(Protocol):
     """A prober that can do a deeper, log-content pass (`probe --deep`) on top of its status check.
     ``build_report(scan_logs=True)`` flips it on for whichever prober opts in; others ignore it."""
@@ -65,6 +74,7 @@ def build_report(
     no_llm: bool = False,
     label: str = "",
     context: str = "",
+    kubeconfig: str = "",
     scan_logs: bool = False,
     llm_gate: PromptGate | None = None,
 ) -> Report:
@@ -73,7 +83,8 @@ def build_report(
 
     ``context`` (when set) aims the source + prober at a named backend context -- today a kube
     context, so the live cluster-health source and the kubectl probe both read that one cluster; a
-    component that doesn't support it ignores it.
+    component that doesn't support it ignores it. ``kubeconfig`` (when set) points kubectl at a
+    specific kubeconfig file for that context -- for a context that isn't on the default path.
 
     ``scan_logs`` (`probe --deep`) turns on the prober's deeper log-content pass -- the kubectl
     probe then reads Running pods' log tails for error/fatal signatures, not just pod status.
@@ -94,6 +105,10 @@ def build_report(
         for component in (src, prober):
             if isinstance(component, SupportsContext):
                 component.use_context(context)
+    if kubeconfig:  # point kubectl at a specific kubeconfig file (a context off the default path)
+        for component in (src, prober):
+            if isinstance(component, SupportsKubeconfig):
+                component.use_kubeconfig(kubeconfig)
     if scan_logs and isinstance(prober, SupportsLogScan):  # `probe --deep`: read pod logs too
         prober.enable_log_scan()
 

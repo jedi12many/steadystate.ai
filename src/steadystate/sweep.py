@@ -90,6 +90,7 @@ def sweep_targets(
                 probe="auto",
                 label=target.label,
                 context=target.context,
+                kubeconfig=target.kubeconfig,  # a cwd kubeconfig the context lives in (else "")
                 scan_logs=scan_logs,
             )
             built.append((name, report, ""))
