@@ -18,6 +18,7 @@ from steadystate.act.reflex import (
     WATCH,
     Reflex,
     plan_hold,
+    reflex_recurrence,
     reflexes,
     run_hold,
 )
@@ -25,6 +26,7 @@ from steadystate.model import Provenance
 from steadystate.probe.base import Symptom
 from steadystate.reason.alert import Alert, Layer, Severity
 from steadystate.reason.report import Report
+from steadystate.state import OPEN, RESOLVED, Finding
 
 _NOW = datetime(2026, 6, 2, 12, 0, 0, tzinfo=UTC)
 
@@ -188,3 +190,65 @@ def test_an_escalated_finding_is_never_executed_by_a_hold(monkeypatch):
         outcome = run_hold(store, report, apply=True, now=_NOW)
     run.assert_not_called()  # even with --apply, an out-of-envelope finding is left for a human
     assert outcome.plan.escalated and outcome.held == 0
+
+
+# -- recurrence-as-confidence (the self-correcting trust loop) -------------------
+
+
+def _finding(fp: str, *, status: str = OPEN, category: str = "Evicted") -> Finding:
+    details = {"category": category} if category else {}
+    return Finding(
+        fp, _NOW.isoformat(), _NOW.isoformat(), "medium", "web is Evicted", status, details=details
+    )
+
+
+def test_a_reflex_whose_fixes_keep_recurring_escalates_instead_of_acting():
+    # An auto reflex, well within blast-radius -- but 3 of its past fixes are open again (>= the
+    # default distrust budget). A fix that won't hold is a root cause, so hold hands off.
+    plan = plan_hold(_report(_evicted("prod", pods=2)), _reflex(AUTO), {"reclaim-evicted": 3})
+    [decision] = plan.decisions
+    assert decision.decision == ESCALATE and "recurring" in decision.reason
+    assert not plan.to_act
+
+
+def test_recurrence_below_the_distrust_budget_still_acts():
+    plan = plan_hold(_report(_evicted("prod", pods=2)), _reflex(AUTO), {"reclaim-evicted": 2})
+    assert plan.to_act  # 2 < the default distrust_after of 3 -- still trusted
+
+
+def test_reflex_recurrence_counts_only_fixes_that_did_not_hold(monkeypatch):
+    monkeypatch.delenv("STEADYSTATE_REFLEX_AUTO", raising=False)
+    findings = [
+        _finding("a" * 64, status=OPEN),  # we acted, it's open AGAIN -> our fix didn't hold
+        _finding("b" * 64, status=RESOLVED),  # we acted, it stayed resolved -> the fix held
+        _finding("c" * 64, status=OPEN),  # open, but we never acted -> not our recurrence
+        _finding("d" * 64, status=OPEN, category=""),  # acted + open, but no category -> skipped
+    ]
+    acted = {"a" * 64, "b" * 64, "d" * 64}
+    assert reflex_recurrence(findings, acted) == {"reclaim-evicted": 1}
+
+
+def test_run_hold_distrusts_a_churning_reflex_even_with_apply(monkeypatch):
+    monkeypatch.setenv("STEADYSTATE_REFLEX_AUTO", "reclaim-evicted")
+    from steadystate.state import APPLIED, AuditEntry, StateStore
+
+    store = StateStore()
+    # Three Evicted findings we already cleaned up that are open again -- the reflex isn't holding.
+    fps = ["a" * 64, "b" * 64, "c" * 64]
+    store.record(
+        {fp: ("medium", "web is Evicted") for fp in fps},
+        _NOW,
+        {fp: {"category": "Evicted", "unhealthy_pods": "2"} for fp in fps},
+    )
+    for fp in fps:
+        store.record_audit(
+            AuditEntry(fp, "kubectl-cleanup", "prod/web", "hold", "approved", APPLIED), _NOW
+        )
+    # A fresh evicted finding this tick: normally an auto reflex would reclaim it...
+    report = _report(_evicted("staging", pods=2))
+    record_cleanups(store, report, _NOW)
+    with mock.patch("steadystate.act.cleanup.subprocess.run") as run:
+        outcome = run_hold(store, report, apply=True, now=_NOW)
+    run.assert_not_called()  # ...but the reflex is distrusted (3 recurring) -> escalate, don't act
+    assert outcome.held == 0 and outcome.plan.escalated
+    assert "recurring" in outcome.plan.escalated[0].reason

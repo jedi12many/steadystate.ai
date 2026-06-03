@@ -28,7 +28,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 
 from ..reason.report import Report
-from ..state import StateStore
+from ..state import OPEN, Finding, StateStore
 from .approve import apply_pending
 from .base import RemediationResult
 from .cleanup import is_safe_cleanup
@@ -58,6 +58,10 @@ class Reflex:
     max_per_action: int  # escalate a single finding that would touch more resources than this
     max_per_tick: int  # escalate the whole batch when more than this many match at once (storm)
     description: str
+    # The trust budget: once this many of the reflex's own past fixes are open AGAIN (we acted,
+    # it recurred), stop acting and escalate -- a fix that won't hold is a root-cause problem a
+    # cleanup can't solve. Default 3; a higher number tolerates more churn before handing off.
+    distrust_after: int = 3
 
     def matches(self, category: str) -> bool:
         return category == self.category
@@ -100,6 +104,29 @@ def reflex_for_category(category: str, active: tuple[Reflex, ...] | None = None)
     return None
 
 
+def reflex_recurrence(
+    findings: list[Finding], acted: set[str], active: tuple[Reflex, ...] | None = None
+) -> dict[str, int]:
+    """Per-reflex count of its own fixes that did NOT hold -- the credit-assignment signal that
+    makes hold self-correcting. A fingerprint steadystate acted on (it's in ``acted``: an
+    applied/verified remediation) that is **open again** means our fix didn't stick: the problem
+    recurred. Keyed by reflex name (via each recurring finding's category). A reflex whose count
+    crosses its ``distrust_after`` budget should stop auto-acting and escalate -- a fix that won't
+    hold is a root cause a cleanup can't reach (evicted pods you keep deleting that keep coming
+    back are a capacity problem, not a cleanup). Pure; the state store is the reward channel."""
+    counts: Counter[str] = Counter()
+    for finding in findings:
+        if finding.status != OPEN or finding.fingerprint not in acted:
+            continue  # only a fix that DIDN'T hold (acted, yet open again) counts against trust
+        category = finding.details.get("category")
+        if not category:
+            continue
+        reflex = reflex_for_category(category, active)
+        if reflex is not None:
+            counts[reflex.name] += 1
+    return dict(counts)
+
+
 @dataclass(frozen=True)
 class ReflexDecision:
     """What a hold tick decided for one actionable finding, and why -- the audit-friendly unit the
@@ -134,7 +161,9 @@ class HoldPlan:
         return tuple(d for d in self.decisions if d.decision == ESCALATE)
 
 
-def plan_hold(report: Report, active: tuple[Reflex, ...]) -> HoldPlan:
+def plan_hold(
+    report: Report, active: tuple[Reflex, ...], recurrence: dict[str, int] | None = None
+) -> HoldPlan:
     """Decide, per actionable finding, whether a reflex acts, watches, or escalates -- the control
     loop's whole judgement, with NO side effects (so it's exhaustively testable and a dry `hold`
     is just this).
@@ -142,8 +171,11 @@ def plan_hold(report: Report, active: tuple[Reflex, ...]) -> HoldPlan:
     An *actionable* finding is a Symptom carrying a safe, re-validated remediation
     (``recommended_action`` that passes ``is_safe_cleanup`` -- the same gate approve enforces). For
     each: no matching reflex -> ESCALATE (a human owns the unknown); over the per-action
-    blast-radius, or part of a storm past the per-tick budget -> ESCALATE (out of envelope);
-    a matching ``auto`` reflex within budget -> ACT; anything else (observe/propose) -> WATCH."""
+    blast-radius, or part of a storm past the per-tick budget -> ESCALATE (out of envelope); a
+    reflex whose fixes keep recurring past its ``distrust_after`` budget (``recurrence`` keyed by
+    reflex name) -> ESCALATE (a fix that won't hold is a root cause a cleanup can't reach); a
+    matching ``auto`` reflex within budget -> ACT; anything else (observe/propose) -> WATCH."""
+    recurrence = recurrence or {}
     by_category = {r.category: r for r in active}
     actionable = [
         s
@@ -181,6 +213,15 @@ def plan_hold(report: Report, active: tuple[Reflex, ...]) -> HoldPlan:
         elif matched_per_category[symptom.category] > reflex.max_per_tick:
             seen = matched_per_category[symptom.category]
             reason = f"{seen} findings this tick exceeds {reflex.max_per_tick} -- looks systemic"
+            decisions.append(
+                ReflexDecision(**base, decision=ESCALATE, reflex=reflex.name, reason=reason)
+            )
+        elif recurrence.get(reflex.name, 0) >= reflex.distrust_after:
+            recurred = recurrence[reflex.name]
+            reason = (
+                f"reflex '{reflex.name}' has {recurred} fix(es) recurring "
+                f"(>= {reflex.distrust_after}) -- it isn't holding; a root cause for a human"
+            )
             decisions.append(
                 ReflexDecision(**base, decision=ESCALATE, reflex=reflex.name, reason=reason)
             )
@@ -241,9 +282,15 @@ def run_hold(
     ESCALATE decisions are never executed -- the escalated ones stay pending for a human.
 
     The pending action ``apply_pending`` runs must already be recorded (the caller records cleanups
-    from this same report first); a finding with no recorded pending is skipped, not invented."""
+    from this same report first); a finding with no recorded pending is skipped, not invented.
+
+    The plan is recurrence-aware: it reads the store's lived history (which of each reflex's fixes
+    didn't hold) BEFORE acting, so a reflex that keeps churning escalates this tick instead of
+    acting again."""
     now = now or datetime.now(UTC)
-    plan = plan_hold(report, reflexes())
+    active = reflexes()
+    recurrence = reflex_recurrence(store.all_findings(), store.acted_fingerprints(), active)
+    plan = plan_hold(report, active, recurrence)
     applied: list[tuple[ReflexDecision, RemediationResult | None]] = []
     if apply:
         for decision in plan.to_act:
