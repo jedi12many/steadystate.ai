@@ -35,11 +35,13 @@ _SAFE_COMPLETED_CLEANUP = re.compile(
     r"--field-selector=status\.phase=Succeeded(?: --context [\w.@:/-]+)?$"
 )
 
-# rollout-restart ONE deployment in one namespace. The `deployment/<name>` shape is the safety: the
-# command can only target a Deployment (a controller), so the restart is self-healing BY
-# CONSTRUCTION -- a bare pod can't be named here, so the envelope can't be lied into.
+# rollout-restart ONE workload in one namespace. The `<controller>/<name>` shape is the safety: the
+# command can only target a Deployment / StatefulSet / DaemonSet (all controllers that recreate
+# their pods, no data loss -- a StatefulSet's PVCs persist across a restart), so the restart is
+# self-healing BY CONSTRUCTION -- a bare pod can't be named, so the envelope can't be lied into.
 _SAFE_ROLLOUT_RESTART = re.compile(
-    r"^kubectl rollout restart deployment/[\w.-]+ -n [\w.-]+(?: --context [\w.@:/-]+)?$"
+    r"^kubectl rollout restart (?:deployment|statefulset|daemonset)/[\w.-]+ "
+    r"-n [\w.-]+(?: --context [\w.@:/-]+)?$"
 )
 
 
@@ -49,8 +51,9 @@ def is_safe_completed_cleanup(command: str) -> bool:
 
 
 def is_safe_rollout_restart(command: str) -> bool:
-    """True iff ``command`` is exactly a single-deployment, single-namespace rollout restart. Pure.
-    The `deployment/<name>` shape guarantees the target is a controller (self-healing)."""
+    """True iff ``command`` is exactly a single-workload, single-namespace rollout restart of a
+    Deployment / StatefulSet / DaemonSet. Pure. The `<controller>/<name>` shape guarantees the
+    target is a self-healing controller, never a bare pod."""
     return bool(_SAFE_ROLLOUT_RESTART.match(command.strip()))
 
 
@@ -93,19 +96,21 @@ _BUILTIN_ACTIONS: tuple[CatalogAction, ...] = (
         ),
     ),
     CatalogAction(
-        name="rollout-restart-deployment",
+        name="rollout-restart-workload",
         # A rolling restart is controller-managed and data-safe (the platform brings new pods up,
-        # honoring surge/maxUnavailable) -> self-healing; it touches one workload -> service. The
-        # `deployment/<name>` command shape guarantees the target is a Deployment, so this envelope
-        # cannot be applied to a non-self-healing resource.
+        # honoring surge/maxUnavailable / StatefulSet ordering; PVCs persist) -> self-healing; it
+        # touches one workload -> service. The `<controller>/<name>` command shape guarantees the
+        # target is a Deployment/StatefulSet/DaemonSet, so this envelope can never be applied to a
+        # non-self-healing resource (e.g. a bare pod).
         envelope=Envelope(Reversibility.SELF_HEALING, Impact.SERVICE),
         validate=is_safe_rollout_restart,
         description=(
-            "roll-restart ONE Deployment in one namespace -- for a workload wedged in a way a "
-            "fresh set of pods clears (a stuck rollout, a leaked connection/cache), NOT a "
-            "CrashLoopBackOff (restarting a crash loop just loops again -- that needs a real fix). "
-            "Self-healing: the Deployment controller manages it, no data loss. Command shape: "
-            "kubectl rollout restart deployment/<name> -n <ns> [--context <ctx>]"
+            "roll-restart ONE workload (Deployment / StatefulSet / DaemonSet) in one namespace -- "
+            "for a workload wedged in a way a fresh set of pods clears (a stuck rollout, a leaked "
+            "connection/cache), NOT a CrashLoopBackOff (restarting a crash loop just loops again "
+            "-- that needs a real fix). Self-healing: the controller manages it, no data loss. "
+            "Command shape: kubectl rollout restart <deployment|statefulset|daemonset>/<name> "
+            "-n <ns> [--context <ctx>]"
         ),
     ),
 )
