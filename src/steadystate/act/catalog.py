@@ -20,7 +20,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from .bounds import Envelope, Impact, Reversibility
-from .cleanup import CLEANUP_ENVELOPE, is_safe_cleanup
+from .cleanup import _CONTEXT_TAIL, _KUBECONFIG_TAIL, CLEANUP_ENVELOPE, is_safe_cleanup
 
 # -- per-action command allow-patterns ---------------------------------------------------------
 # Each is anchored (^...$) and character-classed so no alternate verb, extra flag, selector, or
@@ -32,7 +32,7 @@ from .cleanup import CLEANUP_ENVELOPE, is_safe_cleanup
 # delete Succeeded (completed) pod tombstones in one namespace -- lossless, like the evicted clean.
 _SAFE_COMPLETED_CLEANUP = re.compile(
     r"^kubectl delete pods(?: -n [\w.-]+)? "
-    r"--field-selector=status\.phase=Succeeded(?: --context [\w.@:/-]+)?$"
+    r"--field-selector=status\.phase=Succeeded" + _CONTEXT_TAIL + _KUBECONFIG_TAIL + r"$"
 )
 
 # rollout-restart ONE workload in one namespace. The `<controller>/<name>` shape is the safety: the
@@ -41,7 +41,7 @@ _SAFE_COMPLETED_CLEANUP = re.compile(
 # self-healing BY CONSTRUCTION -- a bare pod can't be named, so the envelope can't be lied into.
 _SAFE_ROLLOUT_RESTART = re.compile(
     r"^kubectl rollout restart (?:deployment|statefulset|daemonset)/[\w.-]+ "
-    r"-n [\w.-]+(?: --context [\w.@:/-]+)?$"
+    r"-n [\w.-]+" + _CONTEXT_TAIL + _KUBECONFIG_TAIL + r"$"
 )
 
 
@@ -57,6 +57,75 @@ def is_safe_rollout_restart(command: str) -> bool:
     return bool(_SAFE_ROLLOUT_RESTART.match(command.strip()))
 
 
+# -- composing a command from a finding's stored keys ------------------------------------------
+
+
+@dataclass(frozen=True)
+class FindingFields:
+    """The keys a stored finding supplies for composing a command -- its evidence (kind / workload
+    name / namespace / cluster-context) plus the kubeconfig resolved from its target. Whatever the
+    finding doesn't carry is empty; a ``compose`` returns None when a key it needs is missing, and
+    the composed command is re-validated by the action's allow-pattern anyway (defense in depth)."""
+
+    kind: str = ""
+    name: str = ""
+    namespace: str = ""
+    context: str = ""
+    kubeconfig: str = ""
+
+
+def _tail(fields: FindingFields) -> str:
+    """The `--context`/`--kubeconfig` suffix common to every composed command -- so a finding on a
+    discovered (cwd-kubeconfig) cluster is reachable."""
+    tail = ""
+    if fields.context:
+        tail += f" --context {fields.context}"
+    if fields.kubeconfig:
+        tail += f" --kubeconfig {fields.kubeconfig}"
+    return tail
+
+
+_RESTARTABLE_KINDS = frozenset({"deployment", "statefulset", "daemonset"})
+
+
+def _compose_rollout_restart(f: FindingFields) -> str | None:
+    kind = f.kind.lower()
+    if kind not in _RESTARTABLE_KINDS or not f.name or not f.namespace:
+        return None  # only a controller we can roll-restart; a bare pod / missing key -> no command
+    return f"kubectl rollout restart {kind}/{f.name} -n {f.namespace}" + _tail(f)
+
+
+def _compose_evicted(f: FindingFields) -> str | None:
+    if not f.namespace:
+        return None
+    return f"kubectl delete pods -n {f.namespace} --field-selector=status.phase=Failed" + _tail(f)
+
+
+def _compose_completed(f: FindingFields) -> str | None:
+    if not f.namespace:
+        return None
+    return f"kubectl delete pods -n {f.namespace} --field-selector=status.phase=Succeeded" + _tail(
+        f
+    )
+
+
+# The pod-malfunction categories a workload *recycle* recovers (after a human has fixed the root
+# cause -- a corrected secret/config, a cleared dependency). NOT Evicted (that's a cleanup) and NOT
+# the node categories (a restart can't fix a full disk). The kubectl probe's waiting reasons + the
+# log-scan `Erroring`.
+_RESTART_CATEGORIES = frozenset(
+    {
+        "CrashLoopBackOff",
+        "ImagePullBackOff",
+        "ErrImagePull",
+        "CreateContainerConfigError",
+        "CreateContainerError",
+        "RunContainerError",
+        "Erroring",
+    }
+)
+
+
 @dataclass(frozen=True)
 class CatalogAction:
     """One vetted action a decider may propose. ``envelope`` is the TRUSTED blast-radius +
@@ -68,6 +137,12 @@ class CatalogAction:
     envelope: Envelope  # trusted -- the bound reads this, not the proposer
     validate: Callable[[str], bool]  # the command allow-pattern (re-checked at gate time)
     description: str
+    # The Symptom categories this action is the OFFERED fix for -- what `fix <fp>` applies for a
+    # finding of that category. Empty = not auto-offered (you can still `run` it explicitly).
+    categories: frozenset[str] = frozenset()
+    # Build the concrete command from a finding's stored keys (FindingFields), or None when a key it
+    # needs is missing / the finding isn't a fit. The output is re-validated by ``validate``.
+    compose: Callable[[FindingFields], str | None] | None = None
 
 
 _BUILTIN_ACTIONS: tuple[CatalogAction, ...] = (
@@ -75,6 +150,8 @@ _BUILTIN_ACTIONS: tuple[CatalogAction, ...] = (
         name="reclaim-evicted-pods",
         envelope=CLEANUP_ENVELOPE,  # lossless / tenant
         validate=is_safe_cleanup,
+        categories=frozenset({"Evicted"}),
+        compose=_compose_evicted,
         description=(
             "delete Evicted (Failed-phase) pod tombstones in one namespace -- for a workload whose "
             "pods were evicted by node memory/disk pressure. Lossless: the pods are already dead. "
@@ -88,6 +165,8 @@ _BUILTIN_ACTIONS: tuple[CatalogAction, ...] = (
         # tombstones destroys nothing of value, in one namespace. Same envelope as the evicted one.
         envelope=Envelope(Reversibility.LOSSLESS, Impact.TENANT),
         validate=is_safe_completed_cleanup,
+        # Succeeded pods aren't a health *finding* (nothing's wrong) -- no auto-offer; `run` it.
+        compose=_compose_completed,
         description=(
             "delete Succeeded (completed) pod tombstones in one namespace -- finished Job/one-shot "
             "pods piling up. Lossless: the work is done, nothing running is touched. Command "
@@ -104,6 +183,8 @@ _BUILTIN_ACTIONS: tuple[CatalogAction, ...] = (
         # non-self-healing resource (e.g. a bare pod).
         envelope=Envelope(Reversibility.SELF_HEALING, Impact.SERVICE),
         validate=is_safe_rollout_restart,
+        categories=_RESTART_CATEGORIES,
+        compose=_compose_rollout_restart,
         description=(
             "roll-restart ONE workload (Deployment / StatefulSet / DaemonSet) in one namespace -- "
             "for a workload wedged in a way a fresh set of pods clears (a stuck rollout, a leaked "
@@ -122,6 +203,20 @@ def catalog_action(name: str) -> CatalogAction | None:
     """The vetted action named ``name``, or None when no such action exists -- the lookup the gate
     uses to reject a proposer that names something not in the catalog."""
     return ACTIONS.get(name)
+
+
+def offered_action(category: str) -> CatalogAction | None:
+    """The vetted action steadystate OFFERS as the fix for a finding of ``category`` -- what
+    `fix <fp>` applies. None when no catalog action recovers that category (so `fix` says
+    'no automated fix -- escalate' rather than guessing). Pure."""
+    return next((a for a in _BUILTIN_ACTIONS if category in a.categories), None)
+
+
+def action_for_command(command: str) -> CatalogAction | None:
+    """The vetted action whose allow-pattern accepts ``command`` -- the run-time lookup the generic
+    runner uses to know which envelope a stored command belongs to (and to refuse a command no
+    vetted action recognizes). At most one matches (the patterns are disjoint shapes). Pure."""
+    return next((a for a in _BUILTIN_ACTIONS if a.validate(command)), None)
 
 
 def catalog_menu() -> str:

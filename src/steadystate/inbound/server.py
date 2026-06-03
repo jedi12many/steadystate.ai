@@ -20,7 +20,11 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 from ..act.approve import apply_pending, decline_pending
+from ..act.bounds import within_bounds
+from ..act.catalog import ACTIONS as CATALOG_ACTIONS
+from ..act.catalog import CatalogAction, FindingFields, catalog_action, offered_action
 from ..act.cleanup import record_cleanups
+from ..act.execute import CATALOG_SOURCE
 from ..engine import build_report
 from ..notify import SURFACES
 from ..onboarding import Status, capabilities
@@ -29,19 +33,22 @@ from ..reason.cost import roll_up, roll_up_by_period, scan_cost_line
 from ..reason.report import Report
 from ..reconcile_state import _fingerprints, alert_suppressed, finding_evidence, seen_findings
 from ..serialize import finding_to_dict, report_to_dict
-from ..state import Finding, StateStore, filter_findings
+from ..state import Finding, PendingAction, StateStore, filter_findings
 from ..sweep import render_sweep, sweep_targets
 from ..targets import load_targets_from_env
 from .base import (
+    ACTIONS_LIST,
     APPROVE,
     COST,
     DECLINE,
     FINDINGS,
+    FIX,
     HELP,
     HISTORY,
     MUTE,
     PENDING,
     PROBE,
+    RUN,
     SEND,
     SHOW,
     SURFACES_LIST,
@@ -329,6 +336,107 @@ def _send_finding(fingerprint: str, surface_name: str, state_path: str) -> str:
     return f"Sent {short} ({finding.last_title}) to {surface_name}."
 
 
+def _render_actions() -> str:
+    """The chat view of `actions`: the vetted actions you can `fix`/`run`, each with its blast
+    radius (the envelope). Read-only -- so you know what's on the menu before issuing one."""
+    lines = ["vetted actions (use `fix <fp>` for the offered one, or `run <action> <fp>`):"]
+    for action in CATALOG_ACTIONS.values():
+        first_line = action.description.split(" -- ")[0]
+        lines.append(f"  {action.name:<24} [{action.envelope.label}]  {first_line}")
+    return "\n".join(lines)
+
+
+def _finding_fields(finding: Finding) -> FindingFields:
+    """The keys for composing a command, pulled from a stored finding's evidence -- plus the
+    kubeconfig resolved from the matching target (the finding stores its cluster *context*, the
+    target carries that context's kubeconfig). Empty for anything the finding doesn't carry."""
+    details = finding.details
+    context = details.get("cluster", "")
+    kubeconfig = ""
+    if context:
+        target = next((t for t in load_targets_from_env().values() if t.context == context), None)
+        kubeconfig = target.kubeconfig if target is not None else ""
+    return FindingFields(
+        kind=details.get("kind", ""),
+        name=details.get("workload", ""),
+        namespace=details.get("namespace", ""),
+        context=context,
+        kubeconfig=kubeconfig,
+    )
+
+
+def _apply_catalog_action(
+    store: StateStore, finding: Finding, action: CatalogAction, actor: str
+) -> str:
+    """Compose ``action``'s command from the finding's keys, gate it (allow-pattern + bound), and
+    run it through the SAME approve guardrail (claim-once + audit) -- the core of `fix`/`run`.
+    Honest at each gate: a finding it can't compose for, or an action out of bound, is reported,
+    never forced."""
+    if action.compose is None:
+        return f"'{action.name}' has no composer -- can't issue it for a finding."
+    command = action.compose(_finding_fields(finding))
+    if command is None:
+        return f"can't compose '{action.name}' for this finding (missing namespace/kind/name)."
+    if not action.validate(command):  # belt-and-suspenders -- the composed shape must still pass
+        return f"composed command for '{action.name}' didn't pass its allow-pattern; not run."
+    if not within_bounds(
+        action.envelope
+    ):  # the bound governs even an operator-issued catalog action
+        return (
+            f"'{action.name}' ({action.envelope.label}) is outside the autonomous bound -- "
+            "a human runs it out-of-band (break-glass, not yet wired)."
+        )
+    # Record the command as a pending catalog action, then apply it through the exact approve
+    # guardrail (claim-once, re-validate, run as argv, audit under the chat actor).
+    store.record_pending(
+        PendingAction(
+            fingerprint=finding.fingerprint,
+            source=CATALOG_SOURCE,
+            path="",
+            drift_identity=finding.last_title,
+            command=command,
+        ),
+        datetime.now(UTC),
+    )
+    message, _result = apply_pending(store, finding.fingerprint, actor)
+    return f"{action.name}: {message}\n  $ {command}"
+
+
+def _fix_finding(fingerprint: str, state_path: str, actor: str) -> str:
+    """`fix <fp>`: apply the OFFERED vetted action for a finding (the one mapped to its category --
+    e.g. roll-restart a wedged workload). 'No automated fix' when nothing in the catalog recovers
+    that category, rather than guessing."""
+    if not state_path or not Path(state_path).exists():
+        return "No findings recorded yet -- run a `probe`/`scan` first."
+    with StateStore(state_path) as store:
+        finding, error = _lookup_finding(store, fingerprint)
+        if finding is None:
+            return error
+        category = finding.details.get("category", "")
+        action = offered_action(category)
+        if action is None:
+            return (
+                f"No automated fix offered for '{category or finding.last_title}' -- escalate "
+                "(or `run <action> <fp>` if you know one applies)."
+            )
+        return _apply_catalog_action(store, finding, action, actor)
+
+
+def _run_action(action_name: str, fingerprint: str, state_path: str, actor: str) -> str:
+    """`run <action> <fp>`: run a SPECIFIC vetted action against a finding (you pick the action, the
+    finding supplies the parameters). Refuses an action not in the catalog."""
+    action = catalog_action(action_name)
+    if action is None:
+        return f"Unknown action '{action_name}'. See `actions` for the vetted ones."
+    if not state_path or not Path(state_path).exists():
+        return "No findings recorded yet -- run a `probe`/`scan` first."
+    with StateStore(state_path) as store:
+        finding, error = _lookup_finding(store, fingerprint)
+        if finding is None:
+            return error
+        return _apply_catalog_action(store, finding, action, actor)
+
+
 def _render_history(state_path: str) -> str:
     """The chat view of `steadystate history`: the remediation audit log, newest first -- what ran
     against real infra, who decided, and the outcome. Read-only."""
@@ -476,6 +584,12 @@ def run_command(command: Command, state_path: str) -> str:
         return _render_surfaces()
     if command.verb == SEND:
         return _send_finding(command.argument, command.argument2, state_path)
+    if command.verb == ACTIONS_LIST:
+        return _render_actions()
+    if command.verb == FIX:
+        return _fix_finding(command.argument, state_path, command.actor)
+    if command.verb == RUN:  # run <action> <fp>: argument=action, argument2=fingerprint
+        return _run_action(command.argument, command.argument2, state_path, command.actor)
     if command.verb == HISTORY:
         return _render_history(state_path)
     with StateStore(state_path) as store:
