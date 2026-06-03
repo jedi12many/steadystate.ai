@@ -96,7 +96,11 @@ COMMANDS: dict[str, tuple[str, str]] = {
         "actions",
         "list the vetted actions you can `fix`/`run` -- name, what it does, and its blast radius",
     ),
-    APPROVE: ("approve <fingerprint>", "apply a pending remediation (guardrailed)"),
+    APPROVE: (
+        "approve <fingerprint> [<confirm>]",
+        "apply a pending remediation (guardrailed); for a break-glass action, `<confirm>` is the "
+        "target name you type to confirm (e.g. `approve <fp> worker-1234`)",
+    ),
     DECLINE: ("decline <fingerprint>", "dismiss a pending remediation"),
 }
 # Verbs that require an argument to mean anything (a fingerprint for approve/decline/mute, a
@@ -108,6 +112,9 @@ _NEEDS_TWO = frozenset({SEND, RUN})
 # Verbs that take an *optional* argument (cost's period; findings' status filter); absent it, they
 # still dispatch.
 _OPTIONAL_ARGUMENT = frozenset({COST, FINDINGS})
+# Verbs that take an *optional second* token after their required first: `approve <fp> [<token>]`,
+# where the token is the break-glass confirm target (e.g. the node name for a `delete-node`).
+_OPTIONAL_SECOND = frozenset({APPROVE})
 
 # Muscle-memory synonyms for `probe` -- re-running a probe is what "refresh / capture state" means
 # (re-read live state and record the findings). Bare (no target) refreshes the whole fleet, so
@@ -238,7 +245,10 @@ def command_from_text(text: str, actor: str) -> Command | None:
             continue  # both parts required -> not actionable
         if verb in _NEEDS_ARGUMENT:
             if args:
-                return Command(verb, actor, args[0], flags=flags)
+                # approve takes an OPTIONAL second token -- the break-glass confirm target
+                # (`approve <fp> <node-name>`); for every other verb the extra is harmless.
+                second = args[1] if verb in _OPTIONAL_SECOND and len(args) >= 2 else ""
+                return Command(verb, actor, args[0], flags=flags, argument2=second)
             if is_alias:  # bare `scan`/`refresh` -> refresh the whole fleet (probe all)
                 return Command(verb, actor, "all", flags=flags)
             continue  # a required argument is absent (e.g. bare `probe`) -> not actionable

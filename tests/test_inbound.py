@@ -450,7 +450,7 @@ def test_send_rejects_unknown_surface_unconfigured_surface_and_unknown_fp(monkey
 def test_run_command_approve_routes_to_core(monkeypatch, tmp_path):
     seen: dict = {}
 
-    def fake_apply(store, fingerprint, actor):
+    def fake_apply(store, fingerprint, actor, **kw):
         seen["fp"], seen["actor"] = fingerprint, actor
         return "applied!", None
 

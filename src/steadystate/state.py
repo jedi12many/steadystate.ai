@@ -107,6 +107,9 @@ CREATE TABLE IF NOT EXISTS audit_log (
 PENDING = "pending"
 APPROVED = "approved"
 DECLINED = "declined"
+BREAKGLASS = (
+    "break-glass"  # the audit decision for a human override of the bound (out-of-bound run)
+)
 
 # Audit outcomes (the result of an approved remediation; a decline records DECLINED).
 VERIFIED = "verified"  # applied and the drift confirmed cleared

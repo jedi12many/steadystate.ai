@@ -105,6 +105,19 @@ def within_bounds(envelope: Envelope, policy: BoundPolicy = DEFAULT_BOUND) -> bo
     return ceiling is not None and envelope.impact <= ceiling
 
 
+def confirmation_tier(envelope: Envelope, policy: BoundPolicy = DEFAULT_BOUND) -> int:
+    """How much confirmation friction an action needs, from its envelope alone. ``0`` = within the
+    bound -- autonomous-eligible, no confirmation (`fix`/`run` just runs it). Out of bound is
+    break-glass: ``2`` (STRONG -- type the target's name to confirm) when it's IRREVERSIBLE or
+    reaches a NODE/the FLEET; else ``1`` (light -- a plain confirm). So the most dangerous things
+    get the most friction, automatically. Pure."""
+    if within_bounds(envelope, policy):
+        return 0
+    if envelope.reversibility >= Reversibility.IRREVERSIBLE or envelope.impact >= Impact.NODE:
+        return 2
+    return 1
+
+
 _REVERSIBILITY_BY_NAME = {r.name.lower(): r for r in Reversibility}
 _IMPACT_BY_NAME = {i.name.lower(): i for i in Impact}
 

@@ -86,4 +86,9 @@ def test_action_for_command_recognizes_a_vetted_shape_and_rejects_others():
     assert action_for_command("kubectl rollout restart deployment/web -n prod").name == (
         "rollout-restart-workload"
     )
-    assert action_for_command("kubectl delete node worker-1") is None  # not a vetted catalog shape
+    # `delete node` IS a vetted shape now -- but a break-glass one (out of bound, handled by the
+    # confirmation flow, not run here).
+    assert action_for_command("kubectl delete node worker-1").name == "delete-node"
+    # a command matching no vetted shape is still rejected.
+    assert action_for_command("kubectl exec -it pod/web -- bash") is None
+    assert action_for_command("kubectl drain worker-1") is None
