@@ -475,6 +475,83 @@ def test_node_read_is_best_effort(monkeypatch):
     assert prober.probe([_resource()]) == []
 
 
+# -- node disk % (the proactive `--deep` pass) ----------------------------------
+
+
+def test_node_disk_pct_takes_the_worst_filesystem():
+    from steadystate.probe.kubectl import node_disk_pct
+
+    assert node_disk_pct({"node": {"fs": {"capacityBytes": 100, "usedBytes": 85}}}) == 85
+    # imageFs (computed from availableBytes) is worse -> it wins.
+    worst = {
+        "node": {
+            "fs": {"capacityBytes": 100, "usedBytes": 50},
+            "runtime": {"imageFs": {"capacityBytes": 100, "availableBytes": 8}},
+        }
+    }
+    assert node_disk_pct(worst) == 92
+    assert node_disk_pct({}) is None  # nothing readable -> no warning
+
+
+def _deep_nodes_probe(monkeypatch, nodes: dict, summary: dict) -> KubectlProbe:
+    prober = KubectlProbe()
+    prober.enable_log_scan()  # --deep gates the per-node disk read
+    monkeypatch.setattr(prober, "_all_pods", dict)
+
+    def run(argv, best_effort=False):
+        joined = " ".join(argv)
+        if "summary" in joined:
+            return __import__("json").dumps(summary)
+        if "nodes" in joined:
+            return __import__("json").dumps(nodes)
+        return ""
+
+    monkeypatch.setattr(prober, "_run_text", run)
+    return prober
+
+
+def test_deep_flags_a_node_filling_up_before_disk_pressure(monkeypatch):
+    # condition-healthy node (no DiskPressure yet) but 88% full -> a proactive MEDIUM warning.
+    nodes = {"items": [_node("n1", Ready=("True", ""))]}
+    summary = {"node": {"fs": {"capacityBytes": 100, "usedBytes": 88}}}
+    [sym] = _deep_nodes_probe(monkeypatch, nodes, summary).probe([_resource()])
+    assert sym.category == "DiskFilling" and sym.severity is Severity.MEDIUM
+    assert "88% full" in sym.title and sym.evidence["disk_percent"] == "88"
+
+
+def test_deep_disk_near_full_is_high(monkeypatch):
+    nodes = {"items": [_node("n1", Ready=("True", ""))]}
+    summary = {"node": {"fs": {"capacityBytes": 100, "usedBytes": 95}}}
+    [sym] = _deep_nodes_probe(monkeypatch, nodes, summary).probe([_resource()])
+    assert sym.severity is Severity.HIGH  # near full -> HIGH
+
+
+def test_disk_pct_is_off_without_deep(monkeypatch):
+    # the per-node summary read is gated behind --deep; the fast path never makes it.
+    nodes = {"items": [_node("n1", Ready=("True", ""))]}
+    prober = KubectlProbe()  # NOT --deep
+    monkeypatch.setattr(prober, "_all_pods", dict)
+    argvs: list[list[str]] = []
+    monkeypatch.setattr(
+        prober,
+        "_run_text",
+        lambda argv, best_effort=False: (
+            argvs.append(argv)
+            or (__import__("json").dumps(nodes) if "nodes" in " ".join(argv) else "")
+        ),
+    )
+    assert prober.probe([_resource()]) == []
+    assert not any("summary" in " ".join(a) for a in argvs)  # no per-node summary call
+
+
+def test_deep_does_not_double_report_a_node_already_at_disk_pressure(monkeypatch):
+    # a node already flagged DiskPressure (HIGH condition) must NOT also get a DiskFilling symptom.
+    nodes = {"items": [_node("n1", DiskPressure=("True", "disk pressure"), Ready=("True", ""))]}
+    summary = {"node": {"fs": {"capacityBytes": 100, "usedBytes": 99}}}
+    syms = _deep_nodes_probe(monkeypatch, nodes, summary).probe([_resource()])
+    assert [s.category for s in syms] == ["DiskPressure"]  # one finding, not two
+
+
 # -- the registry ---------------------------------------------------------------
 
 

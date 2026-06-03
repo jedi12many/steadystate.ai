@@ -191,6 +191,46 @@ def node_issues(nodes_doc: dict) -> list[NodeIssue]:
     return out
 
 
+def _node_names(nodes_doc: dict) -> list[str]:
+    """Every node name in a `kubectl get nodes` doc. Pure."""
+    return [
+        name
+        for node in (nodes_doc.get("items") or [])
+        if (name := (node.get("metadata") or {}).get("name"))
+    ]
+
+
+# Proactive disk warning (the `--deep` node pass): a node filling up BEFORE it trips DiskPressure.
+# A warning at this % of any node filesystem, escalated to HIGH near full -- early enough to act.
+_DISK_WARN_PCT = 80
+_DISK_HIGH_PCT = 90
+
+
+def _fs_pct(fs: dict) -> int | None:
+    """A filesystem's used %, from a kubelet summary ``fs`` block (capacity + used/available).
+    None when capacity is missing/zero. Pure."""
+    capacity = fs.get("capacityBytes")
+    if not capacity:
+        return None
+    used = fs.get("usedBytes")
+    if used is None:
+        available = fs.get("availableBytes")
+        if available is None:
+            return None
+        used = capacity - available
+    return round(used / capacity * 100)
+
+
+def node_disk_pct(summary: dict) -> int | None:
+    """The worst (highest) filesystem-used % for a node, from its kubelet ``stats/summary`` -- the
+    root fs and the image/container fs (where logs + images live). None when neither is readable.
+    Pure + testable."""
+    node = summary.get("node") or {}
+    filesystems = [node.get("fs"), (node.get("runtime") or {}).get("imageFs")]
+    pcts = [pct for fs in filesystems if fs for pct in (_fs_pct(fs),) if pct is not None]
+    return max(pcts) if pcts else None
+
+
 # -- log-content detection (`probe --deep`) ---------------------------------------------------
 # A pod can be Running + Ready yet failing in its LOGS -- a panic loop caught and restarted, a
 # flood of errors, an OOM trace. Status detection misses that; a `--deep` probe reads the tail
@@ -255,6 +295,7 @@ class KubectlProbe:
         observe=(
             "kubectl get pods -A -o json",
             "kubectl get nodes -o json",
+            "kubectl get --raw /api/v1/nodes/<node>/proxy/stats/summary",  # --deep node disk %
             "kubectl logs --tail --previous",
         ),
     )
@@ -444,7 +485,12 @@ class KubectlProbe:
     def _node_symptoms(self) -> list[Symptom]:
         """A Symptom per flagged node condition (DiskPressure / MemoryPressure / PIDPressure /
         NotReady) from ONE `kubectl get nodes -o json`. Best-effort: a failed/denied read (`get
-        nodes` is cluster-scoped RBAC) degrades to no node symptoms, never crashes the scan."""
+        nodes` is cluster-scoped RBAC) degrades to no node symptoms, never crashes the scan.
+
+        With ``--deep`` it also adds a **proactive** disk warning: it reads each node's kubelet
+        ``stats/summary`` and flags one filling up (>= the warn %) BEFORE it trips DiskPressure --
+        the early warning. That's one `kubectl get --raw` per node and needs `nodes/proxy` RBAC, so
+        it's gated behind `--deep` and degrades silently where the proxy stats aren't permitted."""
         text = self._run_text(self._kubectl("get", "nodes", "-o", "json"))
         if not text:
             return []
@@ -452,7 +498,53 @@ class KubectlProbe:
             doc = json.loads(text)
         except ValueError:
             return []
-        return [self._node_symptom(issue) for issue in node_issues(doc)]
+        issues = node_issues(doc)
+        symptoms = [self._node_symptom(issue) for issue in issues]
+        if (
+            self._scan_logs
+        ):  # --deep: proactive per-node disk %, skipping ones already at DiskPressure
+            already = {i.node for i in issues if i.category == "DiskPressure"}
+            for node in _node_names(doc):
+                if node in already:
+                    continue  # DiskPressure already flagged it (more severe); don't double-report
+                disk = self._node_disk_symptom(node)
+                if disk is not None:
+                    symptoms.append(disk)
+        return symptoms
+
+    def _node_disk_symptom(self, node: str) -> Symptom | None:
+        """Read a node's kubelet `stats/summary` and flag it if a filesystem is >= the warn %.
+        MEDIUM, escalating to HIGH near full. None below the bar, or when the proxy stats aren't
+        readable (RBAC/unsupported) -- best-effort, never raised."""
+        raw = self._run_text(
+            self._kubectl("get", "--raw", f"/api/v1/nodes/{node}/proxy/stats/summary"),
+            best_effort=True,
+        )
+        if not raw:
+            return None
+        try:
+            pct = node_disk_pct(json.loads(raw))
+        except ValueError:
+            return None
+        if pct is None or pct < _DISK_WARN_PCT:
+            return None
+        severity = Severity.HIGH if pct >= _DISK_HIGH_PCT else Severity.MEDIUM
+        where = f"{self._context}/" if self._context else ""
+        on = f" on {self._context}" if self._context else ""
+        identity = f"{where}Node/{node}"
+        evidence = {"node": node, "disk_percent": str(pct)}
+        if self._context:
+            evidence["cluster"] = self._context
+        return Symptom(
+            identity=identity,
+            kind="Node",
+            category="DiskFilling",
+            severity=severity,
+            title=f"node {node} disk {pct}% full{on}",
+            detail=f"a node filesystem is {pct}% full -- free space before it evicts pods",
+            provenance=Provenance(source="kubernetes", address=identity),
+            evidence=evidence,
+        )
 
     def _node_symptom(self, issue: NodeIssue) -> Symptom:
         # A node finding -- cluster-scoped, so identity carries the context (a target = a cluster)

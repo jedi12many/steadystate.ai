@@ -51,7 +51,7 @@ COMMANDS: dict[str, tuple[str, str]] = {
         "probe <target>|all [verbose|cost|unmute|deep|json]",
         "check a target's health now -- or `probe all` for the whole fleet; aliases "
         "`scan`/`refresh` (bare = the fleet); `verbose` shows evidence, `unmute` shows muted, "
-        "`deep` also scans pod logs, `json` returns the report as JSON",
+        "`deep` also scans pod logs + node disk %, `json` returns the report as JSON",
     ),
     COST: ("cost [day|week]", "show LLM spend -- a rollup, or a day/week trend"),
     FINDINGS: (
