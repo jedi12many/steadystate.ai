@@ -22,7 +22,9 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
+import re
 import shutil
 import subprocess
 
@@ -32,6 +34,34 @@ from ..sources.base import Capabilities
 from .base import Symptom
 
 logger = logging.getLogger(__name__)
+
+# Parallelism + timeout scaling for the fleet gathers. The 30s default is per *run* -- one
+# `ansible all` process gathering the whole inventory -- and ansible defaults to just 5 forks, so a
+# 40-host fleet is ~8 serial waves; the heavy hardware (`setup`) gather blows a flat 30s on that and
+# the run is hard-killed (losing every host's data, not just the slow ones). So we crank forks
+# toward the fleet size (capped, to bound control-node load) -- ~1-2 waves instead of 8 -- and scale
+# the backstop timeout to the wave count, with a floor. Both env-overridable for an outlier fleet.
+# (One slow host still can't sink the rest: ansible's own per-host connection timeout drops it.)
+_FORKS_CAP = 25  # parallel SSH the control node handles comfortably; ansible defaults to 5
+_FORKS_ENV = "STEADYSTATE_ANSIBLE_FORKS"
+_TIMEOUT_ENV = "STEADYSTATE_ANSIBLE_TIMEOUT"
+_TIMEOUT_FLOOR = 30.0  # never below this -- a small fleet still gets a fair shake
+_SECONDS_PER_WAVE = 20.0  # generous wall-clock per parallel wave (a hardware gather + ssh)
+
+
+def _as_float(value: str | None) -> float | None:
+    try:
+        return float(value) if value else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _scaled_timeout(host_count: int, forks: int) -> float:
+    """The backstop timeout for one fleet gather: a generous budget per parallel wave times the wave
+    count (hosts / forks), floored. Falls back to two waves when the host count is unknown. Pure."""
+    waves = math.ceil(host_count / forks) if host_count > 0 and forks > 0 else 2
+    return max(_TIMEOUT_FLOOR, waves * _SECONDS_PER_WAVE)
+
 
 # systemd states (lowercased) for a service that *should* be up but isn't -- the "enabled but not
 # running" signal. "failed" is handled separately (it's a Symptom regardless of enabled-ness).
@@ -192,9 +222,11 @@ class AnsibleHealthProbe:
         )
     )
 
-    def __init__(self, inventory: str | None = None, timeout: float = 30.0) -> None:
+    def __init__(self, inventory: str | None = None, timeout: float | None = None) -> None:
         self.inventory = inventory or os.environ.get("STEADYSTATE_ANSIBLE_INVENTORY")
-        self.timeout = timeout
+        # An explicit timeout (constructor or STEADYSTATE_ANSIBLE_TIMEOUT) pins it; None means scale
+        # it to the fleet at run time.
+        self.timeout = timeout if timeout is not None else _as_float(os.environ.get(_TIMEOUT_ENV))
 
     def use_inventory(self, inventory: str) -> None:
         """Read host/service health from this inventory file (an ansible-live target carries its
@@ -208,16 +240,50 @@ class AnsibleHealthProbe:
         # kubectl probe); we read the fleet directly, like kubectl's node-level symptoms. Two
         # independent read-only gathers: service health, then disk fill. Each degrades on its own --
         # a failed disk gather never sinks the service findings, and vice versa.
+        # Size the parallelism + timeout to the fleet ONCE (cheap host count, no SSH), so a big
+        # inventory's heavy disk gather doesn't trip a flat budget.
+        hosts = self._host_count()
+        forks = self._forks(hosts)
+        timeout = self.timeout if self.timeout is not None else _scaled_timeout(hosts, forks)
         symptoms: list[Symptom] = []
-        services = self._run_module("service_facts")
+        services = self._run_module("service_facts", forks=forks, timeout=timeout)
         if services is not None:
             symptoms += host_health_symptoms(_services_by_host(services))
-        disks = self._run_module("setup", "gather_subset=hardware filter=ansible_mounts")
+        disks = self._run_module(
+            "setup", "gather_subset=hardware filter=ansible_mounts", forks=forks, timeout=timeout
+        )
         if disks is not None:
             symptoms += disk_symptoms(_mounts_by_host(disks))
         return symptoms
 
-    def _run_module(self, module: str, args: str = "") -> object | None:
+    def _forks(self, host_count: int) -> int:
+        """How many hosts to gather in parallel: ``STEADYSTATE_ANSIBLE_FORKS`` if set, else the
+        fleet size capped at ``_FORKS_CAP`` (so a 40-host run is ~2 waves, not 8). Falls back to cap
+        when the host count is unknown. Pure given the env."""
+        override = os.environ.get(_FORKS_ENV, "")
+        if override.isdigit() and int(override) > 0:
+            return int(override)
+        return min(host_count, _FORKS_CAP) if host_count > 0 else _FORKS_CAP
+
+    def _host_count(self) -> int:
+        """Hosts in the inventory, counted cheaply -- ``ansible all --list-hosts`` does NO SSH, it
+        just expands the inventory. 0 when ansible or the inventory can't be read, so the caller
+        falls back to default parallelism + the floor timeout (never blocks the real gathers)."""
+        if shutil.which("ansible") is None:
+            return 0
+        argv = ["ansible", "all", "--list-hosts"]
+        if self.inventory:
+            argv += ["-i", self.inventory]
+        try:
+            result = subprocess.run(argv, capture_output=True, text=True, timeout=15)
+        except (OSError, subprocess.SubprocessError):
+            return 0
+        match = re.search(r"hosts \((\d+)\)", result.stdout)
+        return int(match.group(1)) if match else 0
+
+    def _run_module(
+        self, module: str, args: str = "", *, forks: int | None = None, timeout: float | None = None
+    ) -> object | None:
         """Run one read-only ad-hoc ansible module across the inventory and parse its JSON-callback
         output. None on any failure (ansible missing / inventory unresolved / unparseable) -> that
         gather degrades to nothing, never an invented problem or a broken scan."""
@@ -226,6 +292,8 @@ class AnsibleHealthProbe:
         argv = ["ansible", "all", "-m", module]
         if args:
             argv += ["-a", args]
+        if forks:
+            argv += ["--forks", str(forks)]
         if self.inventory:
             argv += ["-i", self.inventory]
         # The JSON stdout callback gives structured output; ad-hoc runs need the load-callbacks
@@ -236,9 +304,10 @@ class AnsibleHealthProbe:
             "ANSIBLE_STDOUT_CALLBACK": "json",
             "ANSIBLE_LOAD_CALLBACK_PLUGINS": "true",
         }
+        run_timeout = timeout if timeout is not None else (self.timeout or _TIMEOUT_FLOOR)
         try:
             result = subprocess.run(
-                argv, capture_output=True, text=True, timeout=self.timeout, env=env
+                argv, capture_output=True, text=True, timeout=run_timeout, env=env
             )
         except (OSError, subprocess.SubprocessError) as exc:
             logger.warning("ansible health probe (%s) failed: %s", module, exc)
