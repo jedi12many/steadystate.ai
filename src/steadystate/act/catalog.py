@@ -57,6 +57,35 @@ def is_safe_rollout_restart(command: str) -> bool:
     return bool(_SAFE_ROLLOUT_RESTART.match(command.strip()))
 
 
+# -- break-glass shapes (OUT of the autonomous bound -- human-only, friction-gated) -------------
+# These are vetted shapes like every other catalog entry, but their envelopes are outside the
+# default bound, so `fix`/`run` won't run them autonomously -- only an authorized human can, through
+# the break-glass confirmation. They are NOT offered (no `categories`): you must name one.
+
+# scale a workload to zero replicas -- take a misbehaving service offline. Recoverable (scale back
+# up) but out of bound (RECOVERABLE never auto), so it's a light-tier break-glass.
+_SAFE_SCALE_TO_ZERO = re.compile(
+    r"^kubectl scale (?:deployment|statefulset)/[\w.-]+ --replicas=0 "
+    r"-n [\w.-]+" + _CONTEXT_TAIL + _KUBECONFIG_TAIL + r"$"
+)
+
+# delete ONE node -- the canonical break-glass: irreversible, node-scope. The bare `node <name>`
+# shape (no `-n`, no selector) can target only a single named node.
+_SAFE_DELETE_NODE = re.compile(
+    r"^kubectl delete node [\w.-]+" + _CONTEXT_TAIL + _KUBECONFIG_TAIL + r"$"
+)
+
+
+def is_safe_scale_to_zero(command: str) -> bool:
+    """True iff ``command`` is exactly a scale-to-zero of one Deployment/StatefulSet in one ns."""
+    return bool(_SAFE_SCALE_TO_ZERO.match(command.strip()))
+
+
+def is_safe_delete_node(command: str) -> bool:
+    """True iff ``command`` is exactly a single-node delete. Pure."""
+    return bool(_SAFE_DELETE_NODE.match(command.strip()))
+
+
 # -- composing a command from a finding's stored keys ------------------------------------------
 
 
@@ -107,6 +136,22 @@ def _compose_completed(f: FindingFields) -> str | None:
     return f"kubectl delete pods -n {f.namespace} --field-selector=status.phase=Succeeded" + _tail(
         f
     )
+
+
+_SCALABLE_KINDS = frozenset({"deployment", "statefulset"})
+
+
+def _compose_scale_to_zero(f: FindingFields) -> str | None:
+    kind = f.kind.lower()
+    if kind not in _SCALABLE_KINDS or not f.name or not f.namespace:
+        return None
+    return f"kubectl scale {kind}/{f.name} --replicas=0 -n {f.namespace}" + _tail(f)
+
+
+def _compose_delete_node(f: FindingFields) -> str | None:
+    if not f.name:  # the node name -- a node finding stores it; nothing else here is needed
+        return None
+    return f"kubectl delete node {f.name}" + _tail(f)
 
 
 # The pod-malfunction categories a workload *recycle* recovers (after a human has fixed the root
@@ -192,6 +237,34 @@ _BUILTIN_ACTIONS: tuple[CatalogAction, ...] = (
             "-- that needs a real fix). Self-healing: the controller manages it, no data loss. "
             "Command shape: kubectl rollout restart <deployment|statefulset|daemonset>/<name> "
             "-n <ns> [--context <ctx>]"
+        ),
+    ),
+    # -- break-glass: OUT of the bound, human-only, never auto-offered (empty categories) --------
+    CatalogAction(
+        name="scale-to-zero",
+        # Recoverable (scale back up) but out of bound -> a light-tier break-glass: take a
+        # misbehaving Deployment/StatefulSet offline. One workload -> service.
+        envelope=Envelope(Reversibility.RECOVERABLE, Impact.SERVICE),
+        validate=is_safe_scale_to_zero,
+        compose=_compose_scale_to_zero,
+        description=(
+            "BREAK-GLASS: scale ONE Deployment/StatefulSet to zero replicas -- take a misbehaving "
+            "service offline. Recoverable (scale it back up), but out of the bound, so it needs a "
+            "human confirmation. Command shape: kubectl scale <deployment|statefulset>/<name> "
+            "--replicas=0 -n <ns> [--context <ctx>]"
+        ),
+    ),
+    CatalogAction(
+        name="delete-node",
+        # The canonical break-glass: irreversible, node-scope -> the strong tier (type the node
+        # name to confirm). The bare `node <name>` shape can only ever name a single node.
+        envelope=Envelope(Reversibility.IRREVERSIBLE, Impact.NODE),
+        validate=is_safe_delete_node,
+        compose=_compose_delete_node,
+        description=(
+            "BREAK-GLASS: delete ONE node from the cluster (its pods reschedule elsewhere). "
+            "Irreversible and node-scope, so it needs a strong confirmation -- you type the node "
+            "name back. Command shape: kubectl delete node <name> [--context <ctx>]"
         ),
     ),
 )

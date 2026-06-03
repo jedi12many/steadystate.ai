@@ -39,8 +39,8 @@ def test_run_catalog_action_runs_a_vetted_command_as_argv():
 
 def test_run_catalog_action_refuses_an_unrecognized_command():
     with mock.patch("steadystate.act.execute.subprocess.run") as run:
-        result = run_catalog_action(_pending("kubectl delete node worker-1"))
-    run.assert_not_called()  # not a vetted shape -> never executed
+        result = run_catalog_action(_pending("kubectl drain worker-1"))  # not a vetted shape
+    run.assert_not_called()  # never executed
     assert not result.applied and "not a recognized catalog command" in result.detail
 
 

@@ -31,11 +31,18 @@ from .plan import RemediationPlan, Risk
 CATALOG_SOURCE = "kubectl-catalog"
 
 
-def run_catalog_action(action: PendingAction, *, timeout: float = 30.0) -> RemediationResult:
+def run_catalog_action(
+    action: PendingAction, *, break_glass: bool = False, timeout: float = 30.0
+) -> RemediationResult:
     """Execute the catalog-action command on ``action``. Re-validates it against the catalog's
-    allow-patterns (refuses anything no vetted action recognizes), checks the matched action's
-    envelope is within the bound (else escalates -- never runs out of bounds), then runs it as an
-    argv list (no shell), with a timeout. Best-effort: a failed command is reported, not raised."""
+    allow-patterns (refuses anything no vetted action recognizes), then runs it as an argv list
+    (no shell), with a timeout. Best-effort: a failed command is reported, not raised.
+
+    ``break_glass`` is the human override: when True, the within-bound check is SKIPPED (an
+    authorized human deliberately confirmed an out-of-bound action). The allow-pattern is *still*
+    enforced either way -- break-glass overrides the bound, never the shape vetting -- so
+    even an override can only run a vetted catalog shape. The autonomous callers (hold, the decider)
+    never set it, so the bound stays supreme for the code and the LLM."""
     command = action.command
     matched = action_for_command(command)
     plan = RemediationPlan(
@@ -55,7 +62,9 @@ def run_catalog_action(action: PendingAction, *, timeout: float = 30.0) -> Remed
             verified=False,
             detail=f"refused: not a recognized catalog command ({command!r}).",
         )
-    if not within_bounds(matched.envelope):  # the bound is supreme, even at run time
+    if not break_glass and not within_bounds(
+        matched.envelope
+    ):  # bound supreme unless human override
         return RemediationResult(
             plan=plan,
             applied=False,

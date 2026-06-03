@@ -15,6 +15,7 @@ from ..sources import build_drift_source
 from ..state import (
     APPLIED,
     APPROVED,
+    BREAKGLASS,
     DECLINED,
     FAILED,
     NOOP,
@@ -26,6 +27,9 @@ from ..state import (
 )
 from . import build_executor
 from .base import RemediationResult
+from .bounds import confirmation_tier
+from .breakglass import BREAKGLASS_SOURCE, breakglass_allowed
+from .catalog import action_for_command
 from .cleanup import CLEANUP_SOURCE, run_cleanup
 from .execute import CATALOG_SOURCE, run_catalog_action
 
@@ -47,15 +51,44 @@ def _audit(
 
 
 def apply_pending(
-    store: StateStore, fingerprint: str, actor: str, now: datetime | None = None
+    store: StateStore,
+    fingerprint: str,
+    actor: str,
+    now: datetime | None = None,
+    *,
+    token: str = "",
 ) -> tuple[str, RemediationResult | None]:
     """Approve + run the pending remediation for ``fingerprint``. Returns a human message and
     the RemediationResult when one ran (None when there was nothing to do). Every decision that
-    reaches a real remediation point is recorded to the append-only audit log."""
+    reaches a real remediation point is recorded to the append-only audit log. ``token`` is the
+    break-glass confirmation (the target's name for a strong-tier override); ignored otherwise."""
     now = now or datetime.now(UTC)
     action = store.get_pending(fingerprint)
     if action is None or action.status != PENDING:
         return "no pending remediation for that fingerprint.", None
+    if action.source == BREAKGLASS_SOURCE:  # an out-of-bound action awaiting a human override
+        # Re-check the allowlist AT CONFIRM time, then the confirmation friction (strong tier: type
+        # the target's name, stored as drift_identity), then run with the bound overridden --
+        # audited as BREAKGLASS so `history` shows who overrode it.
+        if not breakglass_allowed(actor):
+            return (
+                f"break-glass not enabled for you ({actor}). Set STEADYSTATE_BREAKGLASS_USERS.",
+                None,
+            )
+        matched = action_for_command(action.command)
+        tier = confirmation_tier(matched.envelope) if matched is not None else 0
+        if tier >= 2 and token != action.drift_identity:
+            return (
+                f"break-glass: type the target to confirm -- "
+                f"approve {action.fingerprint} {action.drift_identity}",
+                None,
+            )
+        if not store.claim_pending(fingerprint, PENDING, APPROVED, actor):
+            return "no pending remediation for that fingerprint.", None
+        result = run_catalog_action(action, break_glass=True)
+        outcome = VERIFIED if result.verified else APPLIED if result.applied else FAILED
+        store.record_audit(_audit(action, actor, BREAKGLASS, outcome, result.detail), now)
+        return result.detail, result
     if action.source in (CLEANUP_SOURCE, CATALOG_SOURCE):  # a direct, re-validated catalog command
         # Claim before the irreversible step (same race guard as the drift path), then run the
         # allow-listed command and audit it. No drift source/executor -- the command is it. Both

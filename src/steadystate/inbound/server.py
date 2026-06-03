@@ -20,7 +20,8 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 from ..act.approve import apply_pending, decline_pending
-from ..act.bounds import within_bounds
+from ..act.bounds import confirmation_tier
+from ..act.breakglass import BREAKGLASS_SOURCE, breakglass_allowed
 from ..act.catalog import ACTIONS as CATALOG_ACTIONS
 from ..act.catalog import CatalogAction, FindingFields, catalog_action, offered_action
 from ..act.cleanup import record_cleanups
@@ -358,7 +359,8 @@ def _finding_fields(finding: Finding) -> FindingFields:
         kubeconfig = target.kubeconfig if target is not None else ""
     return FindingFields(
         kind=details.get("kind", ""),
-        name=details.get("workload", ""),
+        # a workload finding stores `workload`; a node finding stores `node` (the node name).
+        name=details.get("workload") or details.get("node", ""),
         namespace=details.get("namespace", ""),
         context=context,
         kubeconfig=kubeconfig,
@@ -374,20 +376,17 @@ def _apply_catalog_action(
     never forced."""
     if action.compose is None:
         return f"'{action.name}' has no composer -- can't issue it for a finding."
-    command = action.compose(_finding_fields(finding))
+    fields = _finding_fields(finding)
+    command = action.compose(fields)
     if command is None:
         return f"can't compose '{action.name}' for this finding (missing namespace/kind/name)."
     if not action.validate(command):  # belt-and-suspenders -- the composed shape must still pass
         return f"composed command for '{action.name}' didn't pass its allow-pattern; not run."
-    if not within_bounds(
-        action.envelope
-    ):  # the bound governs even an operator-issued catalog action
-        return (
-            f"'{action.name}' ({action.envelope.label}) is outside the autonomous bound -- "
-            "a human runs it out-of-band (break-glass, not yet wired)."
-        )
-    # Record the command as a pending catalog action, then apply it through the exact approve
-    # guardrail (claim-once, re-validate, run as argv, audit under the chat actor).
+    tier = confirmation_tier(action.envelope)
+    if tier > 0:  # out of the autonomous bound -> break-glass: record + challenge, don't run now
+        return _breakglass_challenge(store, finding, action, command, fields, actor, tier)
+    # within the bound: record the command as a pending catalog action, then run it through the
+    # approve guardrail (claim-once, re-validate, run as argv, audit under the chat actor).
     store.record_pending(
         PendingAction(
             fingerprint=finding.fingerprint,
@@ -400,6 +399,46 @@ def _apply_catalog_action(
     )
     message, _result = apply_pending(store, finding.fingerprint, actor)
     return f"{action.name}: {message}\n  $ {command}"
+
+
+def _breakglass_challenge(
+    store: StateStore,
+    finding: Finding,
+    action: CatalogAction,
+    command: str,
+    fields: FindingFields,
+    actor: str,
+    tier: int,
+) -> str:
+    """Out-of-bound action: record it as a pending break-glass command and return the confirmation
+    challenge (the command, its blast radius, and how to confirm). It does NOT run -- only an
+    authorized `approve` does. Default-closed: refused unless the operator is allowlisted."""
+    if not breakglass_allowed(actor):
+        return (
+            f"'{action.name}' ({action.envelope.label}) is BREAK-GLASS (outside the bound), and "
+            f"you ({actor}) aren't authorized. Set STEADYSTATE_BREAKGLASS_USERS to enable it."
+        )
+    # The strong tier's confirm token is the target's name (the node/workload) -- stored as the
+    # pending's drift_identity so `approve <fp> <name>` can check it.
+    target = fields.name or finding.last_title
+    store.record_pending(
+        PendingAction(
+            fingerprint=finding.fingerprint,
+            source=BREAKGLASS_SOURCE,
+            path="",
+            drift_identity=target,
+            command=command,
+        ),
+        datetime.now(UTC),
+    )
+    fp = finding.fingerprint
+    confirm = f"approve {fp} {target}" if tier >= 2 else f"approve {fp}"
+    return (
+        f"⚠ BREAK-GLASS — {action.envelope.label}\n"
+        f"  $ {command}\n"
+        f"  outside the autonomous bound. to run, confirm:\n    {confirm}"
+        + (f"  (type the target name '{target}')" if tier >= 2 else "")
+    )
 
 
 def _fix_finding(fingerprint: str, state_path: str, actor: str) -> str:
@@ -594,7 +633,10 @@ def run_command(command: Command, state_path: str) -> str:
         return _render_history(state_path)
     with StateStore(state_path) as store:
         if command.verb == APPROVE:
-            message, _result = apply_pending(store, command.argument, command.actor)
+            # argument2 carries the break-glass confirm token (the target name) when present.
+            message, _result = apply_pending(
+                store, command.argument, command.actor, token=command.argument2
+            )
             return message
         if command.verb == DECLINE:
             return decline_pending(store, command.argument, command.actor)
