@@ -32,7 +32,6 @@ _UNHEALTHY_WAITING = frozenset(
         "RunContainerError",
     }
 )
-_RESTART_THRESHOLD = 5  # restarts above this read as unhealthy even if currently Running
 
 
 @dataclass(frozen=True)
@@ -94,7 +93,11 @@ def unhealthy_pods(pods: dict, workload: str) -> list[PodHealth]:
     Deployment, the StatefulSet/DaemonSet directly) -- so two deployments in one namespace with
     overlapping names (``squid`` / ``squid-proxy``) never claim each other's pods; a bare pod with
     no controller falls back to the name-prefix match. Unhealthy = a container stuck in a known bad
-    waiting state, a Failed phase, or a restart count over the threshold. Pure + testable."""
+    waiting state, or a Failed phase. The restart *count* is NOT a trigger: it's cumulative over the
+    pod's life, so a pod that churned during a past deploy but is fine now would read as a false
+    positive, and a pod that's genuinely failing now is already caught by its bad waiting state /
+    Failed phase -- the number adds no signal either way. (It's still carried as evidence.) Pure +
+    testable."""
     out: list[PodHealth] = []
     for pod in pods.get("items") or []:
         name = (pod.get("metadata") or {}).get("name") or ""
@@ -114,15 +117,13 @@ def unhealthy_pods(pods: dict, workload: str) -> list[PodHealth]:
             # memory/disk pressure killed it), not a crash. Call it out distinctly: lower severity,
             # and the fix is a cleanup (delete it), not a restart.
             reason = "Evicted" if status.get("reason") == "Evicted" else "Failed"
-        if not reason and restarts > _RESTART_THRESHOLD:
-            reason = f"{restarts} restarts"
-        if reason:
+        if reason:  # restarts ride along as evidence, never as the reason a pod is flagged
             out.append(PodHealth(name=name, reason=reason, restarts=restarts))
     return out
 
 
-# Waiting reasons where the container can't run at all -> HIGH. A flapping-but-running pod
-# (over the restart threshold, reason "N restarts") is MEDIUM.
+# Reasons where the container can't run at all -> HIGH. A reason not in here (today: Evicted, a
+# dead tombstone from node pressure) is the lower-severity MEDIUM case.
 _CANNOT_RUN = frozenset(
     {
         "CrashLoopBackOff",
@@ -150,8 +151,9 @@ def _namespace(identity: str) -> str:
 
 
 def category_and_severity(sick: list[PodHealth]) -> tuple[str, Severity]:
-    """The dominant category + its severity. A "cannot-run" reason on any pod wins (HIGH);
-    otherwise a flapping/restarting workload is MEDIUM. Pure + testable."""
+    """The dominant category + its severity. A "cannot-run" reason on any pod wins (HIGH); a
+    non-cannot-run reason (e.g. Evicted) is MEDIUM. The restart count is only a tiebreaker between
+    equally-severe pods (which one to name), never a reason on its own. Pure + testable."""
     worst = max(sick, key=lambda pod: (pod.reason in _CANNOT_RUN, pod.restarts))
     severity = Severity.HIGH if any(pod.reason in _CANNOT_RUN for pod in sick) else Severity.MEDIUM
     return worst.reason, severity

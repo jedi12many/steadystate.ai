@@ -126,9 +126,18 @@ def test_evicted_symptom_recommends_a_cleanup(monkeypatch):
     )
 
 
-def test_detects_restart_threshold_even_when_running():
-    [pod] = unhealthy_pods(_pods(_pod("web-x", phase="Running", restarts=6)), "web")
-    assert pod.reason == "6 restarts"
+def test_restart_count_alone_is_never_a_finding():
+    # A high cumulative restart count on a Running pod is not actionable -- it churned in the past
+    # and is fine now; if it weren't, the bad waiting state / Failed phase is what we'd flag. Noise.
+    assert unhealthy_pods(_pods(_pod("web-x", phase="Running", restarts=20)), "web") == []
+
+
+def test_a_crashlooping_pod_is_flagged_and_carries_its_restart_count_as_evidence():
+    # The restart count rides along as evidence on a pod that's sick for a REAL reason, never as the
+    # reason itself.
+    crash = _pod("web-x", waiting="CrashLoopBackOff", restarts=9)
+    [pod] = unhealthy_pods(_pods(crash), "web")
+    assert pod.reason == "CrashLoopBackOff" and pod.restarts == 9
 
 
 def test_healthy_pods_are_ignored():
@@ -181,19 +190,21 @@ def test_bare_pod_without_a_controller_falls_back_to_name_prefix():
     assert [p.name for p in unhealthy_pods(pods, "squid")] == ["squid-x"]
 
 
-def test_aggregates_restarts_across_containers():
+def test_aggregates_restarts_across_containers_as_evidence():
+    # restarts sum across a pod's containers and ride along as evidence -- here on a pod that's sick
+    # for a real reason (one container crashlooping); the count is never the reason itself.
     pod = {
         "metadata": {"name": "web-1"},
         "status": {
             "phase": "Running",
             "containerStatuses": [
-                {"restartCount": 3, "state": {}},
+                {"restartCount": 3, "state": {"waiting": {"reason": "CrashLoopBackOff"}}},
                 {"restartCount": 4, "state": {}},
             ],
         },
     }
     [health] = unhealthy_pods(_pods(pod), "web")
-    assert health.restarts == 7 and health.reason == "7 restarts"
+    assert health.restarts == 7 and health.reason == "CrashLoopBackOff"
 
 
 # -- category + severity (pure) -------------------------------------------------
@@ -204,14 +215,15 @@ def test_cannot_run_reason_is_high():
     assert category_and_severity(sick) == ("CrashLoopBackOff", Severity.HIGH)
 
 
-def test_restart_flap_is_medium():
-    sick = [PodHealth(name="web-1", reason="7 restarts", restarts=7)]
-    assert category_and_severity(sick) == ("7 restarts", Severity.MEDIUM)
+def test_a_non_cannot_run_reason_is_medium():
+    # Evicted (a dead tombstone) isn't a cannot-run reason -> the lower MEDIUM severity.
+    sick = [PodHealth(name="web-1", reason="Evicted", restarts=0)]
+    assert category_and_severity(sick) == ("Evicted", Severity.MEDIUM)
 
 
 def test_a_single_cannot_run_pod_makes_the_whole_symptom_high():
     sick = [
-        PodHealth(name="web-1", reason="5 restarts", restarts=5),
+        PodHealth(name="web-1", reason="Evicted", restarts=0),
         PodHealth(name="web-2", reason="CrashLoopBackOff", restarts=20),
     ]
     category, severity = category_and_severity(sick)
