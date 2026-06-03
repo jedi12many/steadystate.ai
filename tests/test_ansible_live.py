@@ -99,7 +99,7 @@ def test_the_probe_supports_inventory_and_passes_it_as_dash_i(monkeypatch):
     monkeypatch.setattr(ah.subprocess, "run", fake_run)
     probe = ah.AnsibleHealthProbe()
     probe.use_inventory("/x/hosts")
-    probe._collect()
+    probe._run_module("service_facts")
     assert "-i" in captured["argv"] and "/x/hosts" in captured["argv"]
 
 

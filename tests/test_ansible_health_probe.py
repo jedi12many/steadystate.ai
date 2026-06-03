@@ -10,7 +10,9 @@ from __future__ import annotations
 from steadystate.probe import ansible_health as ah
 from steadystate.probe.ansible_health import (
     AnsibleHealthProbe,
+    _mounts_by_host,
     _services_by_host,
+    disk_symptoms,
     host_health_symptoms,
 )
 from steadystate.reason.alert import Severity
@@ -81,16 +83,81 @@ def test_services_by_host_degrades_on_odd_documents():
     assert _services_by_host({"plays": [{"tasks": [{"hosts": {"h": {}}}]}]}) == {}  # no facts
 
 
+# -- disk_symptoms: the filling-filesystem rule -----------------------------------------------
+
+
+def _mount(path: str, total: int, avail: int) -> dict:
+    return {"mount": path, "size_total": total, "size_available": avail}
+
+
+def test_a_filling_mount_is_medium_and_a_near_full_one_is_high():
+    mounts = {"web01": [_mount("/", 100, 15), _mount("/var", 100, 5)]}  # 85% and 95%
+    syms = {s.identity: s for s in disk_symptoms(mounts)}
+    assert syms["web01:/"].severity == Severity.MEDIUM and "85% full" in syms["web01:/"].title
+    assert syms["web01:/var"].severity == Severity.HIGH
+    assert syms["web01:/"].category == "DiskFilling"
+
+
+def test_a_healthy_mount_yields_no_symptom():
+    assert disk_symptoms({"web01": [_mount("/", 100, 50)]}) == []  # 50% used -> below the warn line
+
+
+def test_disk_symptoms_skips_mounts_with_unusable_size_facts():
+    bad = {"web01": [{"mount": "/proc", "size_total": 0, "size_available": 0}, {"mount": "/x"}]}
+    assert disk_symptoms(bad) == []  # zero/absent size -> skipped, never a divide or false positive
+
+
+def test_mounts_by_host_pulls_mounts_out_of_a_setup_callback_doc():
+    doc = {"plays": [{"tasks": [{"hosts": {"web01": {"ansible_facts": {"ansible_mounts": [1]}}}}]}]}
+    assert _mounts_by_host(doc) == {"web01": [1]}
+    assert _mounts_by_host("nope") == {}
+
+
 # -- the live probe: end to end on a fixture, and honest degrade ------------------------------
+
+
+def test_the_probe_reports_both_service_and_disk_findings(monkeypatch):
+    services = _callback_doc({"haproxy.service": _svc("failed")})
+    disks = {
+        "plays": [
+            {
+                "tasks": [
+                    {
+                        "hosts": {
+                            "web01": {
+                                "ansible_facts": {
+                                    "ansible_mounts": [
+                                        {"mount": "/", "size_total": 100, "size_available": 5},
+                                    ]
+                                }
+                            }
+                        }
+                    }
+                ]
+            }
+        ]
+    }
+    monkeypatch.setattr(
+        AnsibleHealthProbe,
+        "_run_module",
+        lambda self, module, args="": services if module == "service_facts" else disks,
+    )
+    cats = {s.category for s in AnsibleHealthProbe().probe([])}
+    assert cats == {"ServiceFailed", "DiskFilling"}  # both gathers contribute
 
 
 def test_probe_maps_a_collected_doc_to_symptoms(monkeypatch):
     doc = _callback_doc({"haproxy.service": _svc("failed"), "nginx.service": _svc("running")})
-    monkeypatch.setattr(AnsibleHealthProbe, "_collect", lambda self: doc)
+    # The probe runs two gathers (service_facts, setup); return the service doc for the first only.
+    monkeypatch.setattr(
+        AnsibleHealthProbe,
+        "_run_module",
+        lambda self, module, args="": doc if module == "service_facts" else None,
+    )
     [s] = AnsibleHealthProbe().probe([])
     assert s.identity == "web01:haproxy.service" and s.category == "ServiceFailed"
 
 
 def test_probe_degrades_to_no_symptoms_when_ansible_is_absent(monkeypatch):
     monkeypatch.setattr(ah.shutil, "which", lambda _binary: None)
-    assert AnsibleHealthProbe().probe([]) == []  # no ansible -> _collect None -> []
+    assert AnsibleHealthProbe().probe([]) == []  # no ansible -> both gathers None -> []
