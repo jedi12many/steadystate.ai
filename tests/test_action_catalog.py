@@ -59,17 +59,19 @@ def test_completed_cleanup_rejects_widened_injected_or_wrong_shapes(command):
     assert is_safe_completed_cleanup(command) is False
 
 
-# -- rollout-restart-deployment: the validator (self-healing pinned by shape) -----------------
+# -- rollout-restart-workload: the validator (self-healing pinned by shape) -----------------
 
 
 @pytest.mark.parametrize(
     "command",
     [
         "kubectl rollout restart deployment/web -n prod",
+        "kubectl rollout restart statefulset/db -n prod",  # all three controllers are self-healing
+        "kubectl rollout restart daemonset/agent -n kube-system",
         "kubectl rollout restart deployment/web -n prod --context east",
     ],
 )
-def test_rollout_restart_accepts_the_exact_shape(command):
+def test_rollout_restart_accepts_any_controller_shape(command):
     assert is_safe_rollout_restart(command) is True
 
 
@@ -78,7 +80,7 @@ def test_rollout_restart_accepts_the_exact_shape(command):
     [
         "kubectl rollout restart deployment/web",  # namespace not pinned (impact firewall)
         "kubectl rollout undo deployment/web -n prod",  # undo is a different, riskier action
-        "kubectl rollout restart statefulset/db -n prod",  # only deployments are vetted here
+        "kubectl rollout restart replicaset/web-abc -n prod",  # not a vetted controller kind
         "kubectl rollout restart deployment/web -n prod --replicas=0",  # smuggled extra flag
         "kubectl delete deployment/web -n prod",  # not a restart at all
         "kubectl rollout restart deployment/web -A",  # all namespaces
@@ -95,27 +97,28 @@ def test_rollout_restart_rejects_wrong_widened_or_injected_shapes(command):
 
 def test_new_actions_are_registered():
     assert catalog_action("delete-completed-pods") is not None
-    assert catalog_action("rollout-restart-deployment") is not None
+    assert catalog_action("rollout-restart-workload") is not None
 
 
 def test_new_action_envelopes_are_within_the_default_bound():
     # Both must be auto-eligible under the conservative default: lossless/tenant and
     # self_healing/service both sit inside DEFAULT_BOUND. (A catalog entry that escalated even by
     # default would still be safe -- just never autonomous -- but these two are meant to act.)
-    for name in ("delete-completed-pods", "rollout-restart-deployment"):
+    for name in ("delete-completed-pods", "rollout-restart-workload"):
         assert within_bounds(ACTIONS[name].envelope)
 
 
 def test_rollout_restart_can_be_narrowed_out_by_the_operator():
     # The bound dial reaches catalog actions too: forbidding self-healing auto escalates it.
     narrowed = bound_from_env("self_healing=none")
-    assert not within_bounds(ACTIONS["rollout-restart-deployment"].envelope, narrowed)
+    assert not within_bounds(ACTIONS["rollout-restart-workload"].envelope, narrowed)
 
 
 def test_menu_lists_the_new_actions_with_their_command_shape():
     menu = catalog_menu()
     assert "delete-completed-pods" in menu and "status.phase=Succeeded" in menu
-    assert "rollout-restart-deployment" in menu and "rollout restart deployment/<name>" in menu
+    assert "rollout-restart-workload" in menu
+    assert "rollout restart <deployment|statefulset|daemonset>/<name>" in menu
 
 
 # -- end-to-end: the gate authorizes a valid proposal for each new action ---------------------
@@ -128,10 +131,10 @@ def test_gate_authorizes_a_valid_completed_cleanup():
 
 def test_gate_authorizes_a_valid_rollout_restart():
     cmd = "kubectl rollout restart deployment/web -n prod"
-    assert gate_proposal(_proposal("rollout-restart-deployment", cmd)).verdict == AUTHORIZED
+    assert gate_proposal(_proposal("rollout-restart-workload", cmd)).verdict == AUTHORIZED
 
 
 def test_gate_rejects_a_rollout_restart_with_a_smuggled_command():
     # The action name is vetted, but the command isn't its shape -> REJECTED at the gate, not run.
     bad = "kubectl rollout restart deployment/web -n prod; rm -rf /"
-    assert gate_proposal(_proposal("rollout-restart-deployment", bad)).verdict != AUTHORIZED
+    assert gate_proposal(_proposal("rollout-restart-workload", bad)).verdict != AUTHORIZED
