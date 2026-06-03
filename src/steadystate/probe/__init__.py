@@ -14,6 +14,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from ..sources.base import Capabilities
+from .ansible_health import AnsibleHealthProbe
 from .argocd import ArgoCDProbe
 from .base import Prober, Symptom
 from .docker import DockerProbe
@@ -36,6 +37,7 @@ PROBES: dict[str, Callable[[Path], Prober]] = {
     "kubectl": lambda path: KubectlProbe(),
     "docker": lambda path: DockerProbe(),
     "argocd": lambda path: ArgoCDProbe(_load_json(path)),
+    "ansible": lambda path: AnsibleHealthProbe(),  # live, read-only service_facts -- ignores path
 }
 
 # Per-probe command manifest, mirroring the sources' CAPABILITIES: the read-only `observe`
@@ -46,6 +48,7 @@ PROBE_CAPABILITIES: dict[str, Capabilities] = {
     "kubectl": KubectlProbe.commands,
     "docker": DockerProbe.commands,
     "argocd": ArgoCDProbe.commands,
+    "ansible": AnsibleHealthProbe.commands,
 }
 
 # Which probe `--probe auto` picks per source -- only the sources with a real health signal
@@ -60,6 +63,7 @@ _AUTO: dict[str, str] = {
     "k8s-baseline": "kubectl",  # a baseline scan gives config drift + health in one pass
     "docker-compose": "docker",
     "argocd": "argocd",
+    "ansible": "ansible",  # the ansible source's drift + live host/service health in one pass
 }
 
 __all__ = [
@@ -81,7 +85,7 @@ def build_prober(mode: str, path: Path) -> Prober | None:
     """Construct the Prober for ``mode`` (a registry name or ``none``), or raise ValueError.
 
     - ``none``: None -- no probe step runs, the un-probed path is unchanged.
-    - any registered name (``kubectl`` | ``docker`` | ``argocd`` | an out-of-tree probe).
+    - any registered name (``kubectl`` | ``docker`` | ``argocd`` | ``ansible`` | out-of-tree).
     - anything else: ValueError, which the CLI turns into a clean typer.BadParameter.
     """
     if mode == "none":
