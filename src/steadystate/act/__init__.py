@@ -47,6 +47,9 @@ EXECUTORS: dict[str, Callable[[Path], Executor]] = merged("executors", _BUILTIN_
 
 __all__ = ["EXECUTORS", "Executor", "build_executor"]
 
+# Note: reflex/hold (the control loop) lives in act.reflex and is imported directly by callers --
+# kept out of this module's import graph to avoid a cycle (reflex -> approve -> act).
+
 
 def build_executor(source: str, path: Path) -> Executor | None:
     """The registered Executor for ``source``, or None when the source is observe-only."""

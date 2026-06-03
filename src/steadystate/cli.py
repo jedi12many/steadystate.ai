@@ -18,6 +18,7 @@ from .act.approve import apply_pending, decline_pending
 from .act.base import Proposer
 from .act.cleanup import record_cleanups
 from .act.deliver import build_deliveries
+from .act.reflex import reflexes, run_hold
 from .catalog import gather_catalog, render_console, render_html
 from .discover import (
     as_dict as discovery_as_dict,
@@ -805,6 +806,85 @@ def sweep(
         typer.echo(line)
     for surface in surfaces:  # push the union of the fleet's alerts outward (each cluster-labeled)
         surface.emit(result.report)
+
+
+@app.command()
+def hold(
+    state: Path = typer.Option(
+        Path(DEFAULT_STATE_PATH),
+        "--state",
+        help="SQLite state db -- the hold tick records findings + offers cleanups through it, and "
+        "audits anything it applies. Auto-created; default under .steadystate/.",
+    ),
+    apply: bool = typer.Option(
+        False,
+        "--apply",
+        help="Actually execute the reflexes at `auto` (within blast-radius). Without it, hold is a "
+        "DRY RUN: it prints what it would hold and touches nothing -- the mode you watch first.",
+    ),
+    deep: bool = typer.Option(
+        False, "--deep", help="Probe deep (pod logs + node disk %) before holding."
+    ),
+) -> None:
+    """Hold the fleet at steady state: probe, and for each *known* malfunction apply its reflex.
+
+    The control loop, not a monitor. It sweeps every target, then for each finding consults the
+    reflex registry: a known stimulus whose reflex is at `auto` and within blast-radius is held
+    autonomously (the prober's own safe cleanup, run through the approve guardrail and audited);
+    anything novel, or out of envelope (an abnormal pod count, or a fleet-wide storm of the same
+    finding), is ESCALATED -- left pending for a human. Knowing when *not* to act is the point.
+
+    Reflexes ship at `propose` (dry-run): out of the box this holds nothing. Promote one you've
+    watched be right with `STEADYSTATE_REFLEX_AUTO=reclaim-evicted`, then `hold --apply`."""
+    target_file = _targets_file()
+    if not target_file.exists():
+        typer.echo(f"no targets file ({target_file}). Create one with `discover --create`.")
+        return
+    try:
+        registry = load_targets(target_file)
+    except (OSError, ValueError) as exc:
+        typer.echo(f"targets file {target_file} is malformed: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    if not registry:
+        typer.echo(f"{target_file} has no targets.")
+        return
+    now = datetime.now(UTC)
+    result = sweep_targets(registry, str(state), now, scan_logs=deep)
+    with _open_store(state) as store:
+        record_cleanups(store, result.report, now)  # offer cleanups so hold can approve them
+        outcome = run_hold(store, result.report, apply=apply, now=now)
+    for line in _render_hold(outcome, apply=apply):
+        typer.echo(line)
+
+
+def _render_hold(outcome, *, apply: bool) -> list[str]:
+    """Render a hold tick: the reflexes in play, then act / watch / escalate, then what ran."""
+    active = reflexes()
+    lines = [
+        f"hold: {len(active)} reflex(es) -- " + ", ".join(f"{r.name}[{r.autonomy}]" for r in active)
+    ]
+    plan = outcome.plan
+    if not plan.decisions:
+        lines.append("  fleet is at steady state -- nothing for a reflex to hold.")
+        return lines
+    if apply and outcome.applied:
+        lines.append(f"  HELD {outcome.held}/{len(outcome.applied)} autonomously:")
+        for decision, res in outcome.applied:
+            ok = "ok" if res is not None and res.applied else "FAILED"
+            detail = (res.detail if res is not None else "").strip()
+            lines.append(f"    [{ok}] {decision.identity}  ({decision.reflex})  {detail}")
+    elif plan.to_act:
+        verb = "would hold" if not apply else "to hold"
+        lines.append(f"  {len(plan.to_act)} {verb} (auto, within blast-radius):")
+        for d in plan.to_act:
+            lines.append(f"    + {d.identity}  ({d.reflex})  {d.command}")
+    for d in plan.watched:
+        lines.append(f"  ~ watch: {d.identity}  {d.reason}")
+    for d in plan.escalated:
+        lines.append(f"  ! escalate: {d.identity}  ({d.reason})")
+    if not apply and plan.to_act:
+        lines.append("  dry run -- re-run with --apply to execute the auto reflexes.")
+    return lines
 
 
 @app.command()
