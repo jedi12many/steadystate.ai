@@ -19,7 +19,13 @@ from datetime import datetime
 
 from ..state import PendingAction, StateStore
 from .base import RemediationResult
+from .bounds import Envelope, Impact, Reversibility
 from .plan import RemediationPlan, Risk
+
+# The evicted-pod cleanup's envelope: it deletes already-dead (Evicted/Failed) pods in one
+# namespace -- nothing of value is destroyed (lossless), and the blast radius is one tenant. The
+# bound (act/bounds.py) reads this; the SAME calculus governs it as governs a terraform apply.
+CLEANUP_ENVELOPE = Envelope(Reversibility.LOSSLESS, Impact.TENANT)
 
 # The sentinel ``source`` that marks a PendingAction as a direct cleanup command rather than a
 # drift remediation -- ``apply_pending`` routes on it. Not a real DriftSource (no executor).
@@ -79,6 +85,7 @@ def run_cleanup(action: PendingAction, *, timeout: float = 30.0) -> RemediationR
         command=shlex.split(action.command),
         blast_radius="deletes Failed-phase (evicted) pods in the namespace",
         revert="none -- the deleted pods were already dead (Evicted)",
+        envelope=CLEANUP_ENVELOPE,
     )
     if not is_safe_cleanup(action.command):  # defense in depth: never run an unrecognized command
         return RemediationResult(

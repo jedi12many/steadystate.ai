@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from ..model import ChangeType, Drift
+from .bounds import Envelope, Impact, Reversibility
 
 
 class Risk(str, Enum):
@@ -33,6 +34,11 @@ class RemediationPlan:
     command: list[str] = field(default_factory=list)  # the executable remediation
     blast_radius: str = ""  # plain-language description of what running this touches
     revert: str = ""  # honest revert guidance
+    # The structured (impact, reversibility) form of blast_radius/revert above -- what the bound
+    # gate (act/bounds.py) reads, so the SAME autonomy calculus governs this remediation as governs
+    # a kubectl cleanup or an ansible play. None on a plan that predates the envelope (the human
+    # approve path still works; only the autonomous gate needs it).
+    envelope: Envelope | None = None
 
 
 def assess(drift: Drift) -> RemediationPlan:
@@ -55,6 +61,9 @@ def assess(drift: Drift) -> RemediationPlan:
                 "Re-add the resource to config and re-apply; a destroyed resource may not be "
                 "perfectly recreatable (new IDs, lost data)."
             ),
+            # Destroying a live resource is the irreversible case -- the bound escalates it no
+            # matter the size, mirroring `eligible=False`.
+            envelope=Envelope(Reversibility.IRREVERSIBLE, Impact.SERVICE),
         )
 
     if drift.change_type is ChangeType.ADDED:
@@ -66,6 +75,8 @@ def assess(drift: Drift) -> RemediationPlan:
             command=target,
             blast_radius=f"Creates {drift.kind} {addr} as declared.",
             revert=f"terraform destroy -target {addr}",
+            # Creating a declared resource has a known inverse (destroy it) -> recoverable.
+            envelope=Envelope(Reversibility.RECOVERABLE, Impact.SERVICE),
         )
 
     # MODIFIED
@@ -77,4 +88,7 @@ def assess(drift: Drift) -> RemediationPlan:
         command=target,
         blast_radius=f"Updates {drift.kind} {addr} in place to match declared config.",
         revert="Restore the prior values in config and re-apply (a snapshot is captured first).",
+        # An in-place update is reversible by restoring prior values (a snapshot is captured) ->
+        # recoverable, one resource.
+        envelope=Envelope(Reversibility.RECOVERABLE, Impact.SERVICE),
     )
