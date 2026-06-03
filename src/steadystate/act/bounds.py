@@ -105,12 +105,17 @@ def within_bounds(envelope: Envelope, policy: BoundPolicy = DEFAULT_BOUND) -> bo
     return ceiling is not None and envelope.impact <= ceiling
 
 
-def confirmation_tier(envelope: Envelope, policy: BoundPolicy = DEFAULT_BOUND) -> int:
+def confirmation_tier(envelope: Envelope, policy: BoundPolicy | None = None) -> int:
     """How much confirmation friction an action needs, from its envelope alone. ``0`` = within the
     bound -- autonomous-eligible, no confirmation (`fix`/`run` just runs it). Out of bound is
     break-glass: ``2`` (STRONG -- type the target's name to confirm) when it's IRREVERSIBLE or
     reaches a NODE/the FLEET; else ``1`` (light -- a plain confirm). So the most dangerous things
-    get the most friction, automatically. Pure."""
+    get the most friction, automatically.
+
+    ``policy`` defaults to the ACTIVE bound (``bound_from_env``), so the friction honors the same
+    ``STEADYSTATE_BOUND`` dial the autonomous gates do -- widen the bound and an action stops being
+    break-glass; narrow it and more becomes break-glass. Inject a policy in tests to stay pure."""
+    policy = bound_from_env() if policy is None else policy
     if within_bounds(envelope, policy):
         return 0
     if envelope.reversibility >= Reversibility.IRREVERSIBLE or envelope.impact >= Impact.NODE:

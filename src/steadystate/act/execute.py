@@ -22,7 +22,7 @@ import subprocess
 
 from ..state import PendingAction
 from .base import RemediationResult
-from .bounds import within_bounds
+from .bounds import bound_from_env, within_bounds
 from .catalog import action_for_command
 from .plan import RemediationPlan, Risk
 
@@ -63,8 +63,8 @@ def run_catalog_action(
             detail=f"refused: not a recognized catalog command ({command!r}).",
         )
     if not break_glass and not within_bounds(
-        matched.envelope
-    ):  # bound supreme unless human override
+        matched.envelope, bound_from_env()
+    ):  # the active bound is supreme unless a human override
         return RemediationResult(
             plan=plan,
             applied=False,

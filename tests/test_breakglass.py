@@ -34,6 +34,19 @@ def test_confirmation_tier_scales_with_the_envelope():
     )  # node+ -> strong
 
 
+def test_widening_the_bound_demotes_an_action_out_of_break_glass(monkeypatch):
+    # The friction honors the SAME STEADYSTATE_BOUND dial the autonomous gates do -- one dial.
+    env = Envelope(Reversibility.RECOVERABLE, Impact.SERVICE)  # scale-to-zero's envelope
+    monkeypatch.delenv("STEADYSTATE_BOUND", raising=False)
+    assert confirmation_tier(env) == 1  # default: out of bound -> break-glass (light)
+    monkeypatch.setenv("STEADYSTATE_BOUND", "recoverable=service")
+    assert confirmation_tier(env) == 0  # widened: now within bound -> not break-glass
+    # ...and the runner now runs it WITHOUT a human override.
+    with mock.patch("steadystate.act.execute.subprocess.run", return_value=_proc(stdout="scaled")):
+        result = run_catalog_action(_pending("kubectl scale deployment/web --replicas=0 -n prod"))
+    assert result.applied
+
+
 def test_breakglass_is_default_closed(monkeypatch):
     monkeypatch.delenv("STEADYSTATE_BREAKGLASS_USERS", raising=False)
     assert not breakglass_allowed("amy")  # empty allowlist -> nobody
