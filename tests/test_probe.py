@@ -569,7 +569,7 @@ def test_auto_maps_each_source_with_a_health_signal():
     assert auto_prober_for("docker-compose") == "docker"
     assert auto_prober_for("argocd") == "argocd"
     assert auto_prober_for("terraform") is None  # no health probe makes sense for terraform
-    assert auto_prober_for("ansible") is None
+    assert auto_prober_for("ansible") == "ansible"  # source ansible -> live service-health probe
     assert auto_prober_for("kubernetes") is None  # the old wrong key is NOT a registered source
 
 
