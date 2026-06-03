@@ -89,6 +89,17 @@ def reflexes() -> tuple[Reflex, ...]:
     return tuple(replace(r, autonomy=AUTO) if r.name in promoted else r for r in _BUILTIN_REFLEXES)
 
 
+def reflex_for_category(category: str, active: tuple[Reflex, ...] | None = None) -> Reflex | None:
+    """The reflex that answers ``category``, from ``active`` (default: the current registry, env
+    overlay applied). The learner uses it to ask 'do we already have a response for this category,
+    and is it switched on?' -- so it can recommend promoting a dormant one a human keeps doing by
+    hand. None when no reflex answers the category (one that, today, only a human can fix)."""
+    for reflex in active if active is not None else reflexes():
+        if reflex.matches(category):
+            return reflex
+    return None
+
+
 @dataclass(frozen=True)
 class ReflexDecision:
     """What a hold tick decided for one actionable finding, and why -- the audit-friendly unit the

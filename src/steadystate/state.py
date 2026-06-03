@@ -572,6 +572,17 @@ class StateStore:
 
     # -- audit log (append-only history of every remediation decision) ----------
 
+    def acted_fingerprints(self) -> set[str]:
+        """Fingerprints steadystate itself successfully acted on -- an APPLIED/VERIFIED remediation
+        in the audit log. The learner uses this to tell a resolution WE caused from one resolved
+        out-of-band (a human, or self-healing): an out-of-band resolution is a *demonstration* to
+        learn from. A FAILED/declined attempt is excluded -- we didn't resolve it."""
+        rows = self._conn.execute(
+            "SELECT DISTINCT fingerprint FROM audit_log WHERE outcome IN (?, ?)",
+            (APPLIED, VERIFIED),
+        ).fetchall()
+        return {r["fingerprint"] for r in rows}
+
     def record_audit(self, entry: AuditEntry, now: datetime) -> None:
         """Append one immutable record of an approve/decline. Never updates an existing row."""
         self._conn.execute(

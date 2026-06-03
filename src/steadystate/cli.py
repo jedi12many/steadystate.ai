@@ -18,6 +18,8 @@ from .act.approve import apply_pending, decline_pending
 from .act.base import Proposer
 from .act.cleanup import record_cleanups
 from .act.deliver import build_deliveries
+from .act.learn import ADOPT
+from .act.learn import learn as derive_lessons
 from .act.reflex import reflexes, run_hold
 from .catalog import gather_catalog, render_console, render_html
 from .discover import (
@@ -885,6 +887,39 @@ def _render_hold(outcome, *, apply: bool) -> list[str]:
     if not apply and plan.to_act:
         lines.append("  dry run -- re-run with --apply to execute the auto reflexes.")
     return lines
+
+
+@app.command()
+def learn(state: Path = _STATE_OPTION) -> None:
+    """Show what steadystate has *learned* from findings that resolved without it -- and what to do.
+
+    The homeostat learns the response it was never shown. A finding that cleared and is NOT in the
+    audit log (steadystate didn't act) cleared **out-of-band** -- a human fixed it in their own
+    terminal, or it self-healed. This reads those resolutions, generalizes them by category (the
+    namespace/cluster that varies becomes a free variable), and proposes:
+
+      * ADOPT -- a category you keep fixing by hand that steadystate already has a reflex for:
+        promote it (`STEADYSTATE_REFLEX_AUTO=<name>`) so `hold` reclaims it next time.
+      * SELF-HEALS -- a category that keeps clearing on its own: a candidate to mute (stop paging).
+
+    Read-only and a proposal: it never promotes a reflex or mutes anything -- you do, once you
+    agree. The strength of a lesson is how many times it would have been the right call."""
+    with _open_store(state) as store:
+        findings = store.all_findings()
+        acted = store.acted_fingerprints()
+    lessons = derive_lessons(findings, acted)
+    if not lessons:
+        typer.echo(
+            "nothing learned yet -- steadystate learns from findings that resolve on their own "
+            "(out-of-band). Run scans/sweeps over time so resolutions accumulate."
+        )
+        return
+    backing = sum(lesson.occurrences for lesson in lessons)
+    typer.echo(f"learned from {backing} out-of-band resolution(s) -- {len(lessons)} lesson(s):")
+    for lesson in lessons:
+        tag = "ADOPT" if lesson.kind == ADOPT else "SELF-HEAL"
+        typer.echo(f"  [{tag}] {lesson.category} x{lesson.occurrences} {lesson.scope}")
+        typer.echo(f"      {lesson.recommendation}")
 
 
 @app.command()
