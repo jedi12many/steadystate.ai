@@ -903,6 +903,33 @@ def context_targets(contexts: list[str]) -> list[Target]:
     return targets
 
 
+# A short per-context API probe so `--create` can skip a context whose cluster isn't actually up --
+# a stopped minikube, or a deleted cluster still lingering in the kubeconfig. `kubectl cluster-info`
+# hits the API server; ``--request-timeout`` caps a hung/unreachable endpoint so the check fails
+# fast. Read-only, one round trip per context, and ONLY on the target-writing path (`--create`) --
+# the plain `discover` report stays fully offline.
+_REACHABLE_TIMEOUT = "3s"
+
+
+def context_reachable(context: str, kubeconfig: str = "") -> bool:
+    """True if ``context``'s cluster answers a fast ``kubectl cluster-info`` -- so `discover
+    --create` registers only clusters that are actually up. A context still in the kubeconfig but
+    not serving (a stopped minikube, a deleted cluster) fails fast via ``--request-timeout`` and is
+    left unregistered. False whenever kubectl is absent, the context is unknown, or the API doesn't
+    answer in time -- never a crash. ``kubeconfig`` is passed through for a cwd-kubeconfig ctx."""
+    argv = [
+        "kubectl",
+        "cluster-info",
+        "--context",
+        context,
+        f"--request-timeout={_REACHABLE_TIMEOUT}",
+    ]
+    if kubeconfig:
+        argv += ["--kubeconfig", kubeconfig]
+    ok, _ = _run(argv)
+    return ok
+
+
 def kube_contexts() -> list[str]:
     """The kube contexts visible to kubectl (`kubectl config get-contexts -o name`), in file order,
     deduped. [] when kubectl is absent or no context resolves -- a local kubeconfig read, no cluster
