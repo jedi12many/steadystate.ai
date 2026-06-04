@@ -65,6 +65,7 @@ from .engine import build_report, collect_resources
 from .inbound import INBOUND, build_inbound
 from .inbound.base import PROBE, Command, command_from_text, tool_schema
 from .inbound.server import run_command, serve
+from .inbound.translate import nl_to_command
 from .notify import SURFACES, build_surfaces
 from .notify.base import Surface
 from .notify.console import ConsoleSurface
@@ -1473,7 +1474,13 @@ def chat(state: Path = _STATE_OPTION) -> None:
     history_path = state.parent / "chat_history"
     _load_history(history_path)  # up-arrow recall + editing, seeded from prior sessions
     actor = _local_actor()
-    typer.echo("steadystate chat -- type `help`, or a command. Ctrl-D (or `exit`) to quit.")
+    # Natural-language fallback: when an LLM is configured, a line the typed grammar can't parse is
+    # handed to the model to map onto ONE vetted verb (the model parses, never executes; an
+    # effectful verb is echoed for you to confirm). No LLM -> chat is exactly the typed grammar.
+    analyst = LLMAnalyst()  # no egress gate: an interactive shell is already trusted
+    complete = analyst._complete if analyst.enabled else None
+    nl = " -- LLM on: you can also just ask in plain English." if complete else ""
+    typer.echo(f"steadystate chat -- type `help`, or a command. Ctrl-D (or `exit`) to quit.{nl}")
     try:
         while True:
             try:
@@ -1486,10 +1493,18 @@ def chat(state: Path = _STATE_OPTION) -> None:
             if line in ("exit", "quit"):
                 break
             command = command_from_text(line, actor)
-            if command is None:
+            if command is not None:
+                typer.echo(run_command(command, str(state)))
+                continue
+            if complete is None:
                 typer.echo("unrecognized -- type `help` for the commands this accepts.")
                 continue
-            typer.echo(run_command(command, str(state)))
+            result = nl_to_command(line, actor, complete, state_path=str(state))
+            if result.command is not None:
+                note = f"(read as `{result.interpreted}`)\n" if result.interpreted else ""
+                typer.echo(note + run_command(result.command, str(state)))
+            else:
+                typer.echo(result.message)
     finally:
         _save_history(history_path)  # persist so up-arrow survives a restart
 
