@@ -28,6 +28,7 @@ from steadystate.sources.k8s import (
     KubernetesBaselineSource,
     KubernetesLiveSource,
     KubernetesSource,
+    KustomizeLiveSource,
 )
 from steadystate.sources.rancher import RancherSource
 from steadystate.sources.terraform import TerraformSource
@@ -50,6 +51,9 @@ _LIVE: dict[str, Callable[[object], Callable[[], object]]] = {
     "k8s-live": lambda d: KubernetesLiveSource().collect_declared,
     # baseline injected so collect_drift gets past the baseline load to the live read (the kubectl).
     "k8s-baseline": lambda d: KubernetesBaselineSource(baseline={"items": []}).collect_drift,
+    # the overlay dir (tmp_path) has no kustomization.yaml -> `kubectl kustomize` fails (or kubectl
+    # is absent) -> render raises SourceError before any reconcile.
+    "kustomize-live": lambda d: KustomizeLiveSource(d).collect_drift,
     "docker-compose": lambda d: DockerComposeSource(working_dir=d).collect_drift,
     "ansible": lambda d: AnsibleSource(playbook="site.yml").collect_drift,
     "helm": lambda d: HelmSource().collect_drift,

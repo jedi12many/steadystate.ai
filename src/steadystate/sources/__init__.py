@@ -21,7 +21,12 @@ from .argocd import ArgoCDSource
 from .base import Capabilities, DriftSource
 from .docker_compose import DockerComposeSource
 from .helm import HelmSource
-from .k8s import KubernetesBaselineSource, KubernetesLiveSource, KubernetesSource
+from .k8s import (
+    KubernetesBaselineSource,
+    KubernetesLiveSource,
+    KubernetesSource,
+    KustomizeLiveSource,
+)
 from .rancher import RancherSource
 from .terraform import TerraformSource
 
@@ -87,6 +92,12 @@ def _k8s_baseline(path: Path) -> DriftSource:
     return KubernetesBaselineSource()
 
 
+def _kustomize_live(path: Path) -> DriftSource:
+    # Verify the left: the path is a Kustomize overlay dir; it renders the overlay and reconciles
+    # against the live cluster (aim it with --context). NOT pathless -- the dir is the left.
+    return KustomizeLiveSource(path)
+
+
 # name -> factory(path) -> DriftSource. Indexed by the CLI's --source choice.
 # docker-compose has no native plan diff, so it reconciles declared services
 # (`docker compose config`) against running containers (`docker compose ps`).
@@ -99,6 +110,7 @@ _BUILTIN_SOURCES: dict[str, Callable[[Path], DriftSource]] = {
     "k8s": _k8s,
     "k8s-live": _k8s_live,
     "k8s-baseline": _k8s_baseline,
+    "kustomize-live": _kustomize_live,
     "rancher": _rancher,
     "helm": _helm,
 }
@@ -118,6 +130,7 @@ _BUILTIN_CAPABILITIES: dict[str, Capabilities] = {
     "k8s": KubernetesSource.commands,
     "k8s-live": KubernetesLiveSource.commands,
     "k8s-baseline": KubernetesLiveSource.commands,
+    "kustomize-live": KustomizeLiveSource.commands,
     "rancher": RancherSource.commands,
     "helm": HelmSource.commands,
 }

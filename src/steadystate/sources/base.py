@@ -37,12 +37,14 @@ def run_tool(
     env: Mapping[str, str] | None = None,
     check: bool = True,
     tool: str | None = None,
+    input: str | None = None,
 ) -> str:
     """Run a source's live tool with a hard ``timeout`` and return its stdout, converting every
     failure mode into a `SourceError` instead of a raw traceback: a missing binary, a non-zero exit
     (when ``check``), or a hang past ``timeout``. The timeout is the fix for "a hung `terraform
     plan` / `kubectl` blocks the scan forever". ``check=False`` for tools (ansible --check) that
-    exit non-zero on a normal result we still parse."""
+    exit non-zero on a normal result we still parse. ``input`` is piped to the tool's stdin (for a
+    convert step like ``kubectl create -f - -o json``)."""
     name = tool or (argv[0] if argv else "tool")
     try:
         result = subprocess.run(
@@ -53,6 +55,7 @@ def run_tool(
             capture_output=True,
             text=True,
             timeout=timeout,
+            input=input,
         )
     except FileNotFoundError as exc:
         raise SourceError(f"'{name}' not found on PATH -- is it installed?") from exc
