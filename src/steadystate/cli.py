@@ -1481,7 +1481,7 @@ def chat(state: Path = _STATE_OPTION) -> None:
     # Gate on a real provider, not just the kill switch: `enabled` defaults True even with no key,
     # so `_provider()` ("none" when nothing's configured) is what tells us the model can answer.
     complete = analyst._complete if analyst._provider() != "none" else None
-    nl = " -- LLM on: you can also just ask in plain English." if complete else ""
+    nl = " -- LLM on: ask a question or give a command in plain English." if complete else ""
     typer.echo(f"steadystate chat -- type `help`, or a command. Ctrl-D (or `exit`) to quit.{nl}")
     # With a model as fallback, guard the deterministic-first shortcut so a verb-leading *sentence*
     # ("show me the findings") isn't mis-grabbed as `show me` -- it falls through to the model. With

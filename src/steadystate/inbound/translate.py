@@ -75,8 +75,9 @@ def confident_command(text: str, actor: str) -> Command | None:
 class NLResult:
     """The outcome of translating one free-text line. Exactly one of: a read-only ``command`` to
     run now, or a ``message`` to show as-is (an effectful command echoed for confirmation, a
-    clarifying question, or a 'couldn't map that'). ``interpreted`` is the canonical command form,
-    shown before a read command's output so the operator sees how their words were read."""
+    clarifying question, a grounded answer to a question about the cluster, or a 'couldn't map
+    that'). ``interpreted`` is the canonical command form, shown before a read command's output so
+    the operator sees how their words were read."""
 
     command: Command | None = None
     message: str | None = None
@@ -84,16 +85,22 @@ class NLResult:
 
 
 _SYSTEM = (
-    "You translate an operator's chat message into exactly ONE steadystate command, OR a single "
-    "clarifying question, OR nothing. You may ONLY use a verb from the tool list given -- never "
-    "invent a verb or an argument outside it. Use the verb name EXACTLY as listed; do not "
-    "abbreviate it. For `run`, the action argument MUST be one of the vetted action names listed "
-    "verbatim (e.g. `rollout-restart-workload`, not `restart`). Resolve a reference like 'the web "
-    "deployment' to a fingerprint from the findings/pending list provided (shortest unambiguous "
-    'prefix). Reply with ONLY JSON: {"verb": <tool name or null>, "argument": <string>, '
-    '"argument2": <string>, "flags": [<flag>], "clarify": <a question or empty string>}. '
-    "Use clarify (with verb null) when the request is ambiguous; verb null AND empty clarify when "
-    "it names no command you can map."
+    "You are steadystate's chat assistant. Turn an operator's message into exactly ONE of: a "
+    "steadystate command to run, a single clarifying question, a short grounded ANSWER to a "
+    "question about the cluster, or nothing. Prefer a command when one cleanly does what they ask "
+    "(it runs real, deterministic data). Use an answer for a genuine question that no single "
+    "command settles -- a 'why', a 'should I', a summary across findings -- answering ONLY from "
+    "the live state given below; never invent a fact, and if the answer isn't in that state say "
+    "which command would surface it (e.g. `probe`, `show <fp>`). Keep an answer to 1-3 plain "
+    "sentences. For a command: you may ONLY use a verb from the tool list -- never invent a verb "
+    "or an argument outside it. Use the verb name EXACTLY as listed; do not abbreviate it. For "
+    "`run`, the action argument MUST be one of the vetted action names listed verbatim (e.g. "
+    "`rollout-restart-workload`, not `restart`). Resolve a reference like 'the web deployment' to "
+    "fingerprint from the findings/pending list (shortest unambiguous prefix). Reply with ONLY "
+    'JSON: {"verb": <tool name or null>, "argument": <string>, "argument2": <string>, "flags": '
+    '[<flag>], "clarify": <a question or empty string>, "answer": <prose or empty string>}. Set '
+    "verb null when you are answering or clarifying; verb null with empty clarify AND empty answer "
+    "when it names no command and asks nothing you can address."
 )
 
 
@@ -105,10 +112,23 @@ def _tool_lines() -> str:
     )
 
 
-def state_snapshot(state_path: str, *, max_items: int = 25) -> str:
+def _evidence_line(details: dict[str, str], *, max_fields: int = 6, clip: int = 120) -> str:
+    """A finding's captured evidence flattened to one compact `k=v; k=v` line (truncated), so the
+    model can answer 'why is web crashlooping?' from the real fields (last log, namespace, ...)
+    without the full `show` view bloating the prompt. '' when there's no evidence. Pure."""
+    items = list(details.items())[:max_fields]
+    if not items:
+        return ""
+    rendered = "; ".join(f"{k}={(v[:clip] + '...') if len(v) > clip else v}" for k, v in items)
+    return f"      evidence: {rendered}"
+
+
+def state_snapshot(state_path: str, *, max_items: int = 25, with_evidence: bool = False) -> str:
     """A compact view of what's live -- numbered pendings + open findings (short fingerprint +
     title) -- so the model can resolve 'approve the web restart' / 'the crashlooping one' to a real
-    fingerprint. '' when there's no store yet. Read-only."""
+    fingerprint. With ``with_evidence``, each finding also carries a compact line of its captured
+    evidence (the `show` fields: namespace, last log, ...), so the model can *answer* a question
+    about it, not just name it. '' when there's no store yet. Read-only."""
     if not state_path or not Path(state_path).exists():
         return ""
     with StateStore(state_path) as store:
@@ -122,10 +142,11 @@ def state_snapshot(state_path: str, *, max_items: int = 25) -> str:
         ]
     if findings:
         lines.append("Open findings (fingerprint -- severity -- title):")
-        lines += [
-            f"  {f.fingerprint[:12]}  {f.last_severity}  {f.last_title}"
-            for f in findings[:max_items]
-        ]
+        for f in findings[:max_items]:
+            lines.append(f"  {f.fingerprint[:12]}  {f.last_severity}  {f.last_title}")
+            evidence = _evidence_line(f.details) if with_evidence else ""
+            if evidence:
+                lines.append(evidence)
     return "\n".join(lines)
 
 
@@ -145,7 +166,8 @@ def _user_prompt(text: str, snapshot: str) -> str:
         f"Vetted actions for `run`/`fix` (use the exact name):\n{_action_lines()}\n\n"
         f"{grounding}"
         f"Operator message: {text}\n\n"
-        "Map it to one command, or ask one clarifying question, or return verb null."
+        "Map it to one command, ask one clarifying question, answer their question from the state "
+        "above, or return verb null."
     )
 
 
@@ -156,10 +178,12 @@ def nl_to_command(
     the analyst's LLM seam (so this carries no provider/egress/cost logic of its own). The model can
     only ever NAME a vetted verb -- a reply naming anything else is dropped here, before dispatch.
     A read-only verb is returned ready to run; an effectful one is returned as a confirm ``message``
-    (the concrete command for the human to send), never auto-run."""
+    (the concrete command for the human to send), never auto-run. When the operator is *asking*
+    rather than commanding, the model's grounded prose answer is returned as the ``message``."""
     from ..reason.llm import _extract_json  # reuse the analyst's lenient JSON extraction
 
-    reply = complete(_SYSTEM, _user_prompt(text, state_snapshot(state_path)), "chat-nl")
+    snapshot = state_snapshot(state_path, with_evidence=True)
+    reply = complete(_SYSTEM, _user_prompt(text, snapshot), "chat-nl")
     if not reply:
         return NLResult(message="(couldn't reach the model -- type `help` for the exact commands.)")
     data = _extract_json(reply)
@@ -167,9 +191,13 @@ def nl_to_command(
         return NLResult(message="I couldn't turn that into a command -- try `help`.")
     verb = data.get("verb")
     if not isinstance(verb, str) or verb not in COMMANDS:
+        # Not a command: a clarifying question, a grounded answer, or genuinely nothing we can map.
         clarify = data.get("clarify")
         if isinstance(clarify, str) and clarify.strip():
             return NLResult(message=clarify.strip())
+        answer = data.get("answer")
+        if isinstance(answer, str) and answer.strip():
+            return NLResult(message=answer.strip())
         return NLResult(message="I couldn't map that to a command -- type `help` for the list.")
     raw_arg, raw_arg2, raw_flags = data.get("argument"), data.get("argument2"), data.get("flags")
     argument = raw_arg.strip() if isinstance(raw_arg, str) else ""
