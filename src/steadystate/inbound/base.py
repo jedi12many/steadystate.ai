@@ -33,6 +33,8 @@ PENDING = "pending"
 PROBE = "probe"
 COST = "cost"
 MUTE = "mute"
+UNMUTE = "unmute"
+SNOOZE = "snooze"
 TARGETS = "targets"
 HISTORY = "history"
 FINDINGS = "findings"
@@ -82,6 +84,15 @@ COMMANDS: dict[str, tuple[str, str]] = {
         "silence a finding on future scans -- a single fp, or a correlated group's `mute-all` fp "
         "to silence the whole group at once",
     ),
+    UNMUTE: (
+        "unmute <fingerprint>",
+        "lift a mute or snooze -- the finding surfaces again on the next scan (prefix ok)",
+    ),
+    SNOOZE: (
+        "snooze <fingerprint> <duration>",
+        "silence a finding for a while, then let it return -- e.g. `snooze <fp> 2d` "
+        "(units h/m/d/w; a bare number is days)",
+    ),
     FIX: (
         "fix <fingerprint>",
         "apply the OFFERED fix for a finding (e.g. roll-restart a wedged workload) -- a vetted, "
@@ -109,10 +120,11 @@ COMMANDS: dict[str, tuple[str, str]] = {
 }
 # Verbs that require an argument to mean anything (a fingerprint for mute, a target name for probe);
 # the rest take none or an optional one.
-_NEEDS_ARGUMENT = frozenset({PROBE, MUTE, SHOW, FIX})
-# Verbs that need TWO arguments: `send <fingerprint> <surface>`, `run <action> <fingerprint>`. The
-# second plain token is the *last* one, so a natural filler word in the middle is ignored.
-_NEEDS_TWO = frozenset({SEND, RUN})
+_NEEDS_ARGUMENT = frozenset({PROBE, MUTE, UNMUTE, SHOW, FIX})
+# Verbs that need TWO arguments: `send <fingerprint> <surface>`, `run <action> <fingerprint>`,
+# `snooze <fingerprint> <duration>`. The second plain token is the *last* one, so a natural filler
+# word in the middle is ignored.
+_NEEDS_TWO = frozenset({SEND, RUN, SNOOZE})
 # Verbs that take an *optional* argument (cost's period; findings' status filter); absent it, they
 # still dispatch. approve/decline live here too: a bare `approve` resolves to the sole pending, and
 # the argument may be an ordinal (`approve 2`) or a fingerprint prefix -- the server resolves it.
@@ -180,6 +192,8 @@ _TOOL_ARGS: dict[str, tuple[tuple[str, bool], ...]] = {
     RUN: (("action", True), ("fingerprint", True)),
     ACTIONS_LIST: (),
     MUTE: (("fingerprint", True),),
+    UNMUTE: (("fingerprint", True),),
+    SNOOZE: (("fingerprint", True), ("duration", True)),
     APPROVE: (("fingerprint", False),),  # optional: a number, a prefix, or bare (the only pending)
     DECLINE: (("fingerprint", False),),
 }
@@ -201,6 +215,8 @@ _TOOL_EFFECT: dict[str, str] = {
     RUN: "guardrailed-write",  # applies a chosen vetted action (allow-pattern + bound + audit)
     ACTIONS_LIST: "read-only",
     MUTE: "state-write",
+    UNMUTE: "state-write",
+    SNOOZE: "state-write",
     APPROVE: "guardrailed-write",  # applies a pending remediation (executor-guardrailed)
     DECLINE: "state-write",
 }
