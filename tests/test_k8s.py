@@ -41,7 +41,11 @@ def test_resources_from_manifests_projection():
     assert res.identity == "apps/Deployment/prod/web"
     assert res.provenance.source == "kubernetes"
     assert res.provenance.address == "apps/Deployment/prod/web"
-    assert res.properties == {"images": ["nginx:1.27"], "replicas": 3}
+    assert res.properties["images"] == ["nginx:1.27"]
+    assert res.properties["replicas"] == 3
+    assert (
+        "posture" in res.properties
+    )  # the compliance posture projection (seccomp, caps) rides along
 
 
 def test_core_group_is_empty_and_non_workload_has_no_props():
@@ -112,8 +116,9 @@ def test_non_workload_no_false_drift():
 
 
 def test_no_image_pod_compared_on_presence():
-    # A Pod whose container has no image (e.g. mid-render) projects to {} -> no drift
-    # purely from a missing image, as long as it's present on both sides.
+    # A Pod whose container has no image (e.g. mid-render) carries no drift-relevant props -> no
+    # drift purely from a missing image, as long as it's present on both sides. (The compliance
+    # posture projection rides along but is stripped before reconcile, so it can't manufacture one.)
     pod = {
         "apiVersion": "v1",
         "kind": "Pod",
@@ -122,7 +127,7 @@ def test_no_image_pod_compared_on_presence():
     }
     declared = resources_from_manifests([pod])
     observed = observed_resources_from_kubectl([pod])
-    assert declared[0].properties == {}
+    assert "images" not in declared[0].properties and "replicas" not in declared[0].properties
     assert reconcile_k8s(declared, observed) == []
 
 

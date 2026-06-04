@@ -170,10 +170,56 @@ def _security_concerns(obj: dict) -> dict:
     return concerns
 
 
+_ACCEPTABLE_SECCOMP = frozenset({"RuntimeDefault", "Localhost"})
+
+
+def _posture_gaps(obj: dict) -> dict:
+    """The pod-security *best-practice gaps* of an object -- the absence-based hardening a stricter
+    (CIS Level 2 / restricted) audit wants, as a dict of only the gaps present. Unlike
+    ``_security_concerns`` (affirmative dangers, surfaced in every scan), these gaps fire on almost
+    every vanilla workload (most don't set seccomp or drop all capabilities), so they are evaluated
+    ONLY by the compliance pass (``KubernetesSecurityDomain.evaluate_posture``), never the normal
+    scan -- which is why they live under their own ``posture`` key, separate from ``security``.
+    Config-posture, NOT runtime detection."""
+    pod = _pod_spec(obj)
+    if not pod:
+        return {}
+    containers = [
+        c
+        for key in ("containers", "initContainers")
+        for c in (pod.get(key) or [])
+        if isinstance(c, dict)
+    ]
+    if not containers:
+        return {}
+    gaps: dict = {}
+
+    def seccomp_type(spec: dict) -> object:
+        return (spec.get("seccompProfile") or {}).get("type")
+
+    pod_ok = seccomp_type(pod.get("securityContext") or {}) in _ACCEPTABLE_SECCOMP
+    if not pod_ok and not all(
+        seccomp_type(c.get("securityContext") or {}) in _ACCEPTABLE_SECCOMP for c in containers
+    ):
+        gaps["seccomp_unset"] = True  # no RuntimeDefault/Localhost seccomp profile -> CIS 5.7.2
+
+    def drops_all(container: dict) -> bool:
+        drop = ((container.get("securityContext") or {}).get("capabilities") or {}).get(
+            "drop"
+        ) or []
+        return "ALL" in {str(c).upper() for c in drop}
+
+    if not all(drops_all(c) for c in containers):
+        gaps["capabilities_not_all_dropped"] = True  # doesn't drop ALL caps -> CIS 5.2.9
+
+    return gaps
+
+
 def _resources_from_objects(objects: list[dict], *, with_security: bool) -> list[Resource]:
     """Project a list of K8s objects to canonical Resources. Pure + testable. ``with_security``
-    attaches the posture projection (declared side only) under a ``security`` key when -- and
-    only when -- a concern is present, so clean objects are unchanged."""
+    attaches the affirmative posture under a ``security`` key (only when a concern is present, so
+    clean objects are unchanged) and the absence-based best-practice gaps under a ``posture`` key
+    (read only by the compliance pass, inert in a normal scan)."""
     out: list[Resource] = []
     for obj in objects:
         identity = _identity(obj)
@@ -182,6 +228,9 @@ def _resources_from_objects(objects: list[dict], *, with_security: bool) -> list
             concerns = _security_concerns(obj)
             if concerns:
                 props = {**props, "security": concerns}
+            gaps = _posture_gaps(obj)
+            if gaps:
+                props = {**props, "posture": gaps}
         out.append(
             Resource(
                 kind=obj.get("kind") or "",
@@ -219,16 +268,19 @@ def live_resources_from_kubectl(doc: object) -> list[Resource]:
     return _resources_from_objects(_normalize(doc), with_security=True)
 
 
+_POSTURE_KEYS = ("security", "posture")
+
+
 def _drift_only(resource: Resource) -> Resource:
-    """A copy without the ``security`` key, so the posture projection (declared-only) can't read
-    as drift when reconciled against the cluster. A no-op for clean objects (no security key)."""
-    if "security" not in resource.properties:
+    """A copy without the posture-projection keys (``security``/``posture``), so they can't read as
+    drift when reconciled against the cluster. A no-op for clean objects (no such keys)."""
+    if not any(k in resource.properties for k in _POSTURE_KEYS):
         return resource
     return Resource(
         kind=resource.kind,
         identity=resource.identity,
         provenance=resource.provenance,
-        properties={k: v for k, v in resource.properties.items() if k != "security"},
+        properties={k: v for k, v in resource.properties.items() if k not in _POSTURE_KEYS},
     )
 
 

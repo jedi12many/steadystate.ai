@@ -33,9 +33,12 @@ _T1611 = Reference(
 )
 
 
-def _cis(section: str, name: str) -> Reference:
-    # The §5.2 Pod Security controls this pack checks are CIS Level 1.
-    return Reference(framework="CIS", id=f"Kubernetes-{section}", name=name, url=_CIS_URL, level=1)
+def _cis(section: str, name: str, level: int = 1) -> Reference:
+    # The §5.2 Pod Security controls are CIS Level 1; the stricter posture gaps (seccomp, drop-all)
+    # are Level 2 -- the caller passes the level.
+    return Reference(
+        framework="CIS", id=f"Kubernetes-{section}", name=name, url=_CIS_URL, level=level
+    )
 
 
 class KubernetesSecurityDomain:
@@ -56,6 +59,56 @@ class KubernetesSecurityDomain:
             security = (resource.properties or {}).get("security")
             if security:  # absent for clean workloads (and non-pod kinds)
                 out.extend(self._evaluate(resource.identity, security))
+        return out
+
+    def evaluate_posture(self, resources: list[Resource]) -> list[PolicyFinding]:
+        """The stricter, CIS Level 2 / restricted gaps -- absence-based, so the COMPLIANCE pass
+        runs them but a normal scan does not (they'd fire on nearly every workload). Reads the
+        ``posture`` projection the k8s source attaches alongside ``security``."""
+        out: list[PolicyFinding] = []
+        for resource in resources:
+            if resource.provenance.source != "kubernetes":
+                continue
+            posture = (resource.properties or {}).get("posture")
+            if posture:
+                out.extend(self._evaluate_posture(resource.identity, posture))
+        return out
+
+    def _evaluate_posture(self, identity: str, posture: dict) -> list[PolicyFinding]:
+        out: list[PolicyFinding] = []
+        name = identity.rsplit("/", 1)[-1] if "/" in identity else identity
+        if posture.get("seccomp_unset"):
+            out.append(
+                self._finding(
+                    identity,
+                    "k8s-seccomp-unset",
+                    Severity.LOW,
+                    f"workload '{name}' sets no seccomp profile",
+                    "No RuntimeDefault/Localhost seccompProfile is set, so the container runs "
+                    "unconfined by seccomp -- the kernel's syscall surface isn't restricted. Set "
+                    "seccompProfile.type: RuntimeDefault.",
+                    [_cis("5.7.2", "Ensure seccomp profile is set to RuntimeDefault", level=2)],
+                )
+            )
+        if posture.get("capabilities_not_all_dropped"):
+            out.append(
+                self._finding(
+                    identity,
+                    "k8s-capabilities-not-dropped",
+                    Severity.LOW,
+                    f"workload '{name}' does not drop ALL capabilities",
+                    "The container keeps the default Linux capabilities instead of dropping ALL "
+                    "and adding back only what's required -- a wider kernel-privilege surface than "
+                    "the restricted standard wants.",
+                    [
+                        _cis(
+                            "5.2.9",
+                            "Minimize the admission of containers with capabilities",
+                            level=2,
+                        )
+                    ],
+                )
+            )
         return out
 
     def _finding(

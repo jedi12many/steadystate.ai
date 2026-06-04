@@ -124,3 +124,17 @@ def evaluate_with(domain: object, resources: list[Resource]) -> list[PolicyFindi
         return []
     result = getter(resources)
     return list(result) if result else []
+
+
+def evaluate_posture_with(domain: object, resources: list[Resource]) -> list[PolicyFinding]:
+    """The *compliance-only* posture findings ``domain`` generates -- the absence-based gaps (CIS
+    Level 2 / restricted) that a normal scan deliberately skips because they fire on nearly every
+    workload. Optional-by-convention like :func:`evaluate_with`: a pack opts in by defining
+    ``evaluate_posture(self, resources)``. ONLY the ``compliance`` command calls this; the scan
+    pipeline calls ``evaluate_with`` alone, so everyday scans stay quiet. [] for a pack that doesn't
+    implement it."""
+    getter = getattr(domain, "evaluate_posture", None)
+    if getter is None:
+        return []
+    result = getter(resources)
+    return list(result) if result else []
