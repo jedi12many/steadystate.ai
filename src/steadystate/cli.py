@@ -1478,7 +1478,9 @@ def chat(state: Path = _STATE_OPTION) -> None:
     # handed to the model to map onto ONE vetted verb (the model parses, never executes; an
     # effectful verb is echoed for you to confirm). No LLM -> chat is exactly the typed grammar.
     analyst = LLMAnalyst()  # no egress gate: an interactive shell is already trusted
-    complete = analyst._complete if analyst.enabled else None
+    # Gate on a real provider, not just the kill switch: `enabled` defaults True even with no key,
+    # so `_provider()` ("none" when nothing's configured) is what tells us the model can answer.
+    complete = analyst._complete if analyst._provider() != "none" else None
     nl = " -- LLM on: you can also just ask in plain English." if complete else ""
     typer.echo(f"steadystate chat -- type `help`, or a command. Ctrl-D (or `exit`) to quit.{nl}")
     try:

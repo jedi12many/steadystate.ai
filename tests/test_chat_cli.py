@@ -152,9 +152,10 @@ def test_chat_runs_help_then_exits(runner, tmp_path):
     assert "probe <target>" in result.stdout  # the Summon verb is discoverable from the terminal
 
 
-def test_chat_reports_unrecognized_then_runs_pending(runner, tmp_path):
+def test_chat_reports_unrecognized_then_runs_pending(runner, tmp_path, monkeypatch):
     from steadystate.cli import app
 
+    monkeypatch.setenv("STEADYSTATE_LLM_ENABLED", "false")  # no NL fallback -> typed-grammar path
     result = runner.invoke(
         app, ["chat", "--state", str(tmp_path / "s.db")], input="frobnicate\npending\n"
     )
