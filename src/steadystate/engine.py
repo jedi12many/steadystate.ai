@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 from .act import build_executor
+from .model import Resource
 from .probe import Prober, auto_prober_for, build_prober
 from .reason.enrich import build_enricher
 from .reason.llm import LLMAnalyst, PromptGate
@@ -70,6 +71,30 @@ def build_prober_for(probe: str, source: str, path: Path) -> Prober | None:
     if probe == "none":
         return None
     return build_prober(probe, path)  # raises ValueError on an unknown name
+
+
+def collect_resources(
+    source: str,
+    path: Path,
+    *,
+    context: str = "",
+    kubeconfig: str = "",
+    inventory: str = "",
+) -> list[Resource]:
+    """The declared inventory a source enumerates -- the same list ``build_report`` feeds the
+    standing-policy (CIS) pass and the prober, but collected on its own for a posture-only audit
+    (``compliance``). Threads ``context``/``kubeconfig``/``inventory`` exactly as ``build_report``
+    does, so a live ``k8s-live`` target reads the running cluster. Returns [] for a source that
+    doesn't enumerate declared state (a native drift source like Terraform/ArgoCD). Pure I/O: it
+    reads, never writes, and raises ``ValueError`` for an unknown source."""
+    src = build_drift_source(source, path)
+    if context and isinstance(src, SupportsContext):
+        src.use_context(context)
+    if kubeconfig and isinstance(src, SupportsKubeconfig):
+        src.use_kubeconfig(kubeconfig)
+    if inventory and isinstance(src, SupportsInventory):
+        src.use_inventory(inventory)
+    return src.collect_declared() if isinstance(src, StateSource) else []
 
 
 def build_report(

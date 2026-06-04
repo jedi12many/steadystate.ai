@@ -36,6 +36,7 @@ from .act.learn import learn as derive_lessons
 from .act.plan import can_run_unattended
 from .act.reflex import reflexes, run_hold
 from .catalog import gather_catalog, render_console, render_html
+from .compliance import cis_report, cis_report_as_dict, render_cis_report
 from .discover import (
     ansible_live_target,
     context_reachable,
@@ -55,7 +56,8 @@ from .discover import (
     as_dict as discovery_as_dict,
 )
 from .discover import render as render_discovery
-from .engine import build_report
+from .domains import default_domains, evaluate_with
+from .engine import build_report, collect_resources
 from .inbound import INBOUND, build_inbound
 from .inbound.base import PROBE, Command, command_from_text, tool_schema
 from .inbound.server import run_command, serve
@@ -535,6 +537,78 @@ def scan(
         if cost:
             for r in roll_up(report.llm_calls):
                 typer.echo(f"  {r.caller:<12} ~${r.cost_usd:.4f}  {r.calls} call(s)")
+
+
+@app.command()
+def compliance(
+    path: Path | None = typer.Argument(
+        None, help="Source input (a manifest/snapshot dir or file). Omit when using --target."
+    ),
+    source: str = typer.Option(
+        "k8s-live",
+        "--source",
+        help=f"What to audit: {' | '.join(sorted(DRIFT_SOURCES))}. Defaults to k8s-live -- the "
+        "differentiated case (the running cluster's posture, not just your manifests).",
+    ),
+    target: str = typer.Option(
+        "",
+        "--target",
+        help="Audit a named target from the registry (supplies source/path/context).",
+    ),
+    context: str = typer.Option(
+        "", "--context", help="Aim a live source at a kube context (a target = a cluster)."
+    ),
+    kubeconfig: str = typer.Option(
+        "",
+        "--kubeconfig",
+        help="Read the context from this kubeconfig file (off the default path).",
+    ),
+    level: int = typer.Option(
+        1, "--level", help="CIS benchmark level to report: 1 (default) or 2; 0 for all levels."
+    ),
+    json_out: bool = typer.Option(
+        False, "--json", help="Emit the report as JSON (for other tooling) instead of text."
+    ),
+) -> None:
+    """Audit a target against the **CIS benchmark** controls steadystate checks, grouped by control.
+
+    The differentiated case is **live**: `compliance --source k8s-live --context <ctx>` audits the
+    *running cluster's* pod-security posture (privileged, hostNetwork/PID/IPC, capabilities,
+    hostPath, runAsRoot, ...), agentless via kubectl -- the failures in what's actually deployed.
+    Declared-side scanning is a commodity (Checkov/Trivy/kube-bench in CI); this owns the live
+    posture. Also audits a captured manifest/snapshot (`--source k8s <file>`) or a compose project.
+
+    Honest scope: it reports the controls steadystate *checks* and that something *violates* -- not
+    a full pass/fail over every published control (control-plane sections need node access; N/A on
+    managed clusters). `--level` filters (CIS Level 1 by default); `--json` for tooling."""
+    if target:
+        if path is not None:
+            raise typer.BadParameter("pass a path or --target, not both.")
+        tgt = _resolve_target(target)
+        source, context, kubeconfig = (
+            tgt.source,
+            context or tgt.context,
+            kubeconfig or tgt.kubeconfig,
+        )
+        path = Path(tgt.path) if tgt.path else Path(".")
+    elif path is None:
+        if source in PATHLESS_SOURCES:
+            path = Path(".")
+        else:
+            raise typer.BadParameter("give a path to audit, or --target <name>.")
+    want_level = level if level != 0 else None
+    try:
+        resources = collect_resources(source, path, context=context, kubeconfig=kubeconfig)
+    except (ValueError, SourceError) as exc:
+        typer.secho(f"compliance scan failed: {exc}", fg="red", err=True)
+        raise typer.Exit(1) from None
+    findings = [f for domain in default_domains() for f in evaluate_with(domain, resources)]
+    results = cis_report(findings, level=want_level)
+    if json_out:
+        typer.echo(json.dumps(cis_report_as_dict(results, want_level), indent=2))
+        return
+    for line in render_cis_report(results, want_level):
+        typer.echo(line)
 
 
 @app.command()

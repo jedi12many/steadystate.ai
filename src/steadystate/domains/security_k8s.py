@@ -34,7 +34,8 @@ _T1611 = Reference(
 
 
 def _cis(section: str, name: str) -> Reference:
-    return Reference(framework="CIS", id=f"Kubernetes-{section}", name=name, url=_CIS_URL)
+    # The §5.2 Pod Security controls this pack checks are CIS Level 1.
+    return Reference(framework="CIS", id=f"Kubernetes-{section}", name=name, url=_CIS_URL, level=1)
 
 
 class KubernetesSecurityDomain:
