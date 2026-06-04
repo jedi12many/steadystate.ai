@@ -27,6 +27,10 @@ class Reference:
     id: str  # e.g. "T1530"
     name: str = ""  # human-readable technique name, e.g. "Data from Cloud Storage"
     url: str | None = None  # e.g. "https://attack.mitre.org/techniques/T1530/"
+    # For a benchmark reference (CIS), which level the control belongs to -- 1 (broadly-applicable
+    # hardening that doesn't break function) or 2 (defense-in-depth). None for non-levelled
+    # frameworks (MITRE). The `compliance` report filters on it ("CIS Level 1").
+    level: int | None = None
 
 
 @dataclass(frozen=True)

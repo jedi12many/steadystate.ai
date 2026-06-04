@@ -35,11 +35,13 @@ _MITRE = "MITRE"
 
 
 def _cis(section: str, name: str) -> Reference:
+    # All the Docker controls this pack checks are CIS Level 1 (broadly-applicable hardening).
     return Reference(
         framework=_CIS,
         id=f"Docker-{section}",
         name=name,
         url="https://www.cisecurity.org/benchmark/docker",
+        level=1,
     )
 
 
