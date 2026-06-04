@@ -21,7 +21,54 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..state import StateStore, filter_findings
-from .base import _TOOL_EFFECT, COMMANDS, Command, tool_schema
+from .base import (
+    _TOOL_EFFECT,
+    COMMANDS,
+    FIX,
+    MUTE,
+    RUN,
+    SEND,
+    SHOW,
+    SNOOZE,
+    UNMUTE,
+    Command,
+    command_from_text,
+    tool_schema,
+)
+
+# Verbs whose required argument is a finding fingerprint -- a *reference*, not free text. A natural
+# sentence that merely starts with one of these ("show me the findings" -> `show me`) must not be
+# run as a command; the fingerprint-shape guard in confident_command() sends it to the model.
+# (For `run` the fingerprint is the *second* argument, the first being the action -- handled below.)
+_FINGERPRINT_ARG_VERBS = frozenset({SHOW, FIX, MUTE, UNMUTE, SNOOZE, SEND})
+
+
+def _reference_shaped(arg: str) -> bool:
+    """Whether ``arg`` could be a finding reference: an ordinal (`approve 3`) or a hex fingerprint
+    prefix (>= 4 hex chars). A plain English word -- 'me', 'the', 'web' -- is neither, which is the
+    tell that the line is prose, not a typed command. Pure."""
+    low = arg.lower()
+    return low.isdigit() or (len(low) >= 4 and all(c in "0123456789abcdef" for c in low))
+
+
+def confident_command(text: str, actor: str) -> Command | None:
+    """The deterministic parse, but only when it's confidently a *typed command* -- the guard on
+    the chat REPL's deterministic-first shortcut. ``command_from_text`` scans for the first verb
+    anywhere and takes the next token as its argument, so a natural sentence that merely contains a
+    verb gets mis-grabbed ('show me the findings' -> ``show me``). When a fingerprint verb's
+    reference isn't fingerprint-shaped, decline -- the line then falls through to the model, which
+    reads it as English. (The webhook adapters keep the tolerant ``command_from_text``; this only
+    gates the REPL, where a model is the fallback.)"""
+    command = command_from_text(text, actor)
+    if command is None:
+        return None
+    # `run <action> <fingerprint>`: the fingerprint is the second arg; for the rest it's the first.
+    reference = command.argument2 if command.verb == RUN else command.argument
+    if (command.verb in _FINGERPRINT_ARG_VERBS or command.verb == RUN) and not _reference_shaped(
+        reference
+    ):
+        return None
+    return command
 
 
 @dataclass(frozen=True)
@@ -39,9 +86,11 @@ class NLResult:
 _SYSTEM = (
     "You translate an operator's chat message into exactly ONE steadystate command, OR a single "
     "clarifying question, OR nothing. You may ONLY use a verb from the tool list given -- never "
-    "invent a verb or an argument outside it. Resolve a reference like 'the web deployment' to a "
-    "fingerprint from the findings/pending list provided (use the shortest unambiguous prefix). "
-    'Reply with ONLY JSON: {"verb": <tool name or null>, "argument": <string>, '
+    "invent a verb or an argument outside it. Use the verb name EXACTLY as listed; do not "
+    "abbreviate it. For `run`, the action argument MUST be one of the vetted action names listed "
+    "verbatim (e.g. `rollout-restart-workload`, not `restart`). Resolve a reference like 'the web "
+    "deployment' to a fingerprint from the findings/pending list provided (shortest unambiguous "
+    'prefix). Reply with ONLY JSON: {"verb": <tool name or null>, "argument": <string>, '
     '"argument2": <string>, "flags": [<flag>], "clarify": <a question or empty string>}. '
     "Use clarify (with verb null) when the request is ambiguous; verb null AND empty clarify when "
     "it names no command you can map."
@@ -80,10 +129,20 @@ def state_snapshot(state_path: str, *, max_items: int = 25) -> str:
     return "\n".join(lines)
 
 
+def _action_lines() -> str:
+    """The vetted catalog actions `run`/`fix` accept -- name + what it does -- so the model fills
+    `run`'s action argument with an exact catalog name (`rollout-restart-workload`) instead of an
+    abbreviation it invents (`restart`). Built from the same catalog the gate validates against."""
+    from ..act.catalog import catalog_menu
+
+    return catalog_menu()
+
+
 def _user_prompt(text: str, snapshot: str) -> str:
     grounding = f"What's live in this cluster now:\n{snapshot}\n\n" if snapshot else ""
     return (
         f"Tool list (name: usage [effect]):\n{_tool_lines()}\n\n"
+        f"Vetted actions for `run`/`fix` (use the exact name):\n{_action_lines()}\n\n"
         f"{grounding}"
         f"Operator message: {text}\n\n"
         "Map it to one command, or ask one clarifying question, or return verb null."

@@ -7,8 +7,8 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 
-from steadystate.inbound.base import PROBE, Command
-from steadystate.inbound.translate import nl_to_command, state_snapshot
+from steadystate.inbound.base import FINDINGS, PROBE, SHOW, Command
+from steadystate.inbound.translate import confident_command, nl_to_command, state_snapshot
 from steadystate.state import PendingAction, StateStore
 
 
@@ -80,3 +80,33 @@ def test_state_snapshot_lists_pendings_and_findings(tmp_path):
     assert "Pending" in snap and "bbbbbbbbbbbb" in snap and "web" in snap
     assert "Open findings" in snap and "aaaaaaaaaaaa" in snap and "CrashLoopBackOff" in snap
     assert state_snapshot(str(tmp_path / "absent.db")) == ""  # no store yet -> empty, no crash
+
+
+# -- confident_command: the deterministic-first guard (don't mis-grab a sentence) -------------
+
+
+def test_confident_command_runs_a_genuine_typed_command():
+    # A real typed command parses and runs deterministically -- the model is never consulted.
+    assert confident_command("probe all", "amy") == Command(PROBE, "amy", "all")
+    assert confident_command("show a1b2c3d4", "amy") == Command(SHOW, "amy", "a1b2c3d4")
+    assert confident_command("findings web", "amy") == Command(FINDINGS, "amy", "web")  # keyword ok
+
+
+def test_confident_command_declines_a_verb_leading_sentence():
+    # "show me the findings" must NOT run as `show me` (fingerprint 'me') -- 'me' isn't reference-
+    # shaped, so confident_command declines and the REPL hands the line to the model instead.
+    assert confident_command("show me the findings", "amy") is None
+    assert confident_command("run the restart on web please", "amy") is None
+    # bare numeric / hex references are still confident commands (ordinal + prefix resolution).
+    assert confident_command("show 3", "amy") == Command(SHOW, "amy", "3")
+
+
+# -- grounding: the exact catalog action names, so `run` isn't filled with an abbreviation ----
+
+
+def test_nl_prompt_grounds_run_with_the_exact_catalog_action_names():
+    complete, seen = _complete_returning({"verb": "actions"})
+    nl_to_command("what can I run?", "amy", complete)
+    # The vetted action names ride in the prompt, so the model fills `run`'s action verbatim
+    # (`rollout-restart-workload`) rather than inventing an abbreviation (`restart`).
+    assert "Vetted actions" in seen["user"] and "rollout-restart-workload" in seen["user"]
