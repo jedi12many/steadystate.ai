@@ -79,7 +79,6 @@ from .targets import (
     TARGETS_ENV,
     Target,
     load_targets,
-    merge_targets,
     save_targets,
     target_issues,
 )
@@ -1441,9 +1440,11 @@ def doctor(
 
 
 def _create_targets(findings: list, extra: list | None = None) -> None:
-    """`--create`: write the discovered sources into the targets registry (the name -> target map
-    the chat listener resolves), merging without clobbering existing entries. ``extra`` carries the
-    live-discovered targets from a paired ``--deep`` (compose projects rooted outside the cwd)."""
+    """`--create`: (re)write the targets registry (the name -> target map the chat listener
+    resolves) to exactly what's discovered *now* -- overwriting the old file. A re-run reflects
+    current reality: a re-discovered target is refreshed, and a stale entry (a cluster/kubeconfig/
+    source no longer here) is dropped rather than lingering. ``extra`` carries the live-discovered
+    targets from a paired ``--deep`` (compose projects rooted outside the cwd)."""
     target_file = Path(os.environ.get(TARGETS_ENV) or DEFAULT_TARGETS_FILE)
     proposed = proposed_targets(findings, Path.cwd())
     # Fold in the live-discovered targets, but drop any the cwd-local pass already covers -- so a
@@ -1464,13 +1465,18 @@ def _create_targets(findings: list, extra: list | None = None) -> None:
     except (OSError, ValueError) as exc:
         typer.echo(f"\nexisting targets file {target_file} is malformed: {exc}", err=True)
         raise typer.Exit(1) from exc
-    merged, added, _ = merge_targets(existing, proposed)
-    save_targets(target_file, merged)
-    typer.echo(f"\nTARGETS -> {target_file}")
+    # Overwrite: the file becomes exactly this discovery. Names in the old file that weren't
+    # rediscovered are dropped (reported as stale), so the registry never accretes dead entries.
+    fresh = {target.name: target for target in proposed}
+    removed = [name for name in existing if name not in fresh]
+    save_targets(target_file, fresh)
+    typer.echo(f"\nTARGETS -> {target_file}  (overwritten)")
     for target in proposed:
-        mark = "added" if target.name in added else "exists (kept)"
+        mark = "refreshed" if target.name in existing else "added"
         locator = f"context={target.context}" if target.context else target.path
         typer.echo(f"  {target.name:<26} {target.source} @ {locator}  [{mark}]")
+    for name in removed:
+        typer.echo(f"  {name:<26} [removed (stale)]")
     typer.echo(f"point the listener at it:  export {TARGETS_ENV}={target_file}")
 
 
@@ -1489,7 +1495,8 @@ def discover(
         ".steadystate/targets.json) as named scan/probe targets -- named after the cwd, suffixed "
         "per source "
         "when several are found. With --deep, also registers live compose projects rooted outside "
-        "the cwd. Merges without overwriting existing entries.",
+        "the cwd. OVERWRITES the registry with what's discovered now -- stale entries (no longer "
+        "present) are dropped, a re-discovered target is refreshed.",
     ),
     emit_ci: bool = typer.Option(
         False,
