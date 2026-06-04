@@ -36,7 +36,11 @@ from .act.learn import learn as derive_lessons
 from .act.plan import can_run_unattended
 from .act.reflex import reflexes, run_hold
 from .catalog import gather_catalog, render_console, render_html
-from .compliance import cis_report, cis_report_as_dict, render_cis_report
+from .compliance import (
+    compliance_report,
+    compliance_report_as_dict,
+    render_compliance_report,
+)
 from .discover import (
     ansible_live_target,
     context_reachable,
@@ -56,7 +60,7 @@ from .discover import (
     as_dict as discovery_as_dict,
 )
 from .discover import render as render_discovery
-from .domains import default_domains, evaluate_with
+from .domains import default_domains, evaluate_posture_with, evaluate_with
 from .engine import build_report, collect_resources
 from .inbound import INBOUND, build_inbound
 from .inbound.base import PROBE, Command, command_from_text, tool_schema
@@ -563,24 +567,29 @@ def compliance(
         "--kubeconfig",
         help="Read the context from this kubeconfig file (off the default path).",
     ),
+    framework: str = typer.Option(
+        "", "--framework", help="Limit to one benchmark: cis | stig. Default: all stacked together."
+    ),
     level: int = typer.Option(
-        1, "--level", help="CIS benchmark level to report: 1 (default) or 2; 0 for all levels."
+        0, "--level", help="CIS benchmark level to report: 0 = all (default), or 1 / 2 to narrow."
     ),
     json_out: bool = typer.Option(
         False, "--json", help="Emit the report as JSON (for other tooling) instead of text."
     ),
 ) -> None:
-    """Audit a target against the **CIS benchmark** controls steadystate checks, grouped by control.
+    """Audit a target against the **benchmark** controls steadystate checks, grouped by check.
 
     The differentiated case is **live**: `compliance --source k8s-live --context <ctx>` audits the
     *running cluster's* pod-security posture (privileged, hostNetwork/PID/IPC, capabilities,
-    hostPath, runAsRoot, ...), agentless via kubectl -- the failures in what's actually deployed.
-    Declared-side scanning is a commodity (Checkov/Trivy/kube-bench in CI); this owns the live
-    posture. Also audits a captured manifest/snapshot (`--source k8s <file>`) or a compose project.
+    hostPath, runAsRoot, seccomp, dropped capabilities, ...), agentless via kubectl -- the failures
+    in what's actually deployed. Declared-side scanning is a commodity (Checkov/Trivy/kube-bench in
+    CI); this owns the live posture. Also audits a captured snapshot or a compose project.
 
-    Honest scope: it reports the controls steadystate *checks* and that something *violates* -- not
-    a full pass/fail over every published control (control-plane sections need node access; N/A on
-    managed clusters). `--level` filters (CIS Level 1 by default); `--json` for tooling."""
+    Every framework + level **stacks into one scan** by default -- CIS Level 1 + Level 2 (and STIG,
+    where a check maps to it) cited together on the check they share. `--level` (1/2) or
+    `--framework` (cis/stig) narrows; `--json` for tooling. The report prints a scope disclaimer: it
+    validates the workload-policy controls it can observe live, NOT the control-plane/node controls
+    (node access / kube-bench, N/A on managed clusters) or procedural controls (a human attests)."""
     if target:
         if path is not None:
             raise typer.BadParameter("pass a path or --target, not both.")
@@ -597,17 +606,25 @@ def compliance(
         else:
             raise typer.BadParameter("give a path to audit, or --target <name>.")
     want_level = level if level != 0 else None
+    want_framework = framework or None
     try:
         resources = collect_resources(source, path, context=context, kubeconfig=kubeconfig)
     except (ValueError, SourceError) as exc:
         typer.secho(f"compliance scan failed: {exc}", fg="red", err=True)
         raise typer.Exit(1) from None
-    findings = [f for domain in default_domains() for f in evaluate_with(domain, resources)]
-    results = cis_report(findings, level=want_level)
+    # Both passes: the affirmative controls (also surfaced by a normal scan) AND the compliance-only
+    # posture gaps (CIS Level 2 -- absence-based, so a normal scan skips them to stay quiet).
+    findings = [
+        f
+        for domain in default_domains()
+        for f in (*evaluate_with(domain, resources), *evaluate_posture_with(domain, resources))
+    ]
+    results = compliance_report(findings, level=want_level, framework=want_framework)
     if json_out:
-        typer.echo(json.dumps(cis_report_as_dict(results, want_level), indent=2))
+        doc = compliance_report_as_dict(results, level=want_level, framework=want_framework)
+        typer.echo(json.dumps(doc, indent=2))
         return
-    for line in render_cis_report(results, want_level):
+    for line in render_compliance_report(results, level=want_level, framework=want_framework):
         typer.echo(line)
 
 
