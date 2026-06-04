@@ -25,7 +25,11 @@ from ..act.breakglass import BREAKGLASS_SOURCE, breakglass_allowed
 from ..act.catalog import ACTIONS as CATALOG_ACTIONS
 from ..act.catalog import CatalogAction, FindingFields, catalog_action, offered_action
 from ..act.cleanup import record_cleanups
+from ..act.decide import decider_auto_enabled
 from ..act.execute import CATALOG_SOURCE
+from ..act.learn import ADOPT
+from ..act.learn import learn as derive_lessons
+from ..act.reflex import reflex_recurrence, reflexes
 from ..engine import build_report
 from ..notify import SURFACES
 from ..onboarding import Status, capabilities
@@ -46,6 +50,8 @@ from .base import (
     FIX,
     HELP,
     HISTORY,
+    HOLD,
+    LEARN,
     MUTE,
     PENDING,
     PROBE,
@@ -589,6 +595,47 @@ def _render_history(state_path: str) -> str:
     return "\n".join(lines)
 
 
+def _render_hold(state_path: str) -> str:
+    """The chat view of the homeostat's posture: each reflex's earned autonomy (observe/propose/
+    auto) and blast-radius envelope, which of its fixes are NOT holding (recurrence -- the
+    self-correction signal), and whether the decider has been granted autonomy. A cheap read from
+    the store -- no fresh scan (that's `probe`); it answers 'what is steadystate maintaining on its
+    own, and is anything not holding?'. Read-only."""
+    active = reflexes()
+    recurrence: dict[str, int] = {}
+    if state_path and Path(state_path).exists():
+        with StateStore(state_path) as store:
+            recurrence = reflex_recurrence(store.all_findings(), store.acted_fingerprints(), active)
+    lines = ["homeostat posture (reflexes):"]
+    for r in active:
+        churn = recurrence.get(r.name, 0)
+        note = f"  -- {churn} fix(es) recurring (not holding)" if churn else ""
+        lines.append(f"  {r.name:<18} {r.autonomy:<8} [{r.envelope.label}]  {r.category}{note}")
+    grant = "ON" if decider_auto_enabled() else "off"
+    lines.append(f"  decider autonomy: {grant}  (grant via STEADYSTATE_DECIDER_AUTO)")
+    return "\n".join(lines)
+
+
+def _render_learn(state_path: str) -> str:
+    """The chat view of `steadystate learn`: what steadystate has learned from findings that
+    resolved on their own (out-of-band -- a human fixed it, or it self-healed). Surfaces the
+    categories to ADOPT a reflex for, or that SELF-HEAL (mute candidates). Read-only and a
+    suggestion -- it promotes/mutes nothing; the strength is how often it would've been right."""
+    if not state_path or not Path(state_path).exists():
+        return "Nothing learned yet -- steadystate learns from findings that resolve on their own."
+    with StateStore(state_path) as store:
+        lessons = derive_lessons(store.all_findings(), store.acted_fingerprints())
+    if not lessons:
+        return "Nothing learned yet -- run scans/probes over time so resolutions accumulate."
+    backing = sum(lesson.occurrences for lesson in lessons)
+    lines = [f"learned from {backing} out-of-band resolution(s) -- {len(lessons)} lesson(s):"]
+    for lesson in lessons:
+        tag = "ADOPT" if lesson.kind == ADOPT else "SELF-HEAL"
+        lines.append(f"  [{tag}] {lesson.category} x{lesson.occurrences} {lesson.scope}")
+        lines.append(f"      {lesson.recommendation}")
+    return "\n".join(lines)
+
+
 def _record_probe_findings(report: Report, state_path: str) -> None:
     """Persist a summoned probe's findings to the store (new/recurring memory, and the db file
     itself) so they show in `findings` and can be muted. **Record-only**: no `resolve_absent` -- a
@@ -730,6 +777,10 @@ def run_command(command: Command, state_path: str) -> str:
         return _run_action(command.argument, command.argument2, state_path, command.actor)
     if command.verb == HISTORY:
         return _render_history(state_path)
+    if command.verb == HOLD:
+        return _render_hold(state_path)
+    if command.verb == LEARN:
+        return _render_learn(state_path)
     with StateStore(state_path) as store:
         if command.verb == APPROVE:
             fp, error = _resolve_pending(store, command.argument)

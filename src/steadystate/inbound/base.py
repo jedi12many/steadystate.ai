@@ -37,6 +37,8 @@ UNMUTE = "unmute"
 SNOOZE = "snooze"
 TARGETS = "targets"
 HISTORY = "history"
+HOLD = "hold"
+LEARN = "learn"
 FINDINGS = "findings"
 SHOW = "show"
 SURFACES_LIST = "surfaces"
@@ -70,6 +72,16 @@ COMMANDS: dict[str, tuple[str, str]] = {
         "failing pod's last log) plus when it was first/last seen; `json` returns it as JSON",
     ),
     HISTORY: ("history", "show the remediation audit log (newest first)"),
+    HOLD: (
+        "hold",
+        "the homeostat's posture -- each reflex's earned autonomy, what's NOT holding "
+        "(recurring fixes), and whether the decider is granted autonomy",
+    ),
+    LEARN: (
+        "learn",
+        "what steadystate has learned from findings that resolved on their own (out-of-band) -- "
+        "categories to adopt a reflex for, or that self-heal",
+    ),
     SURFACES_LIST: (
         "surfaces",
         "list the alert surfaces you can `send` to, and which are configured",
@@ -186,6 +198,8 @@ _TOOL_ARGS: dict[str, tuple[tuple[str, bool], ...]] = {
     FINDINGS: (),
     SHOW: (("fingerprint", True),),
     HISTORY: (),
+    HOLD: (),
+    LEARN: (),
     SURFACES_LIST: (),
     SEND: (("fingerprint", True), ("surface", True)),
     FIX: (("fingerprint", True),),
@@ -209,6 +223,8 @@ _TOOL_EFFECT: dict[str, str] = {
     FINDINGS: "read-only",
     SHOW: "read-only",
     HISTORY: "read-only",
+    HOLD: "read-only",
+    LEARN: "read-only",
     SURFACES_LIST: "read-only",
     SEND: "external-send",  # emits a finding to an external alert surface
     FIX: "guardrailed-write",  # applies the offered vetted action (allow-pattern + bound + audit)
