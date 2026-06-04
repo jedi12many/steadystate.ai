@@ -15,7 +15,7 @@ import logging
 import os
 import threading
 from collections.abc import Callable, Mapping
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
@@ -52,8 +52,10 @@ from .base import (
     RUN,
     SEND,
     SHOW,
+    SNOOZE,
     SURFACES_LIST,
     TARGETS,
+    UNMUTE,
     Command,
     InboundAdapter,
     render_help,
@@ -122,6 +124,54 @@ def _resolve_mute_target(store: StateStore, token: str) -> tuple[str, str]:
     if len(matches) > 1:
         return "", f"'{token}' matches {len(matches)} findings -- use more of the fingerprint."
     return token, ""  # no stored match -> pre-mute the literal token (upsert), as before
+
+
+def _parse_duration(text: str) -> timedelta | None:
+    """Parse a chat snooze duration: ``2d`` / ``3h`` / ``45m`` / ``90s`` / ``1w``, or a bare integer
+    read as days (the CLI snooze's unit). None when it isn't a recognized, positive duration, so the
+    caller asks for one rather than guessing. Pure."""
+    text = text.strip().lower()
+    if not text:
+        return None
+    units = {"s": "seconds", "m": "minutes", "h": "hours", "d": "days", "w": "weeks"}
+    if text[-1] in units:
+        head = text[:-1]
+        if head.isdigit() and int(head) > 0:
+            return timedelta(**{units[text[-1]]: int(head)})
+        return None
+    if (
+        text.isdigit() and int(text) > 0
+    ):  # bare number -> days, matching `steadystate snooze --days`
+        return timedelta(days=int(text))
+    return None
+
+
+def _unmute_finding(store: StateStore, token: str) -> str:
+    """`unmute <fp>`: lift a mute or snooze so the finding surfaces again. Resolves a prefix to a
+    *known* finding (you only un-silence what the store remembers); reports when it can't."""
+    finding, error = _lookup_finding(store, token)
+    if finding is None:
+        return error
+    store.unmute(finding.fingerprint, datetime.now(UTC))
+    return f"Unmuted {finding.fingerprint} -- it surfaces again on the next scan."
+
+
+def _snooze_finding(store: StateStore, token: str, duration_text: str, actor: str) -> str:
+    """`snooze <fp> <duration>`: silence a finding until the duration lapses, then it returns.
+    Resolves the fingerprint like `mute` (prefix, or pre-snooze an unseen one), and parses the
+    duration; an unrecognized duration is reported, never defaulted."""
+    duration = _parse_duration(duration_text)
+    if duration is None:
+        return (
+            f"'{duration_text}' isn't a duration -- try `2d`, `3h`, `45m` (units h/m/d/w; bare = "
+            "days)."
+        )
+    fp, error = _resolve_mute_target(store, token)
+    if error:
+        return error
+    now = datetime.now(UTC)
+    store.snooze(fp, now + duration, actor, now)
+    return f"Snoozed {fp} for {duration_text} -- silent until it lapses, then it returns."
 
 
 def _compact(value: object) -> str:
@@ -700,7 +750,11 @@ def run_command(command: Command, state_path: str) -> str:
             if error:
                 return error
             store.mute(fp, None, command.actor, datetime.now(UTC))
-            return f"Muted {fp} -- silenced on future scans until `steadystate unmute {fp}`."
+            return f"Muted {fp} -- silenced on future scans until `unmute {fp}`."
+        if command.verb == UNMUTE:
+            return _unmute_finding(store, command.argument)
+        if command.verb == SNOOZE:
+            return _snooze_finding(store, command.argument, command.argument2, command.actor)
     return "Nothing to do."
 
 
