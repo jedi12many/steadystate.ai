@@ -106,26 +106,10 @@ def target_to_spec(target: Target) -> dict[str, str]:
     return spec
 
 
-def merge_targets(
-    existing: dict[str, Target], proposed: list[Target]
-) -> tuple[dict[str, Target], list[str], list[str]]:
-    """Overlay ``proposed`` onto ``existing`` WITHOUT clobbering: a proposed target whose name is
-    already taken is skipped (the operator's hand-edits win). Returns (merged map, names added,
-    names skipped). Pure -- the caller decides whether to persist the result."""
-    added: dict[str, Target] = {}
-    skipped: list[str] = []
-    for target in proposed:
-        if target.name in existing or target.name in added:
-            skipped.append(target.name)
-        else:
-            added[target.name] = target
-    return {**existing, **added}, list(added), skipped
-
-
 def save_targets(path: str | Path, targets: dict[str, Target]) -> None:
     """Write the targets map to ``path`` as the JSON document ``load_targets`` reads. Creates the
-    parent dir (the default lives under ``.steadystate/``) and overwrites the file wholesale, so
-    callers preserving existing entries merge first (``merge_targets``)."""
+    parent dir (the default lives under ``.steadystate/``) and overwrites the file wholesale -- the
+    map passed in is the file's new, complete contents."""
     doc = {name: target_to_spec(target) for name, target in targets.items()}
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)

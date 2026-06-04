@@ -728,19 +728,38 @@ def test_proposed_targets_skips_sources_with_no_input():
     assert proposed_targets([_source_finding("terraform")], Path("/work/myapp")) == []
 
 
-def test_merge_targets_does_not_clobber_existing():
-    from steadystate.targets import Target, merge_targets
+def test_discover_create_overwrites_dropping_stale_targets(tmp_path, monkeypatch):
+    # A re-run reflects current reality: a re-discovered target is refreshed and a stale entry from
+    # a prior run (a source no longer here) is dropped -- the registry never accretes dead entries.
+    from typer.testing import CliRunner
 
-    existing = {"myapp": Target("myapp", "terraform", "/old", "myapp")}
-    proposed = [
-        Target("myapp", "k8s", "/new", "myapp"),  # name taken -> skipped
-        Target("myapp-helm", "helm", "/h.json", "myapp-helm"),  # new -> added
-    ]
-    merged, added, skipped = merge_targets(existing, proposed)
-    assert added == ["myapp-helm"]
-    assert skipped == ["myapp"]
-    assert merged["myapp"].source == "terraform"  # original kept
-    assert "myapp-helm" in merged
+    from steadystate import discover as disc
+    from steadystate.cli import app
+    from steadystate.discover import _slug
+    from steadystate.targets import Target, load_targets, save_targets
+
+    name = _slug(tmp_path.name)
+    targets_file = tmp_path / ".steadystate/targets.json"
+    # Pre-seed the registry with a stale target and an old version of the one we'll rediscover.
+    save_targets(
+        targets_file,
+        {
+            "gone-cluster": Target("gone-cluster", "k8s-live", "", "gone-cluster", context="old"),
+            name: Target(name, "terraform", "/stale/path", name),
+        },
+    )
+    (tmp_path / "main.tf").write_text("resource {}")  # so terraform is rediscovered here
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(disc.shutil, "which", lambda _b: None)
+    monkeypatch.setenv("STEADYSTATE_TARGETS", str(targets_file))
+
+    result = CliRunner().invoke(app, ["discover", "--create"])
+    assert result.exit_code == 0
+    assert "removed (stale)" in result.stdout  # the dropped one is reported
+
+    written = load_targets(targets_file)
+    assert "gone-cluster" not in written  # stale entry dropped
+    assert written[name].path == str(tmp_path)  # the rediscovered one refreshed to the live path
 
 
 def test_save_and_load_targets_round_trip(tmp_path):
