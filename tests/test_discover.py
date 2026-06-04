@@ -762,6 +762,52 @@ def test_discover_create_overwrites_dropping_stale_targets(tmp_path, monkeypatch
     assert written[name].path == str(tmp_path)  # the rediscovered one refreshed to the live path
 
 
+def test_context_reachable_pings_the_api_and_passes_kubeconfig(monkeypatch):
+    from steadystate import discover as disc
+
+    seen: list[list[str]] = []
+
+    def fake_run(argv):
+        seen.append(argv)
+        return True, "Kubernetes control plane is running"
+
+    monkeypatch.setattr(disc, "_run", fake_run)
+    assert disc.context_reachable("prod", "/kc") is True
+    argv = seen[0]
+    assert argv[:2] == ["kubectl", "cluster-info"]
+    assert "--context" in argv and "prod" in argv  # the context is targeted
+    assert "--kubeconfig" in argv and "/kc" in argv  # a cwd-kubeconfig context carries its file
+    assert any(a.startswith("--request-timeout=") for a in argv)  # fails fast, never hangs
+
+    monkeypatch.setattr(disc, "_run", lambda _argv: (False, ""))  # API doesn't answer
+    assert disc.context_reachable("minikube") is False
+
+
+def test_create_targets_skips_unreachable_live_context(tmp_path, monkeypatch):
+    # A discovered live context whose cluster is down (a stopped minikube) is skipped, not written;
+    # a reachable one is kept. --no-reachable (check_reachable=False) would register both.
+    from steadystate import cli
+    from steadystate.targets import Target, load_targets
+
+    monkeypatch.setenv("STEADYSTATE_TARGETS", str(tmp_path / "targets.json"))
+    extra = [
+        Target("prod", "k8s-live", "", "prod", probe="auto", context="prod"),
+        Target("minikube", "k8s-live", "", "minikube", probe="auto", context="minikube"),
+    ]
+    monkeypatch.setattr(cli, "context_reachable", lambda ctx, kc="": ctx == "prod")
+    import io
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):  # capture typer.echo output
+        cli._create_targets([], extra=extra, check_reachable=True)
+    out = buf.getvalue()
+    written = load_targets(tmp_path / "targets.json")
+    assert "prod" in written  # the live cluster is registered
+    assert "minikube" not in written  # the dead context is not
+    assert "skipped (unreachable)" in out  # and it's reported
+
+
 def test_save_and_load_targets_round_trip(tmp_path):
     from steadystate.targets import Target, load_targets, save_targets
 
@@ -1234,6 +1280,7 @@ def test_discover_create_registers_a_target_per_kube_context(tmp_path, monkeypat
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(disc.shutil, "which", lambda _b: None)  # no cwd-local sources
     monkeypatch.setattr(cli, "kube_contexts", lambda: ["prod-cluster", "gke_proj_zone_stg"])
+    monkeypatch.setattr(cli, "context_reachable", lambda _ctx, _kc="": True)  # both clusters up
     monkeypatch.delenv("STEADYSTATE_TARGETS", raising=False)
 
     result = CliRunner().invoke(app, ["discover", "--create"])
@@ -1255,6 +1302,7 @@ def test_discover_create_kube_contexts_is_idempotent(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(disc.shutil, "which", lambda _b: None)
     monkeypatch.setattr(cli, "kube_contexts", lambda: ["prod-cluster"])
+    monkeypatch.setattr(cli, "context_reachable", lambda _ctx, _kc="": True)
     monkeypatch.delenv("STEADYSTATE_TARGETS", raising=False)
 
     CliRunner().invoke(app, ["discover", "--create"])
