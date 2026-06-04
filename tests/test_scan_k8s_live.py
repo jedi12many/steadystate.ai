@@ -61,6 +61,42 @@ def test_scan_k8s_live_needs_no_path_and_surfaces_fires(monkeypatch):
     assert "CrashLoopBackOff" in result.output  # the fire surfaced, with no path given
 
 
+_PRIVILEGED_WORKLOAD = {
+    "kind": "List",
+    "items": [
+        {
+            "apiVersion": "apps/v1",
+            "kind": "Deployment",
+            "metadata": {"namespace": "prod", "name": "risky"},
+            "spec": {
+                "template": {
+                    "spec": {
+                        "containers": [
+                            {"image": "risky:1", "securityContext": {"privileged": True}}
+                        ]
+                    }
+                }
+            },
+        }
+    ],
+}
+
+
+def test_scan_k8s_live_audits_running_cis_posture(monkeypatch):
+    # The differentiated half of CIS: posture of what's ACTUALLY RUNNING, not just declared
+    # manifests. A privileged container in the live cluster surfaces a CIS Kubernetes 5.2.1 finding
+    # straight off the `kubectl get` read -- no manifests, no path, no probe.
+    monkeypatch.setattr(
+        "steadystate.sources.k8s.run_tool", lambda argv, **kw: json.dumps(_PRIVILEGED_WORKLOAD)
+    )
+    result = CliRunner().invoke(
+        app, ["scan", "--source", "k8s-live", "--context", "prod", "--stateless"]
+    )
+    assert result.exit_code == 0, result.output
+    assert "privileged" in result.output.lower()  # the CIS finding from the live posture
+    assert "CIS" in result.output  # carries its benchmark reference
+
+
 def test_scan_non_pathless_source_still_requires_a_path():
     result = CliRunner().invoke(app, ["scan", "--source", "terraform"])
     assert result.exit_code != 0

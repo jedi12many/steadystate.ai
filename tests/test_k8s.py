@@ -220,6 +220,15 @@ def test_live_source_emits_workloads_as_zero_drift():
     assert resources[0].provenance.source == "kubernetes"
 
 
+def test_live_source_projects_security_posture_for_cis_audit():
+    # The differentiated half: the live workloads carry the security posture (unlike the drift-path
+    # observed projection), so the CIS standing-policy pass can audit what is ACTUALLY RUNNING.
+    src = KubernetesLiveSource(observed={"kind": "List", "items": [_risky_pod()]})
+    [res] = src.collect_declared()
+    assert res.properties["security"] == {"privileged": True, "host_pid": True}
+    assert src.collect_drift() == []  # still zero drift -- the projection can't manufacture one
+
+
 def test_live_source_threads_context_into_kubectl(monkeypatch):
     seen = {}
 

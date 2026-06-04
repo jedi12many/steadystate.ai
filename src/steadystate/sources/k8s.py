@@ -202,8 +202,21 @@ def resources_from_manifests(doc: object) -> list[Resource]:
 
 def observed_resources_from_kubectl(doc: object) -> list[Resource]:
     """Turn `kubectl get -o json` output into observed Resources. Pure. Identity matches the
-    declared side so they align. No security projection -- posture is audited declared-side."""
+    declared side so they align. No security projection -- on the drift path, posture is audited
+    declared-side (the live source uses ``live_resources_from_kubectl`` to audit live posture)."""
     return _resources_from_objects(_normalize(doc), with_security=False)
+
+
+def live_resources_from_kubectl(doc: object) -> list[Resource]:
+    """Live cluster workloads WITH the security-posture projection -- so the standing-policy pass
+    (CIS) audits what is *actually running*, not only declared manifests. This is the live half of
+    CIS: declared-side scanning is a commodity (Checkov/Trivy/kube-bench in CI); auditing the
+    running cluster's posture, agentless via kubectl, is the differentiated part.
+
+    Safe for drift: the live source emits identical declared==observed resources (zero drift by
+    construction), and ``reconcile_k8s`` strips the ``security`` key before reconciling anyway, so
+    the projection can never read as drift. Pure."""
+    return _resources_from_objects(_normalize(doc), with_security=True)
 
 
 def _drift_only(resource: Resource) -> Resource:
@@ -333,7 +346,9 @@ class KubernetesLiveSource:
     def _workloads(self) -> list[Resource]:
         if self._cache is None:
             doc = self._observed if self._observed is not None else self._run_kubectl()
-            self._cache = [self._qualify(r) for r in observed_resources_from_kubectl(doc)]
+            # Project security posture: the live workloads feed the CIS standing-policy pass, so we
+            # audit what's actually running. Safe -- declared==observed here, so zero drift.
+            self._cache = [self._qualify(r) for r in live_resources_from_kubectl(doc)]
         return self._cache
 
     def collect_declared(self) -> list[Resource]:
