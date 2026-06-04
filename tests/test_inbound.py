@@ -352,6 +352,44 @@ def test_show_and_findings_json_return_structured_data(tmp_path):
     assert isinstance(rows, list) and rows[0]["fingerprint"] == fp
 
 
+def test_findings_parses_status_and_keyword():
+    # the first token is a status filter when it's a status word; everything else is the keyword.
+    assert command_from_text("findings", "amy") == Command(FINDINGS, "amy", "")
+    assert command_from_text("findings open", "amy") == Command(FINDINGS, "amy", "open")
+    assert command_from_text("findings web", "amy") == Command(FINDINGS, "amy", "web")
+    assert command_from_text("findings resolved timeout", "amy") == Command(
+        FINDINGS, "amy", "resolved timeout"
+    )
+    # the json flag is still split out, the multi-word keyword preserved
+    assert command_from_text("findings all auth error json", "amy") == Command(
+        FINDINGS, "amy", "all auth error", flags=frozenset({"json"})
+    )
+
+
+def test_findings_keyword_filter_greps_the_list_in_chat(tmp_path):
+    db = str(tmp_path / "s.db")
+    now = datetime(2026, 6, 2, 14, 30, tzinfo=UTC)
+    a, b = "a" * 64, "b" * 64
+    with StateStore(db) as store:
+        store.record({a: ("high", "web deployment crashlooping")}, now, {a: {"namespace": "front"}})
+        store.record({b: ("low", "redis memory pressure")}, now, {b: {"namespace": "cache"}})
+    # keyword in the title -> only the matching finding, and the header says so
+    out = run_command(command_from_text("findings web", "amy"), db)
+    assert a in out and b not in out and "matching 'web'" in out
+    # keyword in the captured evidence (namespace) matches too
+    assert b in run_command(command_from_text("findings cache", "amy"), db)
+    # no match -> a clear message, never a silent empty list
+    assert "match 'nope'" in run_command(command_from_text("findings nope", "amy"), db)
+    # the json view honors the keyword
+    rows = json.loads(run_command(command_from_text("findings web json", "amy"), db))
+    assert [r["fingerprint"] for r in rows] == [a]
+    # status + keyword combine: resolve b, then it's only found under `resolved`
+    with StateStore(db) as store:
+        store.resolve_absent({a}, datetime(2026, 6, 2, 15, 0, tzinfo=UTC))  # b clears, a stays
+    assert b in run_command(command_from_text("findings resolved redis", "amy"), db)
+    assert b not in run_command(command_from_text("findings redis", "amy"), db)  # default hides it
+
+
 def test_json_errors_are_json_not_prose(tmp_path):
     # an agent in json mode must always get parseable output -- even on an error.
     db = str(tmp_path / "s.db")
