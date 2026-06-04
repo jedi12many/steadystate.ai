@@ -160,3 +160,69 @@ def test_kill_switch_makes_no_call_and_records_no_spend():
     clusters = analyst.correlate([_drift(), _drift()])  # degrades to deterministic grouping
     assert all(not c.llm_backed for c in clusters)
     assert analyst.calls == []  # nothing attempted -> no spend rows
+
+
+# -- per-caller model tiering ---------------------------------------------------
+
+
+def test_cheap_caller_routes_to_the_cheap_model(monkeypatch):
+    monkeypatch.delenv("STEADYSTATE_MODEL_CHAT_NL", raising=False)
+    monkeypatch.delenv("STEADYSTATE_MODEL_CHEAP", raising=False)
+    analyst = LLMAnalyst(model="claude-sonnet-4-6", api_key="sk-test")
+    # chat-nl is intent routing -> cheap tier; analyze/decide/correlate keep the reasoning model.
+    assert analyst._model_for_caller("chat-nl", "anthropic") == "claude-haiku-4-5"
+    assert analyst._model_for_caller("decide", "anthropic") == "claude-sonnet-4-6"
+    assert analyst._model_for_caller("correlate", "anthropic") == "claude-sonnet-4-6"
+
+
+def test_per_caller_model_env_override_wins(monkeypatch):
+    monkeypatch.setenv("STEADYSTATE_MODEL_CHAT_NL", "claude-opus-4-8")
+    analyst = LLMAnalyst(model="claude-sonnet-4-6", api_key="sk-test")
+    assert analyst._model_for_caller("chat-nl", "anthropic") == "claude-opus-4-8"
+
+
+def test_tiering_is_anthropic_only(monkeypatch):
+    _set_openai_env(monkeypatch, model="gpt-4o-mini")
+    analyst = LLMAnalyst()
+    # An OpenAI-compatible endpoint has a single configured model -- chat-nl isn't re-tiered.
+    assert analyst._model_for_caller("chat-nl", "openai") == "gpt-4o-mini"
+
+
+def test_chat_nl_call_actually_sends_and_records_the_cheap_model(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.delenv("STEADYSTATE_LLM_PROVIDER", raising=False)
+    monkeypatch.delenv("STEADYSTATE_MODEL_CHAT_NL", raising=False)
+    monkeypatch.delenv("STEADYSTATE_MODEL_CHEAP", raising=False)
+
+    captured: dict = {}
+    fake = types.ModuleType("anthropic")
+
+    class _Block:
+        type = "text"
+        text = "{}"
+
+    class _Msg:
+        content = [_Block()]
+        usage = types.SimpleNamespace(
+            input_tokens=10,
+            output_tokens=2,
+            cache_creation_input_tokens=0,
+            cache_read_input_tokens=0,
+        )
+
+    class _Anthropic:
+        def __init__(self, *a, **k):
+            self.messages = types.SimpleNamespace(create=self._create)
+
+        def _create(self, **kw):
+            captured["model"] = kw["model"]
+            return _Msg()
+
+    fake.Anthropic = _Anthropic
+    monkeypatch.setitem(sys.modules, "anthropic", fake)
+
+    analyst = LLMAnalyst(model="claude-sonnet-4-6")
+    out = analyst._complete("sys", "user", "chat-nl")
+    assert out == "{}"
+    assert captured["model"] == "claude-haiku-4-5"  # the cheap tier was the model actually sent
+    assert analyst.calls[-1].model == "claude-haiku-4-5"  # and recorded as such -- honest spend

@@ -34,7 +34,15 @@ from .cost import LlmCall
 # the default (None) sends without asking, so headless scans / the listener are unchanged.
 PromptGate = Callable[[str, str, str, str], bool]
 
-_DEFAULT_MODEL = os.environ.get("STEADYSTATE_MODEL", "claude-sonnet-4-5")
+_DEFAULT_MODEL = os.environ.get("STEADYSTATE_MODEL", "claude-sonnet-4-6")
+# Cheap tier: high-frequency, low-judgment callers (intent routing -- picking one verb) don't need
+# the reasoning model that analysis/decisions use. Route them to a cheaper, faster model. Override
+# the tier model with STEADYSTATE_MODEL_CHEAP, or any one caller with STEADYSTATE_MODEL_<CALLER>.
+_CHEAP_MODEL = os.environ.get("STEADYSTATE_MODEL_CHEAP", "claude-haiku-4-5")
+# Callers that only classify/route, not reason. `chat-nl` maps free text to a single vetted verb --
+# a classification, not a judgment -- so it runs on the cheap tier. analyze/decide/correlate keep
+# the default (reasoning) model: their output is the product, not a routing hop.
+_CHEAP_CALLERS = frozenset({"chat-nl"})
 _HTTP_TIMEOUT = float(os.environ.get("STEADYSTATE_LLM_TIMEOUT", "30"))
 
 
@@ -200,13 +208,27 @@ class LLMAnalyst:
     def _model_for(self, provider: str) -> str:
         return self.model if provider == "anthropic" else (self.openai_model or "")
 
-    def _record(self, caller: str, provider: str, usage: dict, *, succeeded: bool) -> None:
-        """Append one call's usage to the in-memory log. Failures carry zeroed tokens."""
+    def _model_for_caller(self, caller: str, provider: str) -> str:
+        """The model to use for one caller. Tiering is Anthropic-only (an OpenAI-compatible endpoint
+        has a single configured model); there a per-caller env override (STEADYSTATE_MODEL_CHAT_NL)
+        wins, then the cheap tier for routing callers, then the default model."""
+        if provider != "anthropic":
+            return self._model_for(provider)
+        override = os.environ.get(f"STEADYSTATE_MODEL_{caller.upper().replace('-', '_')}")
+        if override:
+            return override
+        return _CHEAP_MODEL if caller in _CHEAP_CALLERS else self.model
+
+    def _record(
+        self, caller: str, provider: str, usage: dict, *, succeeded: bool, model: str | None = None
+    ) -> None:
+        """Append one call's usage to the in-memory log. Failures carry zeroed tokens. ``model`` is
+        the model actually used (so a tiered caller records its real model); None -> the default."""
         self.calls.append(
             LlmCall(
                 caller=caller,
                 provider=provider,
-                model=self._model_for(provider),
+                model=model or self._model_for(provider),
                 input_tokens=usage.get("input", 0),
                 output_tokens=usage.get("output", 0),
                 cache_creation_tokens=usage.get("cache_creation", 0),
@@ -352,20 +374,22 @@ class LLMAnalyst:
 
         return deterministic_correlate(drifts)
 
-    def _allowed(self, provider: str, system: str, user: str) -> bool:
+    def _allowed(self, provider: str, system: str, user: str, model: str | None = None) -> bool:
         """Consult the egress gate (if any) before a send. True = send. The gate sees exactly the
         provider, model, and the full prompt that would go out -- nothing more leaves the box than
-        what it's shown. No gate -> always True (the default, unchanged behaviour)."""
+        what it's shown. ``model`` is the exact model this call will use (a tiered caller's, so the
+        confirm prompt is honest); None -> the default. No gate -> always True (unchanged)."""
         if self.gate is None:
             return True
-        return self.gate(provider, self._model_for(provider), system, user)
+        return self.gate(provider, model or self._model_for(provider), system, user)
 
     def _complete(self, system: str, user: str, caller: str) -> str | None:
         """Raw model text from the configured provider, or None if unavailable/failed."""
         provider = self._provider()
         if provider == "none":
             return None
-        if not self._allowed(provider, system, user):  # egress gate said no -> degrade
+        model = self._model_for_caller(caller, provider)
+        if not self._allowed(provider, system, user, model):  # egress gate said no -> degrade
             return None
         try:
             if provider == "anthropic":
@@ -384,20 +408,23 @@ class LLMAnalyst:
         except Exception:
             # any model/network/parse failure -> caller degrades honestly; never crash a scan.
             # Record a failure row so a stuck retry loop is visible in the spend report.
-            self._record(caller, provider, {}, succeeded=False)
+            self._record(caller, provider, {}, succeeded=False, model=model)
             return None
 
     def _complete_anthropic(self, system: str, user: str, caller: str) -> str:
         from anthropic import Anthropic
 
         client = Anthropic(api_key=self.api_key)
+        model = self._model_for_caller(caller, "anthropic")
         message = client.messages.create(
-            model=self.model,
+            model=model,
             max_tokens=1024,
             system=system,
             messages=[{"role": "user", "content": user}],
         )
-        self._record(caller, "anthropic", self._anthropic_usage(message), succeeded=True)
+        self._record(
+            caller, "anthropic", self._anthropic_usage(message), succeeded=True, model=model
+        )
         return "".join(
             block.text for block in message.content if getattr(block, "type", None) == "text"
         ).strip()
