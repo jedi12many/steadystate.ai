@@ -147,6 +147,41 @@ def test_resolve_absent_leaves_muted_findings_alone():
     assert store.status(fp) == "muted"
 
 
+def _at(minute: int) -> datetime:
+    """A deterministic instant ``minute`` minutes into 2026-01-01 12:00 -- for grace timing."""
+    return datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC) + timedelta(minutes=minute)
+
+
+def test_resolve_absent_honors_the_grace_window():
+    # An intermittent log error skips a scan while the problem persists: within the grace it stays
+    # open (no flap); only once it's been absent past the grace does it resolve.
+    store = StateStore()
+    fp = "a" * 64
+    grace = timedelta(minutes=30)
+    store.record({fp: ("high", "web erroring")}, _at(0))
+    # absent at +10m -- inside the 30m window -> NOT resolved, stays open
+    assert store.resolve_absent(set(), _at(10), grace) == []
+    assert store.status(fp) == OPEN
+    # still absent at +40m -- past the window -> resolved (sustained lack of signal)
+    assert store.resolve_absent(set(), _at(40), grace) == [fp]
+    assert store.status(fp) == RESOLVED
+
+
+def test_a_recurring_error_reopens_with_its_original_first_seen():
+    # The whole point: when it comes back we don't lose how long it's been going -- the reopened
+    # finding keeps its original first_seen, so its age is honest across the resolve/reopen cycle.
+    store = StateStore()
+    fp = "b" * 64
+    grace = timedelta(minutes=30)
+    store.record({fp: ("high", "web erroring")}, _at(0))  # first_seen = 12:00
+    store.resolve_absent(set(), _at(40), grace)  # quiet long enough -> resolved
+    assert store.status(fp) == RESOLVED
+    # the error returns later
+    state = store.record({fp: ("high", "web erroring")}, _at(90))
+    assert state[fp]["status"] == OPEN  # reactivated
+    assert state[fp]["first_seen"] == _at(0).isoformat()  # original first_seen kept, age preserved
+
+
 # -- store: mute / snooze / suppression -----------------------------------------
 
 

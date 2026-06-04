@@ -22,7 +22,7 @@ import json
 import sqlite3
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from .reason.cost import LlmCall
@@ -374,7 +374,9 @@ class StateStore:
             return OPEN, None
         return existing.status, existing.snooze_until
 
-    def resolve_absent(self, current_fingerprints: set[str], now: datetime) -> list[str]:
+    def resolve_absent(
+        self, current_fingerprints: set[str], now: datetime, grace: timedelta = timedelta(0)
+    ) -> list[str]:
         """Resolve ``open`` findings that did NOT appear in this scan; return them.
 
         These are findings that have *cleared* since we last looked. We flip them to
@@ -382,12 +384,27 @@ class StateStore:
         surface can note "Resolved since last scan" exactly once -- next scan they're
         already ``resolved`` and won't appear again. Only ``open`` findings resolve:
         a muted/snoozed finding that's absent stays as the operator set it.
+
+        ``grace`` is the quiet window before absence counts as resolved: a finding only resolves
+        once it has been ABSENT for at least ``grace`` (i.e. ``now - last_seen >= grace``); until
+        then it stays open. This is for intermittent signals -- a log error that's *sampled* skips a
+        scan or two while the problem persists, and without a grace it would flap resolved->reopened
+        every other scan. With the default ``grace=0`` a finding resolves the first scan it's absent
+        (the original behavior). ``grace`` naturally only bites high-frequency probing: when scans
+        are spaced wider than ``grace`` (drift in CI, a daily sweep) every absence already exceeds
+        it, so resolution is immediate as before. The reopen path is unchanged -- if a resolved
+        finding recurs, ``record`` reactivates it keeping its original ``first_seen`` (age kept).
         """
         now_s = _iso(now)
+        cutoff = _iso(now - grace)  # must have last been seen at/before this to count as resolved
         rows = self._conn.execute(
-            "SELECT fingerprint FROM findings WHERE status = ?", (OPEN,)
+            "SELECT fingerprint, last_seen FROM findings WHERE status = ?", (OPEN,)
         ).fetchall()
-        absent = [r["fingerprint"] for r in rows if r["fingerprint"] not in current_fingerprints]
+        absent = [
+            r["fingerprint"]
+            for r in rows
+            if r["fingerprint"] not in current_fingerprints and r["last_seen"] <= cutoff
+        ]
         for fingerprint in absent:
             self._conn.execute(
                 "UPDATE findings SET status = ?, last_seen = ? WHERE fingerprint = ?",

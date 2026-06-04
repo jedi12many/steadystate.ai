@@ -21,13 +21,49 @@ What reconciliation does, in order:
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from .model import Drift
 from .reason.alert import Alert
 from .reason.report import Report
 from .state import StateStore
+
+# How long a finding must stay ABSENT before a scan marks it resolved -- the "give it plenty of
+# room" window. An intermittent log error is *sampled*: it can skip a scan or two while the problem
+# is still happening, and without this buffer it would flap resolved->reopened every other scan. So
+# we wait for sustained absence -- lack of signal over time -- before deciding it went away. The
+# window only matters when scans are more frequent than it (log probing every few minutes); a daily
+# sweep or a CI drift scan is already spaced wider, so absence always exceeds it and resolution is
+# immediate as before. Tunable via STEADYSTATE_RESOLVE_AFTER; default 30 minutes.
+DEFAULT_RESOLVE_GRACE = timedelta(minutes=30)
+
+
+def _parse_window(text: str) -> timedelta | None:
+    """Parse a resolve-grace window: ``30m`` / ``2h`` / ``1d`` / ``90s`` / ``1w``, or a bare integer
+    read as minutes (the natural unit for a quiet window). None when it isn't a recognized,
+    non-negative duration, so the caller falls back to the default rather than guessing. Pure."""
+    text = text.strip().lower()
+    if not text:
+        return None
+    units = {"s": "seconds", "m": "minutes", "h": "hours", "d": "days", "w": "weeks"}
+    if text[-1] in units:
+        head = text[:-1]
+        return timedelta(**{units[text[-1]]: int(head)}) if head.isdigit() else None
+    return timedelta(minutes=int(text)) if text.isdigit() else None
+
+
+def resolve_grace(raw: str | None = None) -> timedelta:
+    """The active resolve-grace window: ``STEADYSTATE_RESOLVE_AFTER`` if set and parseable, else
+    ``DEFAULT_RESOLVE_GRACE`` (30m). ``STEADYSTATE_RESOLVE_AFTER=0`` restores the original
+    resolve-on-first-absence behavior. An unparseable value falls back to the default -- a typo can
+    never silently change the window to something surprising. Pure given ``raw``."""
+    raw = os.environ.get("STEADYSTATE_RESOLVE_AFTER") if raw is None else raw
+    if raw is None:
+        return DEFAULT_RESOLVE_GRACE
+    parsed = _parse_window(raw)
+    return parsed if parsed is not None else DEFAULT_RESOLVE_GRACE
 
 
 @dataclass(frozen=True)
@@ -152,8 +188,9 @@ def reconcile(
     # Rebuild items as the kept signals + surviving alerts (drop suppressed alerts).
     report.items = report.signals + surviving
 
-    # 4. Resolve findings absent from this scan's *full* fingerprint set.
-    resolved_fps = store.resolve_absent(set(seen), now)
+    # 4. Resolve findings absent from this scan's *full* fingerprint set -- but only once they've
+    #    been absent for the grace window (so a sampled log error doesn't flap resolved/reopened).
+    resolved_fps = store.resolve_absent(set(seen), now, resolve_grace())
     resolved: list[ResolvedFinding] = []
     for fp in resolved_fps:
         finding = store.get(fp)
