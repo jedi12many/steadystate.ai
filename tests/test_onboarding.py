@@ -41,15 +41,27 @@ def test_assess_off_partial_ready_for_a_two_var_capability():
     assert ready is Status.READY
 
 
-def test_llm_accepts_either_anthropic_or_a_custom_endpoint():
+def test_llm_accepts_either_anthropic_or_a_custom_endpoint(monkeypatch):
+    monkeypatch.setattr(ob, "_anthropic_sdk_available", lambda: True)  # SDK present for this case
     llm = next(c for c in ob.capabilities() if c.key == "llm")
     assert llm.assess({"ANTHROPIC_API_KEY": "sk-ant"})[0] is Status.READY
+    # The custom OpenAI-compatible endpoint is stdlib urllib -- never needs the SDK.
+    monkeypatch.setattr(ob, "_anthropic_sdk_available", lambda: False)
     assert (
         llm.assess({"STEADYSTATE_LLM_BASE_URL": "u", "STEADYSTATE_LLM_MODEL": "m"})[0]
         is Status.READY
     )
     half, hint = llm.assess({"STEADYSTATE_LLM_BASE_URL": "u"})
     assert half is Status.PARTIAL and "STEADYSTATE_LLM_MODEL" in hint
+
+
+def test_llm_anthropic_key_without_the_sdk_is_partial_not_a_false_ready(monkeypatch):
+    # A key with no `anthropic` SDK installed degrades silently at runtime -- doctor must say so,
+    # not report a green "ready" that lies (the bug that hid a non-working LLM in live testing).
+    monkeypatch.setattr(ob, "_anthropic_sdk_available", lambda: False)
+    llm = next(c for c in ob.capabilities() if c.key == "llm")
+    status, hint = llm.assess({"ANTHROPIC_API_KEY": "sk-ant"})
+    assert status is Status.PARTIAL and "anthropic" in hint
 
 
 def test_llm_kill_switch_reads_off_even_with_a_key():

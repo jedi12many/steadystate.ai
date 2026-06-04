@@ -12,6 +12,7 @@ Nothing here ever prints a secret *value* -- `doctor` reports only whether a var
 from __future__ import annotations
 
 import contextlib
+import importlib.util
 import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -19,6 +20,13 @@ from enum import Enum
 from pathlib import Path
 
 Env = Mapping[str, str]
+
+
+def _anthropic_sdk_available() -> bool:
+    """Whether the optional ``anthropic`` SDK is importable. The Anthropic provider needs it (the
+    analyst does ``from anthropic import Anthropic``); the custom OpenAI-compatible endpoint does
+    not (it's stdlib urllib). ``find_spec`` checks without importing -- no side effects, fast."""
+    return importlib.util.find_spec("anthropic") is not None
 
 
 class Status(str, Enum):
@@ -76,7 +84,14 @@ def _assess_llm(env: Env) -> tuple[Status, str]:
     if _truthy_off(env.get("STEADYSTATE_LLM_ENABLED")):
         return Status.OFF, "disabled via STEADYSTATE_LLM_ENABLED"
     if env.get("ANTHROPIC_API_KEY"):
-        return Status.READY, "Anthropic"
+        # A key alone isn't enough: the Anthropic path imports the `anthropic` SDK, and without it
+        # the analyst degrades silently. Report that honestly rather than a false "ready".
+        if _anthropic_sdk_available():
+            return Status.READY, "Anthropic"
+        return Status.PARTIAL, (
+            "ANTHROPIC_API_KEY set but the `anthropic` SDK isn't installed "
+            "(pip install anthropic, or use a custom OpenAI-compatible endpoint)"
+        )
     base, model = env.get("STEADYSTATE_LLM_BASE_URL"), env.get("STEADYSTATE_LLM_MODEL")
     if base and model:
         return Status.READY, f"custom endpoint ({model})"
