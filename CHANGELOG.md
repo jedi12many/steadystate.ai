@@ -8,6 +8,10 @@ change between releases until 1.0.0. Releases are published as GitHub Releases.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`doctor` no longer reports the LLM "ready" when the `anthropic` SDK isn't installed.** The preflight treated a set `ANTHROPIC_API_KEY` as sufficient, but the Anthropic provider does `from anthropic import Anthropic` at call time -- with the SDK missing, every model call degrades *silently* (the `ImportError` is caught and swallowed). So `doctor` showed a green "ready" while the LLM was, in fact, off -- exactly the trap that hid a non-working model during live testing. The LLM capability now checks the SDK is importable (via `importlib.util.find_spec`, no side effects) and reports **`partial` -- "ANTHROPIC_API_KEY set but the `anthropic` SDK isn't installed"** instead. The custom OpenAI-compatible endpoint is stdlib `urllib` and never needs the SDK, so it's unaffected. Tested: a key with the SDK present reads ready, a key without it reads partial (not a false ready), and the custom-endpoint path stays ready regardless.
+
 ### Changed
 
 - **`discover --create`'s reachability check is no longer too eager to call a cluster dead.** The per-context probe (`kubectl cluster-info`) used a hard 3-second timeout -- fine for a local or direct cluster, but a real cluster behind a **bastion / IAP tunnel** or a slow/distant endpoint could answer in 4-8s and get **false-skipped** (registered as unreachable and silently dropped). For a "register only what's up" check, a false *unreachable* is the wrong failure direction -- you lose a genuine cluster. The default is now **8 seconds**, and it's tunable via **`STEADYSTATE_REACHABLE_TIMEOUT`** (`3s` to fail faster, `15s` for a far cluster, `0` for no cap). Surfaced by running steadystate against a real GKE-style cluster through an IAP tunnel. Tested: the env override + forgiving default, blank-falls-back-to-default, and that the configured value reaches kubectl. (Also fixed a test-isolation gap where the host's real kube contexts could leak into a "nothing scannable" assertion.)
