@@ -590,19 +590,41 @@ def render_kustomize(
     return _objects_from_kubectl_json(out, tool="kubectl create")
 
 
-class KustomizeLiveSource:
-    """Verify the running cluster against your declared Git state: render a Kustomize overlay and
-    reconcile it against the live cluster, scoped to the namespaces the overlay touches. Point it at
-    the overlay dir (the positional path) and aim it at a cluster with ``--context``. Observe-only;
-    it never acts. ``declared``/``observed`` are injectable for tests (skip the kubectl reads)."""
+def render_helm(
+    chart: Path,
+    *,
+    release: str = "release",
+    values: list[Path] | None = None,
+    namespace: str = "",
+    timeout: float = 30.0,
+) -> list[dict]:
+    """Render a Helm chart to K8s objects -- the declared 'left'. ``helm template`` renders fully
+    client-side (no cluster contact), then we convert YAML->JSON via the same offline kubectl step
+    ``render_kustomize`` uses -- only helm + kubectl, no YAML parser. ``release`` matters: chart
+    templates that use ``.Release.Name`` derive names from it, so it must match the installed
+    release for identities to line up. Raises ``SourceError`` on a render failure."""
+    argv = ["helm", "template", release, str(chart)]
+    if namespace:
+        argv += ["--namespace", namespace]
+    for value_file in values or []:
+        argv += ["-f", str(value_file)]
+    yaml = run_tool(argv, timeout=timeout, tool="helm template")
+    if not yaml.strip():
+        return []
+    convert = ["kubectl", "create", "-f", "-", "--dry-run=client", "-o", "json"]
+    out = run_tool(convert, timeout=timeout, tool="kubectl create", input=yaml)
+    return _objects_from_kubectl_json(out, tool="kubectl create")
 
-    name = "kustomize-live"
-    commands = Capabilities(
-        observe=(
-            "kubectl kustomize <dir>",
-            f"kubectl get {_LIVE_WORKLOAD_KINDS} --all-namespaces -o json",
-        ),
-    )
+
+class _RenderedLiveSource:
+    """Verify the left, shared: render a declared K8s document (the subclass renders it -- a
+    Kustomize overlay or a Helm chart) and reconcile it against the live cluster, scoped to the
+    namespaces the rendered set touches so unrelated apps aren't false REMOVEs. Coarse reconcile
+    (presence + image + replicas) keeps it low-false-positive. Observe-only; it never acts.
+    ``declared``/``observed`` are injectable for tests (skip the live tool calls)."""
+
+    name = "rendered-live"  # overridden by each subclass
+    commands = Capabilities()  # overridden by each subclass
 
     def __init__(
         self,
@@ -626,18 +648,13 @@ class KustomizeLiveSource:
     def use_kubeconfig(self, kubeconfig: str) -> None:
         self._kubeconfig = kubeconfig or None
 
+    def _render(self) -> list[dict]:
+        """Render the declared 'left' to K8s objects -- the one part each subclass owns."""
+        raise NotImplementedError
+
     def _declared_objects(self) -> list[dict]:
         if self._declared_cache is None:
-            self._declared_cache = (
-                self._declared
-                if self._declared is not None
-                else render_kustomize(
-                    self._dir,
-                    context=self._context or "",
-                    kubeconfig=self._kubeconfig or "",
-                    timeout=self.timeout,
-                )
-            )
+            self._declared_cache = self._declared if self._declared is not None else self._render()
         return self._declared_cache
 
     def _declared_namespaces(self) -> set[str]:
@@ -654,7 +671,9 @@ class KustomizeLiveSource:
         doc = self._observed if self._observed is not None else self._run_live_get()
         namespaces = self._declared_namespaces()
         objects = _normalize(doc)
-        if namespaces:  # scope to the overlay's namespaces, so unrelated apps aren't false REMOVEs
+        if (
+            namespaces
+        ):  # scope to the rendered set's namespaces, so unrelated apps aren't false drift
             objects = [
                 o for o in objects if (o.get("metadata") or {}).get("namespace") in namespaces
             ]
@@ -662,7 +681,7 @@ class KustomizeLiveSource:
 
     def collect_drift(self) -> list[Drift]:
         declared = self.collect_declared()
-        if not declared:  # an overlay rendering nothing declares nothing to verify -> no live read
+        if not declared:  # renders nothing -> declares nothing to verify -> no live read
             return []
         return reconcile_k8s(declared, self.collect_observed())
 
@@ -674,4 +693,65 @@ class KustomizeLiveSource:
             argv += ["--kubeconfig", self._kubeconfig]
         return loads_json(
             run_tool(argv, timeout=self.timeout, tool="kubectl get"), tool="kubectl get"
+        )
+
+
+class KustomizeLiveSource(_RenderedLiveSource):
+    """Verify a Kustomize overlay against the live cluster. Point it at the overlay dir (the
+    positional path) and aim it with ``--context``."""
+
+    name = "kustomize-live"
+    commands = Capabilities(
+        observe=(
+            "kubectl kustomize <dir>",
+            f"kubectl get {_LIVE_WORKLOAD_KINDS} --all-namespaces -o json",
+        ),
+    )
+
+    def _render(self) -> list[dict]:
+        return render_kustomize(
+            self._dir,
+            context=self._context or "",
+            kubeconfig=self._kubeconfig or "",
+            timeout=self.timeout,
+        )
+
+
+class HelmLiveSource(_RenderedLiveSource):
+    """Verify a Helm chart against the live cluster: ``helm template`` the chart, reconcile vs live.
+    Point it at the chart dir; ``release`` (default the chart dir's name) must match the installed
+    release so ``.Release.Name``-derived resource names align; ``values``/``namespace`` refine the
+    render exactly as a ``helm install`` would."""
+
+    name = "helm-live"
+    commands = Capabilities(
+        observe=(
+            "helm template <release> <chart>",
+            f"kubectl get {_LIVE_WORKLOAD_KINDS} --all-namespaces -o json",
+        ),
+    )
+
+    def __init__(
+        self,
+        path: Path,
+        *,
+        release: str = "",
+        values: list[Path] | None = None,
+        namespace: str = "",
+        declared: list[dict] | None = None,
+        observed: object | None = None,
+        timeout: float = 30.0,
+    ) -> None:
+        super().__init__(path, declared=declared, observed=observed, timeout=timeout)
+        self._release = release or Path(path).name or "release"
+        self._values = list(values or [])
+        self._namespace = namespace
+
+    def _render(self) -> list[dict]:
+        return render_helm(
+            self._dir,
+            release=self._release,
+            values=self._values,
+            namespace=self._namespace,
+            timeout=self.timeout,
         )

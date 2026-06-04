@@ -23,10 +23,10 @@ def _sample(tmp_path, name, payload):
     return f
 
 
-# kustomize-live always renders the live cluster (kubectl) -- it has no captured-file mode that
-# returns [] without a backend, unlike every other source here. So it's exempt from the
-# collect_drift()==[] smoke check below; its drift is exercised in test_verify.py with mocks.
-_NEEDS_LIVE_BACKEND = frozenset({"kustomize-live"})
+# kustomize-live / helm-live always render the live cluster (kubectl/helm) -- they have no
+# captured-file mode that returns [] without a backend, unlike every other source here. So they're
+# exempt from the collect_drift()==[] smoke check below; their drift is exercised in test_verify.py.
+_NEEDS_LIVE_BACKEND = frozenset({"kustomize-live", "helm-live"})
 
 
 # Representative empty inputs per source -- enough to construct and run collect_drift.
@@ -34,8 +34,12 @@ def _inputs(tmp_path):
     overlay = tmp_path / "overlay"  # kustomize-live's path is a Kustomize overlay DIR
     overlay.mkdir()
     (overlay / "kustomization.yaml").write_text("resources: []\n")
+    chart = tmp_path / "chart"  # helm-live's path is a Helm chart DIR
+    chart.mkdir()
+    (chart / "Chart.yaml").write_text("apiVersion: v2\nname: chart\nversion: 0.1.0\n")
     return {
         "kustomize-live": overlay,
+        "helm-live": chart,
         "terraform": _sample(tmp_path, "plan.json", {"resource_changes": []}),
         "argocd": _sample(tmp_path, "app.json", {"status": {"resources": []}}),
         "ansible": _sample(tmp_path, "ansible.json", {"plays": []}),

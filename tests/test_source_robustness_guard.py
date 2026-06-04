@@ -25,6 +25,7 @@ from steadystate.sources.base import SourceError
 from steadystate.sources.docker_compose import DockerComposeSource
 from steadystate.sources.helm import HelmSource
 from steadystate.sources.k8s import (
+    HelmLiveSource,
     KubernetesBaselineSource,
     KubernetesLiveSource,
     KubernetesSource,
@@ -54,6 +55,9 @@ _LIVE: dict[str, Callable[[object], Callable[[], object]]] = {
     # the overlay dir (tmp_path) has no kustomization.yaml -> `kubectl kustomize` fails (or kubectl
     # is absent) -> render raises SourceError before any reconcile.
     "kustomize-live": lambda d: KustomizeLiveSource(d).collect_drift,
+    # likewise: tmp_path has no Chart.yaml -> `helm template` fails (or helm is absent) -> render
+    # raises SourceError before any reconcile.
+    "helm-live": lambda d: HelmLiveSource(d).collect_drift,
     "docker-compose": lambda d: DockerComposeSource(working_dir=d).collect_drift,
     "ansible": lambda d: AnsibleSource(playbook="site.yml").collect_drift,
     "helm": lambda d: HelmSource().collect_drift,

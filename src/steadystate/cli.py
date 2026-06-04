@@ -77,8 +77,8 @@ from .reason.pipeline import CORRELATORS
 from .reconcile_state import reconcile
 from .serialize import report_to_dict
 from .sources import CAPABILITIES, DRIFT_SOURCES, PATHLESS_SOURCES, build_drift_source
-from .sources.base import SourceError
-from .sources.k8s import capture_baseline
+from .sources.base import DriftSource, SourceError
+from .sources.k8s import HelmLiveSource, KustomizeLiveSource, capture_baseline
 from .state import PendingAction, StateStore, filter_findings
 from .sweep import render_sweep, sweep_targets
 from .targets import (
@@ -546,7 +546,9 @@ def scan(
 @app.command()
 def verify(
     declared: Path = typer.Argument(
-        ..., help="Your declared 'left': a Kustomize overlay directory (with a kustomization.yaml)."
+        ...,
+        help="Your declared 'left': a Kustomize overlay dir (kustomization.yaml) or a Helm chart "
+        "dir (Chart.yaml) -- auto-detected.",
     ),
     context: str = typer.Option(
         "",
@@ -557,6 +559,18 @@ def verify(
         "",
         "--kubeconfig",
         help="Read the context from this kubeconfig file (off the default path).",
+    ),
+    release: str = typer.Option(
+        "",
+        "--release",
+        help="Helm only: the release name (must match the installed release so `.Release.Name`-"
+        "derived resource names align). Defaults to the chart dir's name.",
+    ),
+    values: list[str] = typer.Option(
+        [], "--values", "-f", help="Helm only: a values file (repeatable), as `helm install -f`."
+    ),
+    namespace: str = typer.Option(
+        "", "--namespace", "-n", help="Helm only: the release namespace, as `helm install -n`."
     ),
     label: str = typer.Option("", "--label", help="Environment label stamped on each finding."),
     state: Path = typer.Option(
@@ -572,19 +586,34 @@ def verify(
 ) -> None:
     """Verify the running cluster against your declared Git state -- **verify the left**.
 
-    Renders your Kustomize overlay (kubectl's built-in kustomize -- no extra tooling, no YAML
-    wrangling) and reconciles it against the live cluster, scoped to the namespaces the overlay
-    touches. It answers "is prod still what Git says?": a workload **in Git but not running**
-    (ADDED), **running but drifted** from Git -- e.g. an out-of-band image change (MODIFIED), or
-    **running but not in Git** (REMOVED). Coarse on purpose (presence + image + replicas), so it
-    flags real divergence, not the hundred fields the cluster mutates server-side. Findings land in
-    the store like any other -- muteable, tracked new/recurring/resolved, and (within the bound)
-    actionable -- so you run it continuously, not once.
+    Renders your declared source -- a **Kustomize overlay** (`kustomization.yaml`) or a **Helm
+    chart** (`Chart.yaml`), auto-detected -- with the platform's own tooling (no YAML wrangling),
+    and reconciles it against the live cluster, scoped to the namespaces the render touches. Answers
+    "is prod still what Git says?": a workload **in Git but not running** (ADDED), **running but
+    drifted** from Git -- e.g. an out-of-band image change (MODIFIED), or **running but not in Git**
+    (REMOVED). Coarse on purpose (presence + image + replicas), so it flags real divergence, not the
+    hundred fields the cluster mutates server-side. Findings land in the store like any other --
+    muteable, tracked new/recurring/resolved, and (within the bound) actionable -- so you run it
+    continuously, not once.
 
-    The same engine backs `scan --source kustomize-live <dir>`; this is the friendly entrypoint."""
+    Helm: `--release`/`--values`/`--namespace` mirror `helm install`. The same engine backs
+    `scan --source kustomize-live|helm-live <dir>`; this is the friendly entrypoint."""
+    if (declared / "Chart.yaml").exists():
+        source_name = "helm-live"
+        src: DriftSource = HelmLiveSource(
+            declared, release=release, values=[Path(v) for v in values], namespace=namespace
+        )
+    elif any((declared / n).exists() for n in ("kustomization.yaml", "kustomization.yml")):
+        source_name = "kustomize-live"
+        src = KustomizeLiveSource(declared)
+    else:
+        raise typer.BadParameter(
+            f"{declared} is neither a Helm chart (Chart.yaml) nor a Kustomize overlay "
+            "(kustomization.yaml)."
+        )
     try:
         report = build_report(
-            "kustomize-live", declared, context=context, kubeconfig=kubeconfig, label=label
+            source_name, declared, context=context, kubeconfig=kubeconfig, label=label, src=src
         )
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from None
