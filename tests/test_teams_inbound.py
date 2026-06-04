@@ -73,7 +73,7 @@ def test_parse_actor_defaults_when_absent():
 
 def test_parse_rejects_no_command_keyword_without_fp_and_no_text():
     assert command_from_activity(_activity("<at>steadystate</at> hello there")) is None
-    assert command_from_activity(_activity("approve")) is None  # keyword, no fp after it
+    assert command_from_activity(_activity("probe")) is None  # needs a target, none given
     assert command_from_activity({"type": "message"}) is None  # no text
 
 
