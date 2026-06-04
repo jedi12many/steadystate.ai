@@ -237,6 +237,37 @@ def test_reconcile_on_empty_report_is_noop():
     assert reconcile(_report(), store, now=_t(1)) == []
 
 
+def test_resolve_grace_parses_the_window_and_defaults():
+    from datetime import timedelta
+
+    from steadystate.reconcile_state import DEFAULT_RESOLVE_GRACE, resolve_grace
+
+    assert resolve_grace(None) == DEFAULT_RESOLVE_GRACE  # unset -> the default (30m)
+    assert resolve_grace("45m") == timedelta(minutes=45)
+    assert resolve_grace("2h") == timedelta(hours=2)
+    assert resolve_grace("1d") == timedelta(days=1)
+    assert resolve_grace("15") == timedelta(minutes=15)  # bare number -> minutes
+    assert resolve_grace("0") == timedelta(0)  # explicit opt-out: resolve on first absence
+    assert resolve_grace("nonsense") == DEFAULT_RESOLVE_GRACE  # junk falls back, never guesses
+
+
+def test_reconcile_holds_an_intermittent_finding_within_the_grace_window():
+    # Through the real scan path: a finding that skips a scan inside the grace stays open (no flap);
+    # once it's been absent past the grace it resolves. Sub-30m timestamps exercise the window.
+    from datetime import datetime
+
+    store = StateStore()
+    drift = _drift()
+    t0 = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
+    reconcile(_report(_alert(drift)), store, now=t0)  # present
+    # absent 10m later -- within the default 30m grace -> not resolved
+    assert reconcile(_report(), store, now=t0.replace(minute=10)) == []
+    assert store.status(drift.fingerprint) == "open"
+    # still absent 40m later -- past the grace -> resolved
+    resolved = reconcile(_report(), store, now=t0.replace(minute=40))
+    assert [r.fingerprint for r in resolved] == [drift.fingerprint]
+
+
 # -- pipeline stays pure --------------------------------------------------------
 
 

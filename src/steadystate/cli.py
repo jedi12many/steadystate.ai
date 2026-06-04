@@ -38,6 +38,7 @@ from .act.reflex import reflexes, run_hold
 from .catalog import gather_catalog, render_console, render_html
 from .discover import (
     ansible_live_target,
+    context_reachable,
     context_targets,
     deep_inspect,
     deep_targets,
@@ -1439,12 +1440,19 @@ def doctor(
     _render_audit(Console(), env, title="Configuration")
 
 
-def _create_targets(findings: list, extra: list | None = None) -> None:
+def _create_targets(
+    findings: list, extra: list | None = None, *, check_reachable: bool = False
+) -> None:
     """`--create`: (re)write the targets registry (the name -> target map the chat listener
     resolves) to exactly what's discovered *now* -- overwriting the old file. A re-run reflects
     current reality: a re-discovered target is refreshed, and a stale entry (a cluster/kubeconfig/
     source no longer here) is dropped rather than lingering. ``extra`` carries the live-discovered
-    targets from a paired ``--deep`` (compose projects rooted outside the cwd)."""
+    targets from a paired ``--deep`` (compose projects rooted outside the cwd).
+
+    ``check_reachable`` skips a discovered live cluster context whose API server isn't answering (a
+    stopped minikube, a deleted context still lingering in the kubeconfig) -- one fast `kubectl
+    cluster-info` per live target, so a dead cluster never lands in the registry. Only ``k8s-live``
+    targets are pinged; file/host sources are never contacted."""
     target_file = Path(os.environ.get(TARGETS_ENV) or DEFAULT_TARGETS_FILE)
     proposed = proposed_targets(findings, Path.cwd())
     # Fold in the live-discovered targets, but drop any the cwd-local pass already covers -- so a
@@ -1457,7 +1465,20 @@ def _create_targets(findings: list, extra: list | None = None) -> None:
         if key not in seen:
             proposed.append(target)
             seen.add(key)
-    if not proposed:
+    # Reachability filter: a discovered live context whose cluster isn't up (a stopped minikube, a
+    # deleted context still in the kubeconfig) shouldn't be registered as a probe target.
+    unreachable: list = []
+    if check_reachable:
+        kept = []
+        for target in proposed:
+            if target.source == "k8s-live" and not context_reachable(
+                target.context, target.kubeconfig
+            ):
+                unreachable.append(target)
+            else:
+                kept.append(target)
+        proposed = kept
+    if not proposed and not unreachable:
         typer.echo("\nno scannable source found here -- nothing to create.")
         return
     try:
@@ -1475,6 +1496,11 @@ def _create_targets(findings: list, extra: list | None = None) -> None:
         mark = "refreshed" if target.name in existing else "added"
         locator = f"context={target.context}" if target.context else target.path
         typer.echo(f"  {target.name:<26} {target.source} @ {locator}  [{mark}]")
+    for target in unreachable:
+        typer.echo(
+            f"  {target.name:<26} {target.source} @ context={target.context}  "
+            f"[skipped (unreachable)]"
+        )
     for name in removed:
         typer.echo(f"  {name:<26} [removed (stale)]")
     typer.echo(f"point the listener at it:  export {TARGETS_ENV}={target_file}")
@@ -1497,6 +1523,14 @@ def discover(
         "when several are found. With --deep, also registers live compose projects rooted outside "
         "the cwd. OVERWRITES the registry with what's discovered now -- stale entries (no longer "
         "present) are dropped, a re-discovered target is refreshed.",
+    ),
+    reachable: bool = typer.Option(
+        True,
+        "--reachable/--no-reachable",
+        help="With --create, skip a live cluster context whose cluster isn't reachable (a stopped "
+        "minikube, a deleted context left in the kubeconfig) -- a fast `kubectl cluster-info` per "
+        "context. Use --no-reachable to register every context even if unreachable (e.g. a CI or "
+        "setup box that can't reach the clusters at discover time).",
     ),
     emit_ci: bool = typer.Option(
         False,
@@ -1569,7 +1603,7 @@ def discover(
             ansible_live = ansible_live_target(Path.cwd())  # a live host-health target if inventory
             if ansible_live is not None:
                 extra.append(ansible_live)
-            _create_targets(findings, extra=extra)
+            _create_targets(findings, extra=extra, check_reachable=reachable)
 
     # --check turns "nothing to scan here" into a non-zero exit, AFTER the report/create so the
     # output (and any target writes) still happen -- it only gates the exit code.
