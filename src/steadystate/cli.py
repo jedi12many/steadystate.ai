@@ -24,6 +24,8 @@ from .act.decide import (
     CatalogDecider,
     Decider,
     LLMDecider,
+    act_on_proposals,
+    decider_auto_enabled,
     environment_context,
     propose_for,
     record_proposals,
@@ -952,10 +954,17 @@ def propose(
         "drives, you confirm with `approve`/`fix`. Out-of-bound ones stay advisory. Without it, "
         "this is read-only.",
     ),
+    apply: bool = typer.Option(
+        False,
+        "--apply",
+        help="Auto-RUN the AUTHORIZED (within-bound) proposals through the approve guardrail, no "
+        "trigger needed -- the decider as a bounded operator. Requires the access grant "
+        "STEADYSTATE_DECIDER_AUTO; out-of-bound ones still escalate to a human.",
+    ),
     deep: bool = typer.Option(False, "--deep", help="Probe deep (pod logs + node disk %) first."),
 ) -> None:
-    """What an autonomous **decider** would do for findings `hold` can't answer -- read-only, or
-    `--record` to put the safe ones in `pending` for you to approve.
+    """What an autonomous **decider** would do for findings `hold` can't answer -- read-only,
+    `--record` to queue the safe ones for approval, or `--apply` to let it act within the bound.
 
     A decider *proposes* a remediation for a novel finding; the deterministic **gate** then
     authorizes it -- blind to who proposed. A proposal is REJECTED unless it names a vetted
@@ -964,9 +973,12 @@ def propose(
     an un-vetted command. With `--llm`, the model is **grounded** in how *this* fleet handled the
     category before (learned lessons + recurrence), so its proposals reflect your history.
 
-    `--record` is the safe first rung of acting: AUTHORIZED proposals become **pendings** an
-    operator confirms with `approve`/`fix` (the model drives *what*, the human stays the trigger);
-    out-of-bound ones stay advisory (you run those via break-glass). It never acts on its own."""
+    `--record` queues the AUTHORIZED proposals as **pendings** an operator confirms with
+    `approve`/`fix` (the model drives *what*, the human stays the trigger). `--apply` goes one step:
+    with the access grant `STEADYSTATE_DECIDER_AUTO` set, it RUNS them through the exact same
+    guardrail (audited as `decider`) -- autonomy is granted like a new admin's access, not earned by
+    a track record; the bound + catalog allow-list is the guardrail, your DR plan the backstop.
+    Either way, out-of-bound proposals stay advisory -- a human runs those via break-glass."""
     target_file = _targets_file()
     if not target_file.exists():
         typer.echo(f"no targets file ({target_file}). Create one with `discover --create`.")
@@ -992,6 +1004,32 @@ def propose(
         else:
             decider = CatalogDecider()
         gated = propose_for(result.report, decider)  # propose_for honors the operator's bound dial
+        if apply:
+            if not decider_auto_enabled():
+                typer.echo(
+                    "propose --apply needs the decider's access grant -- set "
+                    "STEADYSTATE_DECIDER_AUTO=1 to let it act within the bound. (Use --record to "
+                    "queue the proposals for your approval instead.)"
+                )
+                return
+            executed, advised, _dropped = act_on_proposals(store, gated, datetime.now(UTC))
+            typer.echo(
+                f"propose --apply ({decider.name}): {len(executed)} acted (within bound), "
+                f"{len(advised)} advisory (break-glass)."
+            )
+            for g, res in executed:
+                mark = "ran" if res is not None and res.applied else "failed"
+                typer.echo(f"  [{mark}] {g.proposal.identity}  ->  {g.proposal.action}")
+                typer.echo(f"      {res.detail if res is not None else g.proposal.command}")
+            for adv in advised:
+                p = adv.proposal
+                typer.echo(f"  [advisory] {p.identity}  ->  {p.action}  ({adv.reason})")
+                typer.echo(f"      a human runs this via break-glass: run {p.action} <fp>")
+            if not executed and not advised:
+                typer.echo(
+                    "  nothing to act on -- no within-bound proposal for an unhandled finding."
+                )
+            return
         if record:
             recorded, advised, _dropped = record_proposals(store, gated, datetime.now(UTC))
             typer.echo(

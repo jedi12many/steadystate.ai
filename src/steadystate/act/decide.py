@@ -14,13 +14,20 @@ gate re-validates the command and reads the trusted envelope; a hallucinated act
 out-of-bounds one, or a malformed command is rejected, not run. The model decides *what to do*; the
 bound -- a human's, set once -- decides *how much it is ever allowed to break*.
 
-This module is read-only: a decider *proposes*, and the gate *authorizes or not*. Actually running
-an authorized proposal is a later graduation -- exactly the propose->watch->auto path the reflexes
-took -- so an LLM's first job is to be *right on paper*, watched, before it is ever trusted to act.
+Acting on an authorized proposal is *granted*, not *earned*. A track record of right answers does
+not retire the hallucination risk the guardrail exists for -- ten green runs leave the next call
+exactly as fallible -- so we don't make the decider serve a probation to prove a risk away that it
+can't. We grant access the way a team grants a new admin access: on day one, scoped to a role, with
+mistakes priced in. Here the role is the **bound** + the catalog allow-list -- the guardrail that
+keeps it *relatively* safe -- and the operator's disaster-recovery plan is the final backstop. So
+``STEADYSTATE_DECIDER_AUTO`` is the grant (the same overlay knob that promotes a reflex to auto):
+flip it on and ``propose --apply`` runs the within-bound proposals through the exact human-approve
+guardrail, audited as ``decider``. Out-of-bound never auto-runs -- it still escalates to a human.
 """
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -28,6 +35,7 @@ from typing import Protocol, runtime_checkable
 
 from ..probe.base import Symptom
 from ..state import PendingAction, StateStore
+from .base import RemediationResult
 from .bounds import BoundPolicy, Envelope, bound_from_env, within_bounds
 from .catalog import ACTIONS, catalog_action, catalog_menu
 from .execute import CATALOG_SOURCE
@@ -269,3 +277,61 @@ def record_proposals(
         else:
             dropped.append(g)
     return recorded, advised, dropped
+
+
+def decider_auto_enabled() -> bool:
+    """Whether the operator has GRANTED the decider standing permission to act on its own within the
+    bound. The access grant, set once via ``STEADYSTATE_DECIDER_AUTO`` -- the same env-overlay knob
+    that promotes a reflex (``STEADYSTATE_REFLEX_AUTO``). This is deliberately NOT an earned trust
+    score: a track record doesn't retire the hallucination risk the guardrail exists for, so we
+    grant access like a team grants a new admin's -- on day one, scoped to a role. The role here is
+    the bound + the catalog allow-list (the guardrail), with the operator's DR plan the backstop.
+    Out-of-bound actions never auto-run regardless of this grant. Pure but for the env read; any
+    truthy value but the usual falsey words enables it (default OFF: the decider proposes only)."""
+    raw = os.environ.get("STEADYSTATE_DECIDER_AUTO", "").strip().lower()
+    return raw not in ("", "0", "false", "no", "off")
+
+
+def act_on_proposals(
+    store: StateStore, gated: list[GatedProposal], now: datetime, *, actor: str = "decider"
+) -> tuple[
+    list[tuple[GatedProposal, RemediationResult | None]],
+    list[GatedProposal],
+    list[GatedProposal],
+]:
+    """Auto-act on the within-bound proposals -- the decider as a bounded operator, no trigger.
+    For each AUTHORIZED proposal: record the pending and immediately run it through the same approve
+    guardrail a human ``approve`` uses (claim-once + re-validate against the catalog allow-pattern +
+    within-bound re-check + audit), recorded under ``actor`` ("decider") so the trail tells an
+    autonomous fix from a human one. ESCALATE (out of bound) is never auto-run -- it stays advisory
+    for a human (break-glass). REJECTED is dropped. Returns ``(acted, advised, dropped)`` where each
+    ``acted`` entry pairs the proposal with its RemediationResult (None if nothing ran).
+
+    The guardrail is unchanged and supreme: the bound still gates every action (an out-of-bound one
+    can't reach here, and the executor re-checks the bound at run time), and a stored/tampered
+    command that no longer matches a vetted catalog shape is refused. Autonomy only moves a
+    within-bound fix from 'a human triggers it' to 'it runs' -- never one inch past the bound."""
+    from .approve import apply_pending
+
+    acted: list[tuple[GatedProposal, RemediationResult | None]] = []
+    advised: list[GatedProposal] = []
+    dropped: list[GatedProposal] = []
+    for g in gated:
+        if g.verdict == AUTHORIZED:
+            store.record_pending(
+                PendingAction(
+                    fingerprint=g.proposal.fingerprint,
+                    source=CATALOG_SOURCE,
+                    path="",
+                    drift_identity=g.proposal.identity,
+                    command=g.proposal.command,
+                ),
+                now,
+            )
+            _, result = apply_pending(store, g.proposal.fingerprint, actor, now)
+            acted.append((g, result))
+        elif g.verdict == ESCALATE:
+            advised.append(g)
+        else:
+            dropped.append(g)
+    return acted, advised, dropped
