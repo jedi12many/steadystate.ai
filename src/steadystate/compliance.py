@@ -1,107 +1,167 @@
-"""The CIS compliance report -- a benchmark view over the standing-policy findings.
+"""The compliance report -- one stacked benchmark view over the standing-policy findings.
 
-The domain packs already emit a ``PolicyFinding`` for every CIS rule a resource violates (CIS
-Docker, CIS Kubernetes Pod Security), each carrying its CIS section as a ``Reference`` with a
-``level``. This rolls those findings up into a benchmark report: per control, which resources fail
-it and how badly. Filtered to a CIS level (1 by default), so ``compliance`` answers "what CIS Level
-1 controls is this failing, on what?".
+The domain packs emit a ``PolicyFinding`` for every benchmark rule a resource violates (CIS Docker,
+CIS Kubernetes Pod Security at Level 1, the stricter Level 2 posture gaps via the compliance-only
+posture pass). Each finding carries the benchmark control(s) it maps to as ``Reference``s. This
+rolls them into a single report: grouped by the *check* steadystate actually performs, citing every
+benchmark control + level that check satisfies, worst-first. CIS and STIG (when mapped) stack into
+one scan -- the same underlying check cited under each framework, not separate runs.
 
-Honest framing (the same line the packs draw): this reports the controls steadystate actually
-*checks* and that something *violated* -- it is **not** a full pass/fail over every control in the
-published benchmark. The control-plane sections (CIS Kubernetes §1-4) need node/file access
-(kube-bench territory) and are N/A on managed clusters; a complete control catalog with explicit
-PASS rows is a deliberate follow-up. What this gives is the live, agentless failures, grouped the
-way the benchmark numbers them. Pure -- it takes findings in and renders text/JSON out.
+Honest framing (the disclaimer the report prints): steadystate validates these **live + agentless**,
+from the cluster API and declared config, so it covers the *workload-policy* controls it can
+observe. It does NOT cover the control-plane / node controls (API-server, etcd, kubelet flags --
+node access / kube-bench, and N/A on managed clusters), nor the procedural controls a human must
+attest. The report says so, on every run. Pure -- findings in, text/JSON out.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .domains.base import PolicyFinding
+from .domains.base import PolicyFinding, Reference
 from .reason.alert import Severity
 
 # Severity is a str Enum (not ordinal), so rank explicitly: worst first in the report.
 _SEVERITY_RANK = {Severity.CRITICAL: 3, Severity.HIGH: 2, Severity.MEDIUM: 1, Severity.LOW: 0}
 
+# The frameworks this report treats as compliance benchmarks (vs MITRE, an attack-technique rail).
+_BENCHMARKS = ("CIS", "STIG")
+
+# Printed on every report: what "validated live" actually covers, and what it deliberately doesn't.
+DISCLAIMER = (
+    "Scope: validated live + agentless, from the cluster API / declared config -- the "
+    "workload-policy controls steadystate can observe (Pod Security, capabilities, host "
+    "namespaces, seccomp, ...). NOT covered here (needs another tool or a human): control-plane & "
+    "node controls (API-server, etcd, kubelet flags -- node access / kube-bench; N/A on managed "
+    "clusters), and procedural controls (policy/process attestation)."
+)
+
 
 @dataclass(frozen=True)
-class ControlResult:
-    """One CIS control that something failed: its id + name, the worst severity across the
-    resources failing it, and those resources (deduped, in first-seen order)."""
+class CheckResult:
+    """One check steadystate performs that something failed: the worst severity across the failing
+    resources, the benchmark controls it maps to (CIS/STIG, with levels), and those resources."""
 
-    framework: str  # "CIS"
-    control_id: str  # e.g. "Kubernetes-5.2.1"
-    name: str  # the control's name, from the Reference
-    severity: Severity  # the worst severity among the failing resources
-    resources: tuple[str, ...]  # the resource identities failing this control
+    rule_id: str  # the check steadystate owns, e.g. "k8s-privileged"
+    title: str  # a generic, per-control description (from the mapped control's name)
+    severity: Severity
+    controls: tuple[Reference, ...]  # the benchmark controls this check satisfies (CIS/STIG)
+    resources: tuple[str, ...]  # the resource identities failing this check
 
 
-def cis_report(findings: list[PolicyFinding], level: int | None = 1) -> list[ControlResult]:
-    """Group CIS ``findings`` by control, filtered to ``level`` (None = every CIS level). Worst
-    severity first, then control id. Pure -- the caller collects the findings (one scan's policy
-    pass) and decides how to render."""
-    by_control: dict[str, dict] = {}
+def _benchmark_refs(finding: PolicyFinding, level: int | None, framework: str | None) -> list:
+    """The benchmark (CIS/STIG) references on ``finding`` that pass the optional level/framework
+    filters. A level filter applies only to refs that *have* a level (CIS); a non-levelled framework
+    (STIG) passes the level filter so it still stacks in."""
+    refs = [r for r in finding.references if r.framework in _BENCHMARKS]
+    if framework is not None:
+        refs = [r for r in refs if r.framework.upper() == framework.upper()]
+    if level is not None:
+        refs = [r for r in refs if r.level is None or r.level == level]
+    return refs
+
+
+def compliance_report(
+    findings: list[PolicyFinding], *, level: int | None = None, framework: str | None = None
+) -> list[CheckResult]:
+    """Group ``findings`` by the check they failed, citing every benchmark control that check maps
+    to. ``level`` (CIS level) and ``framework`` ("CIS"/"STIG") are optional filters; the default
+    (both None) stacks every framework and level into one report. Worst severity first, then rule.
+    Pure -- the caller collects the findings (the policy + posture passes) and renders."""
+    by_check: dict[str, dict] = {}
     for finding in findings:
-        for ref in finding.references:
-            if ref.framework != "CIS":
-                continue
-            if level is not None and ref.level != level:
-                continue
-            entry = by_control.setdefault(
-                ref.id,
-                {"name": ref.name, "severity": finding.severity, "resources": []},
-            )
-            entry["resources"].append(finding.identity)
-            if _SEVERITY_RANK[finding.severity] > _SEVERITY_RANK[entry["severity"]]:
-                entry["severity"] = finding.severity
+        refs = _benchmark_refs(finding, level, framework)
+        if not refs:
+            continue  # no benchmark control matched the filters -> not in this report
+        entry = by_check.setdefault(
+            finding.rule_id,
+            {"severity": finding.severity, "controls": {}, "resources": []},
+        )
+        entry["resources"].append(finding.identity)
+        if _SEVERITY_RANK[finding.severity] > _SEVERITY_RANK[entry["severity"]]:
+            entry["severity"] = finding.severity
+        for ref in refs:
+            entry["controls"].setdefault((ref.framework, ref.id), ref)
     results = [
-        ControlResult(
-            framework="CIS",
-            control_id=control_id,
-            name=entry["name"],
+        CheckResult(
+            rule_id=rule_id,
+            title=next(iter(entry["controls"].values())).name or rule_id,
             severity=entry["severity"],
+            controls=tuple(entry["controls"].values()),
             resources=tuple(dict.fromkeys(entry["resources"])),  # dedupe, keep order
         )
-        for control_id, entry in by_control.items()
+        for rule_id, entry in by_check.items()
     ]
-    return sorted(results, key=lambda r: (-_SEVERITY_RANK[r.severity], r.control_id))
+    return sorted(results, key=lambda r: (-_SEVERITY_RANK[r.severity], r.rule_id))
 
 
-def render_cis_report(results: list[ControlResult], level: int | None = 1) -> list[str]:
-    """Render the grouped CIS report as console lines. A clean header (level, controls failing,
-    resources affected) then, per control worst-first, its id/name/severity and the failing
-    resources. An all-clear when nothing failed. Pure."""
-    scope = f"CIS Level {level}" if level is not None else "CIS"
+def _control_chips(controls: tuple[Reference, ...]) -> str:
+    """The benchmark controls a check maps to, as inline chips: `CIS Kubernetes-5.2.1 (L1)`."""
+    parts = []
+    for ref in controls:
+        suffix = f" (L{ref.level})" if ref.level is not None else ""
+        parts.append(f"{ref.framework} {ref.id}{suffix}")
+    return "  ".join(parts)
+
+
+def _scope_label(level: int | None, framework: str | None) -> str:
+    fw = framework.upper() if framework else "/".join(_BENCHMARKS)
+    return f"{fw} Level {level}" if level is not None else fw
+
+
+def render_compliance_report(
+    results: list[CheckResult],
+    *,
+    level: int | None = None,
+    framework: str | None = None,
+    max_resources: int = 10,
+) -> list[str]:
+    """Render the stacked report as console lines: a header (scope + counts), the scope disclaimer,
+    then each failing check worst-first -- its severity, description, the benchmark control chips,
+    and the failing resources (capped at ``max_resources``, with a '+N more'). An all-clear when
+    nothing failed. Pure."""
+    scope = _scope_label(level, framework)
     if not results:
-        return [f"{scope}: no failures -- every checked control passed on the scanned resources."]
+        return [
+            f"{scope}: no failures -- every checked control passed on the scanned resources.",
+            "",
+            DISCLAIMER,
+        ]
     affected = len({r for result in results for r in result.resources})
     lines = [
-        f"{scope}: {len(results)} control(s) failing across {affected} resource(s)",
-        "(the controls steadystate checks live, agentless -- not a full benchmark catalog)",
+        f"{scope}: {len(results)} check(s) failing across {affected} resource(s)",
+        DISCLAIMER,
+        "",
     ]
     for result in results:
-        lines.append(
-            f"  [{result.severity.value.upper():<8}] {result.framework} {result.control_id}  "
-            f"{result.name}"
-        )
-        for identity in result.resources:
+        chips = _control_chips(result.controls)
+        lines.append(f"  [{result.severity.value.upper():<8}] {result.title}   {chips}")
+        for identity in result.resources[:max_resources]:
             lines.append(f"      - {identity}")
+        if len(result.resources) > max_resources:
+            lines.append(f"      ... and {len(result.resources) - max_resources} more")
     return lines
 
 
-def cis_report_as_dict(results: list[ControlResult], level: int | None = 1) -> dict:
-    """The report as a JSON-ready dict, for `compliance --json` (other tooling / an agent)."""
+def compliance_report_as_dict(
+    results: list[CheckResult], *, level: int | None = None, framework: str | None = None
+) -> dict:
+    """The stacked report as a JSON-ready dict, for `compliance --json`."""
     return {
-        "framework": "CIS",
+        "frameworks": list(_BENCHMARKS) if framework is None else [framework.upper()],
         "level": level,
-        "controls_failing": len(results),
+        "checks_failing": len(results),
         "resources_affected": len({r for result in results for r in result.resources}),
-        "controls": [
+        "disclaimer": DISCLAIMER,
+        "checks": [
             {
-                "id": result.control_id,
-                "name": result.name,
+                "rule_id": result.rule_id,
+                "title": result.title,
                 "severity": result.severity.value,
+                "controls": [
+                    {"framework": ref.framework, "id": ref.id, "level": ref.level}
+                    for ref in result.controls
+                ],
                 "resources": list(result.resources),
             }
             for result in results

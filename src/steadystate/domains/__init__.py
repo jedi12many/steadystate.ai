@@ -17,7 +17,14 @@ import logging
 from typing import cast
 
 from ..plugins import discover
-from .base import Domain, PolicyFinding, Reference, evaluate_with, references_for
+from .base import (
+    Domain,
+    PolicyFinding,
+    Reference,
+    evaluate_posture_with,
+    evaluate_with,
+    references_for,
+)
 from .compliance import DockerComplianceDomain
 from .security import SecurityDomain
 from .security_azure import AzureSecurityDomain
@@ -71,6 +78,7 @@ __all__ = [
     "PolicyFinding",
     "Reference",
     "default_domains",
+    "evaluate_posture_with",
     "evaluate_with",
     "references_for",
 ]
