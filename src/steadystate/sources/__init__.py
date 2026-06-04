@@ -22,6 +22,7 @@ from .base import Capabilities, DriftSource
 from .docker_compose import DockerComposeSource
 from .helm import HelmSource
 from .k8s import (
+    HelmLiveSource,
     KubernetesBaselineSource,
     KubernetesLiveSource,
     KubernetesSource,
@@ -98,6 +99,13 @@ def _kustomize_live(path: Path) -> DriftSource:
     return KustomizeLiveSource(path)
 
 
+def _helm_live(path: Path) -> DriftSource:
+    # Verify the left: the path is a Helm chart dir; `helm template` renders it (release name
+    # defaults to the chart dir's name) and it reconciles against the live cluster. `verify` exposes
+    # --release/--values/--namespace for precision; this factory takes the chart's defaults.
+    return HelmLiveSource(path)
+
+
 # name -> factory(path) -> DriftSource. Indexed by the CLI's --source choice.
 # docker-compose has no native plan diff, so it reconciles declared services
 # (`docker compose config`) against running containers (`docker compose ps`).
@@ -111,6 +119,7 @@ _BUILTIN_SOURCES: dict[str, Callable[[Path], DriftSource]] = {
     "k8s-live": _k8s_live,
     "k8s-baseline": _k8s_baseline,
     "kustomize-live": _kustomize_live,
+    "helm-live": _helm_live,
     "rancher": _rancher,
     "helm": _helm,
 }
@@ -131,6 +140,7 @@ _BUILTIN_CAPABILITIES: dict[str, Capabilities] = {
     "k8s-live": KubernetesLiveSource.commands,
     "k8s-baseline": KubernetesLiveSource.commands,
     "kustomize-live": KustomizeLiveSource.commands,
+    "helm-live": HelmLiveSource.commands,
     "rancher": RancherSource.commands,
     "helm": HelmSource.commands,
 }

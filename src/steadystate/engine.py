@@ -24,7 +24,7 @@ from .reason.llm import LLMAnalyst, PromptGate
 from .reason.pipeline import Pipeline, build_correlator
 from .reason.report import Report, Tuning
 from .sources import build_drift_source
-from .sources.base import StateSource
+from .sources.base import DriftSource, StateSource
 
 
 @runtime_checkable
@@ -112,9 +112,15 @@ def build_report(
     inventory: str = "",
     scan_logs: bool = False,
     llm_gate: PromptGate | None = None,
+    src: DriftSource | None = None,
 ) -> Report:
     """Build a reasoned Report: drift + (optional) probe symptoms, scored + correlated + enriched,
     every item stamped with ``label``. Pure -- no state store, no surfaces.
+
+    ``src`` (opt-in) is a pre-built drift source used instead of constructing one from
+    ``source``/``path`` -- for a source that needs more than a path to build (a Helm chart's release
+    name + values files). ``source``/``path`` are still passed for the executor + remediability
+    lookups; context/kubeconfig/inventory are still threaded onto it.
 
     ``context`` (when set) aims the source + prober at a named backend context -- today a kube
     context, so the live cluster-health source and the kubectl probe both read that one cluster; a
@@ -137,7 +143,7 @@ def build_report(
     grouping = build_correlator(correlator, analyst)
     enricher = build_enricher(enrich)
     prober = build_prober_for(probe, source, path)
-    src = build_drift_source(source, path)
+    src = src if src is not None else build_drift_source(source, path)
     if context:  # aim whichever of the source/prober support it at this backend context
         for component in (src, prober):
             if isinstance(component, SupportsContext):

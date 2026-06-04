@@ -9,8 +9,10 @@ from typer.testing import CliRunner
 from steadystate.cli import app
 from steadystate.model import ChangeType
 from steadystate.sources.k8s import (
+    HelmLiveSource,
     KustomizeLiveSource,
     _objects_from_kubectl_json,
+    render_helm,
     render_kustomize,
 )
 
@@ -90,20 +92,78 @@ def test_kustomize_live_clean_when_cluster_matches_git():
     )
 
 
-# -- the CLI `verify` command, end to end -----------------------------------------------------
+# -- Helm: render a chart, reconcile vs live (same machinery as Kustomize) ---------------------
 
 
-def test_verify_cli_surfaces_drift_from_git(monkeypatch):
+def test_render_helm_templates_then_converts_with_release_and_values(monkeypatch):
+    seen: list[list[str]] = []
+
+    def fake_run(argv, **kw):
+        seen.append(argv)
+        if argv[0] == "helm":
+            return "apiVersion: apps/v1\nkind: Deployment"  # the rendered YAML
+        return json.dumps(_dep("prod", "web", "web:2"))  # the convert
+
+    monkeypatch.setattr("steadystate.sources.k8s.run_tool", fake_run)
+    objs = render_helm("chart", release="myapp", values=["values.yaml"], namespace="prod")
+    assert [o["metadata"]["name"] for o in objs] == ["web"]
+    assert seen[0][:3] == ["helm", "template", "myapp"]  # release name passed
+    assert "--namespace" in seen[0] and "-f" in seen[0]  # namespace + values threaded
+    assert "create" in seen[1]  # then the offline kubectl convert
+
+
+def test_helm_live_reconciles_chart_against_live():
+    declared = [_dep("prod", "web", "web:2")]  # what the chart renders
+    observed = {"kind": "List", "items": [_dep("prod", "web", "web:1")]}  # live (drifted)
+    src = HelmLiveSource("chart", declared=declared, observed=observed)
+    drifts = {d.identity: d.change_type for d in src.collect_drift()}
+    assert drifts == {"apps/Deployment/prod/web": ChangeType.MODIFIED}
+
+
+def test_helm_live_release_name_defaults_to_chart_dir():
+    assert HelmLiveSource("charts/myapp")._release == "myapp"
+    assert HelmLiveSource("charts/myapp", release="prod-myapp")._release == "prod-myapp"
+
+
+# -- the CLI `verify` command, end to end (auto-detects Kustomize vs Helm) ---------------------
+
+
+def test_verify_cli_surfaces_drift_from_a_kustomize_overlay(monkeypatch, tmp_path):
+    (tmp_path / "kustomization.yaml").write_text("resources: []\n")  # auto-detected as Kustomize
+
     def fake_run(argv, **kw):
         if "kustomize" in argv:
             return "apiVersion: apps/v1\nkind: Deployment"  # rendered YAML (non-empty)
         if "create" in argv:  # render -> the declared 'left'
             return json.dumps({"kind": "List", "items": [_dep("prod", "web", "web:2")]})
-        return json.dumps(
-            {"kind": "List", "items": [_dep("prod", "web", "web:1")]}
-        )  # live (drifted)
+        return json.dumps({"kind": "List", "items": [_dep("prod", "web", "web:1")]})  # live
 
     monkeypatch.setattr("steadystate.sources.k8s.run_tool", fake_run)
-    result = CliRunner().invoke(app, ["verify", "overlay", "--context", "prod", "--stateless"])
+    result = CliRunner().invoke(app, ["verify", str(tmp_path), "--context", "prod", "--stateless"])
     assert result.exit_code == 0, result.output
     assert "web" in result.output  # the drifted workload surfaces
+
+
+def test_verify_cli_detects_and_renders_a_helm_chart(monkeypatch, tmp_path):
+    chart = tmp_path / "web"  # the dir name becomes the default release name
+    chart.mkdir()
+    (chart / "Chart.yaml").write_text("apiVersion: v2\nname: web\nversion: 0.1.0\n")  # -> Helm
+
+    def fake_run(argv, **kw):
+        if argv[0] == "helm":
+            assert argv[1:3] == ["template", "web"]  # release defaults to the chart dir's name
+            return "apiVersion: apps/v1\nkind: Deployment"
+        if "create" in argv:
+            return json.dumps({"kind": "List", "items": [_dep("prod", "web", "web:2")]})
+        return json.dumps({"kind": "List", "items": [_dep("prod", "web", "web:1")]})  # live drifted
+
+    monkeypatch.setattr("steadystate.sources.k8s.run_tool", fake_run)
+    result = CliRunner().invoke(app, ["verify", str(chart), "--context", "prod", "--stateless"])
+    assert result.exit_code == 0, result.output
+    assert "web" in result.output
+
+
+def test_verify_cli_rejects_a_dir_that_is_neither(tmp_path):
+    result = CliRunner().invoke(app, ["verify", str(tmp_path), "--stateless"])
+    assert result.exit_code != 0
+    assert "neither" in result.output.lower()
