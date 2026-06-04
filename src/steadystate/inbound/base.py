@@ -97,21 +97,26 @@ COMMANDS: dict[str, tuple[str, str]] = {
         "list the vetted actions you can `fix`/`run` -- name, what it does, and its blast radius",
     ),
     APPROVE: (
-        "approve <fingerprint> [<confirm>]",
-        "apply a pending remediation (guardrailed); for a break-glass action, `<confirm>` is the "
-        "target name you type to confirm (e.g. `approve <fp> worker-1234`)",
+        "approve [<n>|<fingerprint>] [<confirm>]",
+        "apply a pending remediation (guardrailed) -- by its number from `pending`, a fingerprint "
+        "(prefix ok), or bare when only one is pending; for break-glass `<confirm>` is the target "
+        "name you type to confirm (e.g. `approve <fp> worker-1234`)",
     ),
-    DECLINE: ("decline <fingerprint>", "dismiss a pending remediation"),
+    DECLINE: (
+        "decline [<n>|<fingerprint>]",
+        "dismiss a pending remediation -- by number, fingerprint (prefix ok), or the only one",
+    ),
 }
-# Verbs that require an argument to mean anything (a fingerprint for approve/decline/mute, a
-# target name for probe); the rest take none or an optional one.
-_NEEDS_ARGUMENT = frozenset({APPROVE, DECLINE, PROBE, MUTE, SHOW, FIX})
+# Verbs that require an argument to mean anything (a fingerprint for mute, a target name for probe);
+# the rest take none or an optional one.
+_NEEDS_ARGUMENT = frozenset({PROBE, MUTE, SHOW, FIX})
 # Verbs that need TWO arguments: `send <fingerprint> <surface>`, `run <action> <fingerprint>`. The
 # second plain token is the *last* one, so a natural filler word in the middle is ignored.
 _NEEDS_TWO = frozenset({SEND, RUN})
 # Verbs that take an *optional* argument (cost's period; findings' status filter); absent it, they
-# still dispatch.
-_OPTIONAL_ARGUMENT = frozenset({COST, FINDINGS})
+# still dispatch. approve/decline live here too: a bare `approve` resolves to the sole pending, and
+# the argument may be an ordinal (`approve 2`) or a fingerprint prefix -- the server resolves it.
+_OPTIONAL_ARGUMENT = frozenset({COST, FINDINGS, APPROVE, DECLINE})
 # Verbs that take an *optional second* token after their required first: `approve <fp> [<token>]`,
 # where the token is the break-glass confirm target (e.g. the node name for a `delete-node`).
 _OPTIONAL_SECOND = frozenset({APPROVE})
@@ -175,8 +180,8 @@ _TOOL_ARGS: dict[str, tuple[tuple[str, bool], ...]] = {
     RUN: (("action", True), ("fingerprint", True)),
     ACTIONS_LIST: (),
     MUTE: (("fingerprint", True),),
-    APPROVE: (("fingerprint", True),),
-    DECLINE: (("fingerprint", True),),
+    APPROVE: (("fingerprint", False),),  # optional: a number, a prefix, or bare (the only pending)
+    DECLINE: (("fingerprint", False),),
 }
 # Each verb's effect on the world -- the guardrail an agent (a Teams Copilot) must respect:
 # read-only (no change), state-write (mutes/dismissals -- reversible, no infra), guardrailed-write
@@ -245,15 +250,15 @@ def command_from_text(text: str, actor: str) -> Command | None:
             continue  # both parts required -> not actionable
         if verb in _NEEDS_ARGUMENT:
             if args:
-                # approve takes an OPTIONAL second token -- the break-glass confirm target
-                # (`approve <fp> <node-name>`); for every other verb the extra is harmless.
-                second = args[1] if verb in _OPTIONAL_SECOND and len(args) >= 2 else ""
-                return Command(verb, actor, args[0], flags=flags, argument2=second)
+                return Command(verb, actor, args[0], flags=flags)
             if is_alias:  # bare `scan`/`refresh` -> refresh the whole fleet (probe all)
                 return Command(verb, actor, "all", flags=flags)
             continue  # a required argument is absent (e.g. bare `probe`) -> not actionable
+        # Optional-argument verbs (cost/findings) and approve/decline, which may be bare. approve
+        # takes an OPTIONAL second token -- the break-glass confirm target (`approve <fp> <name>`).
         argument = args[0] if (verb in _OPTIONAL_ARGUMENT and args) else ""
-        return Command(verb, actor, argument, flags=flags)
+        second = args[1] if (verb in _OPTIONAL_SECOND and len(args) >= 2) else ""
+        return Command(verb, actor, argument, flags=flags, argument2=second)
     return None
 
 

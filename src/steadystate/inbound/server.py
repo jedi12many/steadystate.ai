@@ -70,9 +70,58 @@ def _render_pending(state_path: str) -> str:
     if not rows:
         return "No remediations awaiting approval."
     lines = [f"{len(rows)} remediation(s) awaiting approval:"]
-    lines += [f"  {p.fingerprint}  {p.source}  {p.drift_identity}" for p in rows]
-    lines.append("Approve with:  approve <fingerprint>")
+    # Number the rows so an operator can `approve <n>` instead of copying a 64-char fingerprint.
+    lines += [
+        f"  {i}. {p.fingerprint}  {p.source}  {p.drift_identity}" for i, p in enumerate(rows, 1)
+    ]
+    lines.append("Approve with:  approve <n>  (or a fingerprint, or bare if there's just one)")
     return "\n".join(lines)
+
+
+def _resolve_pending(store: StateStore, token: str) -> tuple[str, str]:
+    """Resolve an approve/decline reference to a pending fingerprint. Accepts an ordinal (1-based,
+    as `pending` lists), a fingerprint or unique prefix, or -- when ``token`` is empty -- the sole
+    pending. Returns (fingerprint, "") or ("", message). This is the heart of "not argument-heavy":
+    the common case (one pending) needs no argument at all, and the rest take a short number."""
+    rows = store.all_pending()
+    if not rows:
+        return "", "No remediations awaiting approval."
+    if not token:  # bare `approve` -> the only pending, else ask which
+        if len(rows) == 1:
+            return rows[0].fingerprint, ""
+        return "", (
+            f"{len(rows)} remediations pending -- say `approve <n>` or `approve <fingerprint>` "
+            "(see `pending`)."
+        )
+    if token.isdigit():  # an ordinal from the numbered `pending` list
+        n = int(token)
+        if 1 <= n <= len(rows):
+            return rows[n - 1].fingerprint, ""
+        return "", f"No pending #{n} -- there are {len(rows)} (see `pending`)."
+    exact = next((r for r in rows if r.fingerprint == token), None)
+    if exact is not None:
+        return exact.fingerprint, ""
+    prefixed = [r for r in rows if r.fingerprint.startswith(token)]
+    if len(prefixed) == 1:
+        return prefixed[0].fingerprint, ""
+    if not prefixed:
+        return "", f"No pending matches '{token}'. Run `pending` to list them."
+    return "", f"'{token}' matches {len(prefixed)} pending -- use more of the fingerprint."
+
+
+def _resolve_mute_target(store: StateStore, token: str) -> tuple[str, str]:
+    """Resolve a fingerprint to mute: an exact fp, a unique prefix of a *known* finding, or -- when
+    nothing matches -- the token itself, so an operator can still pre-mute a fingerprint the store
+    hasn't recorded yet (a `mute-all` correlation key, or known noise). Ambiguous prefix -> ask for
+    more. Returns (fingerprint, "") or ("", message)."""
+    if store.get(token) is not None:
+        return token, ""
+    matches = store.find_by_prefix(token)
+    if len(matches) == 1:
+        return matches[0].fingerprint, ""
+    if len(matches) > 1:
+        return "", f"'{token}' matches {len(matches)} findings -- use more of the fingerprint."
+    return token, ""  # no stored match -> pre-mute the literal token (upsert), as before
 
 
 def _compact(value: object) -> str:
@@ -633,18 +682,24 @@ def run_command(command: Command, state_path: str) -> str:
         return _render_history(state_path)
     with StateStore(state_path) as store:
         if command.verb == APPROVE:
+            fp, error = _resolve_pending(store, command.argument)
+            if error:
+                return error
             # argument2 carries the break-glass confirm token (the target name) when present.
-            message, _result = apply_pending(
-                store, command.argument, command.actor, token=command.argument2
-            )
+            message, _result = apply_pending(store, fp, command.actor, token=command.argument2)
             return message
         if command.verb == DECLINE:
-            return decline_pending(store, command.argument, command.actor)
+            fp, error = _resolve_pending(store, command.argument)
+            if error:
+                return error
+            return decline_pending(store, fp, command.actor)
         if command.verb == MUTE:
-            # Silence a finding (e.g. a benign probe result) on future scans/probes. Upserts, so
-            # it works on a fingerprint the store hasn't recorded yet -- exactly the probe case.
-            store.mute(command.argument, None, command.actor, datetime.now(UTC))
-            fp = command.argument
+            # Silence a finding (e.g. a benign probe result) on future scans/probes. Resolves a
+            # prefix to a known finding, but still upserts an unseen fingerprint (pre-mute).
+            fp, error = _resolve_mute_target(store, command.argument)
+            if error:
+                return error
+            store.mute(fp, None, command.actor, datetime.now(UTC))
             return f"Muted {fp} -- silenced on future scans until `steadystate unmute {fp}`."
     return "Nothing to do."
 

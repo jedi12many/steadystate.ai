@@ -136,8 +136,9 @@ def test_text_grammar_is_case_insensitive_and_skips_leading_noise():
     assert command_from_text("hey  PENDING please", "amy") == Command(PENDING, "amy")
 
 
-def test_text_grammar_needs_a_fingerprint_for_act_verbs_and_ignores_unknowns():
-    assert command_from_text("approve", "amy") is None  # no fingerprint -> not actionable
+def test_text_grammar_act_verbs_and_ignores_unknowns():
+    assert command_from_text("fix", "amy") is None  # fix still needs a fingerprint
+    assert command_from_text("approve", "amy") is not None  # bare approve -> the sole pending
     assert command_from_text("", "amy") is None
     assert command_from_text("status now", "amy") is None  # unknown verb
 
@@ -455,7 +456,10 @@ def test_run_command_approve_routes_to_core(monkeypatch, tmp_path):
         return "applied!", None
 
     monkeypatch.setattr("steadystate.inbound.server.apply_pending", fake_apply)
-    msg = run_command(Command(APPROVE, "amy", "fp9"), str(tmp_path / "s.db"))
+    db = str(tmp_path / "s.db")
+    with StateStore(db) as store:  # approve now resolves the fp against the pending store first
+        store.record_pending(_pending("fp9"), datetime(2026, 1, 1, tzinfo=UTC))
+    msg = run_command(Command(APPROVE, "amy", "fp9"), db)
     assert msg == "applied!" and seen == {"fp": "fp9", "actor": "amy"}
 
 
