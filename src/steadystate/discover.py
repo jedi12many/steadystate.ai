@@ -908,21 +908,33 @@ def context_targets(contexts: list[str]) -> list[Target]:
 # hits the API server; ``--request-timeout`` caps a hung/unreachable endpoint so the check fails
 # fast. Read-only, one round trip per context, and ONLY on the target-writing path (`--create`) --
 # the plain `discover` report stays fully offline.
-_REACHABLE_TIMEOUT = "3s"
+_DEFAULT_REACHABLE_TIMEOUT = "8s"
+
+
+def _reachable_timeout() -> str:
+    """The per-context reachability-probe timeout (kubectl ``--request-timeout``). Default 8s --
+    forgiving enough for a cluster behind a bastion / IAP tunnel or a slow remote endpoint, where a
+    tighter cap would false-skip a genuinely reachable cluster (a false "unreachable" is the wrong
+    failure direction for a "register only what's up" check -- you'd silently drop a real cluster).
+    Tune with ``STEADYSTATE_REACHABLE_TIMEOUT`` (e.g. ``3s`` to fail faster, ``15s`` for a far
+    cluster, ``0`` for no cap). An empty/unset value falls back to the default."""
+    return os.environ.get("STEADYSTATE_REACHABLE_TIMEOUT", "").strip() or _DEFAULT_REACHABLE_TIMEOUT
 
 
 def context_reachable(context: str, kubeconfig: str = "") -> bool:
-    """True if ``context``'s cluster answers a fast ``kubectl cluster-info`` -- so `discover
-    --create` registers only clusters that are actually up. A context still in the kubeconfig but
-    not serving (a stopped minikube, a deleted cluster) fails fast via ``--request-timeout`` and is
-    left unregistered. False whenever kubectl is absent, the context is unknown, or the API doesn't
-    answer in time -- never a crash. ``kubeconfig`` is passed through for a cwd-kubeconfig ctx."""
+    """True if ``context``'s cluster answers a ``kubectl cluster-info`` within the reachability
+    timeout -- so `discover --create` registers only clusters that are actually up. A context still
+    in the kubeconfig but not serving (a stopped minikube, a deleted cluster) fails via
+    ``--request-timeout`` and is left unregistered. False whenever kubectl is absent, the context is
+    unknown, or the API doesn't answer in time -- never a crash. The timeout is generous by default
+    (``_reachable_timeout``) so a real-but-distant cluster (behind a tunnel) isn't false-skipped.
+    ``kubeconfig`` is passed through for a cwd-kubeconfig ctx."""
     argv = [
         "kubectl",
         "cluster-info",
         "--context",
         context,
-        f"--request-timeout={_REACHABLE_TIMEOUT}",
+        f"--request-timeout={_reachable_timeout()}",
     ]
     if kubeconfig:
         argv += ["--kubeconfig", kubeconfig]

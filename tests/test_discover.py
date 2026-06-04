@@ -783,6 +783,25 @@ def test_context_reachable_pings_the_api_and_passes_kubeconfig(monkeypatch):
     assert disc.context_reachable("minikube") is False
 
 
+def test_reachable_timeout_is_configurable_with_a_forgiving_default(monkeypatch):
+    from steadystate import discover as disc
+
+    monkeypatch.delenv("STEADYSTATE_REACHABLE_TIMEOUT", raising=False)
+    assert (
+        disc._reachable_timeout() == "8s"
+    )  # forgiving default (a far cluster isn't false-skipped)
+    monkeypatch.setenv("STEADYSTATE_REACHABLE_TIMEOUT", "15s")
+    assert disc._reachable_timeout() == "15s"
+    monkeypatch.setenv("STEADYSTATE_REACHABLE_TIMEOUT", "  ")  # blank -> default, never empty
+    assert disc._reachable_timeout() == "8s"
+
+    seen: list[list[str]] = []
+    monkeypatch.setenv("STEADYSTATE_REACHABLE_TIMEOUT", "20s")
+    monkeypatch.setattr(disc, "_run", lambda argv: seen.append(argv) or (True, "ok"))
+    disc.context_reachable("prod")
+    assert "--request-timeout=20s" in seen[0]  # the configured timeout reaches kubectl
+
+
 def test_create_targets_skips_unreachable_live_context(tmp_path, monkeypatch):
     # A discovered live context whose cluster is down (a stopped minikube) is skipped, not written;
     # a reachable one is kept. --no-reachable (check_reachable=False) would register both.
@@ -852,11 +871,15 @@ def test_discover_create_cli_writes_targets_file(tmp_path, monkeypatch):
 def test_discover_create_reports_when_nothing_scannable(tmp_path, monkeypatch):
     from typer.testing import CliRunner
 
+    from steadystate import cli
     from steadystate import discover as disc
     from steadystate.cli import app
 
     monkeypatch.chdir(tmp_path)  # empty dir
     monkeypatch.setattr(disc.shutil, "which", lambda _b: None)
+    # Hermetic: no live kube contexts leak in from the host's real kubeconfig (e.g. a stale GKE
+    # context), so "nothing scannable" stays nothing -- not dependent on the dev's clusters.
+    monkeypatch.setattr(cli, "kube_contexts", lambda: [])
     monkeypatch.delenv("STEADYSTATE_TARGETS", raising=False)
 
     result = CliRunner().invoke(app, ["discover", "--create"])
