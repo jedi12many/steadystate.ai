@@ -540,6 +540,67 @@ def scan(
 
 
 @app.command()
+def verify(
+    declared: Path = typer.Argument(
+        ..., help="Your declared 'left': a Kustomize overlay directory (with a kustomization.yaml)."
+    ),
+    context: str = typer.Option(
+        "",
+        "--context",
+        help="The kube context of the cluster to verify against (a target = a cluster).",
+    ),
+    kubeconfig: str = typer.Option(
+        "",
+        "--kubeconfig",
+        help="Read the context from this kubeconfig file (off the default path).",
+    ),
+    label: str = typer.Option("", "--label", help="Environment label stamped on each finding."),
+    state: Path = typer.Option(
+        Path(DEFAULT_STATE_PATH), "--state", help="State db (memoryful; auto-created)."
+    ),
+    stateless: bool = typer.Option(
+        False, "--stateless", help="Skip the store: a pure, amnesiac check."
+    ),
+    json_out: bool = typer.Option(False, "--json", help="Emit the report as JSON."),
+    verbose: bool = typer.Option(
+        False, "--verbose", "-v", help="Show the full evidence per finding."
+    ),
+) -> None:
+    """Verify the running cluster against your declared Git state -- **verify the left**.
+
+    Renders your Kustomize overlay (kubectl's built-in kustomize -- no extra tooling, no YAML
+    wrangling) and reconciles it against the live cluster, scoped to the namespaces the overlay
+    touches. It answers "is prod still what Git says?": a workload **in Git but not running**
+    (ADDED), **running but drifted** from Git -- e.g. an out-of-band image change (MODIFIED), or
+    **running but not in Git** (REMOVED). Coarse on purpose (presence + image + replicas), so it
+    flags real divergence, not the hundred fields the cluster mutates server-side. Findings land in
+    the store like any other -- muteable, tracked new/recurring/resolved, and (within the bound)
+    actionable -- so you run it continuously, not once.
+
+    The same engine backs `scan --source kustomize-live <dir>`; this is the friendly entrypoint."""
+    try:
+        report = build_report(
+            "kustomize-live", declared, context=context, kubeconfig=kubeconfig, label=label
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from None
+    except SourceError as exc:
+        typer.secho(f"verify failed: {exc}", fg="red", err=True)
+        raise typer.Exit(1) from None
+    now = datetime.now(UTC)
+    resolved: list = []
+    if not stateless:
+        with _open_store(state) as store:
+            resolved = reconcile(report, store, now)
+    if json_out:
+        typer.echo(json.dumps(report_to_dict(report, resolved=resolved, spend=None), indent=2))
+        return
+    surface = ConsoleSurface()
+    surface.verbose = verbose
+    surface.emit(report, resolved=resolved)
+
+
+@app.command()
 def compliance(
     path: Path | None = typer.Argument(
         None, help="Source input (a manifest/snapshot dir or file). Omit when using --target."

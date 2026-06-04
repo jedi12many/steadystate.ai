@@ -478,3 +478,148 @@ class KubernetesBaselineSource(KubernetesLiveSource):
         declared = [_images_only(self._qualify(r)) for r in resources_from_manifests(baseline_doc)]
         observed = [_images_only(r) for r in self._workloads()]  # _workloads already qualifies
         return reconcile_k8s(declared, observed)
+
+
+# -- verify the left: render a Kustomize overlay and reconcile it against the live cluster -----
+#
+# Drift detection's original promise -- declared vs live -- is only usable in a real environment if
+# you can get the *declared* side in without hand-rendering JSON. Your real "left" is a Kustomize
+# overlay in Git, not a flat file. So this source renders the overlay itself (kubectl's built-in
+# kustomize -- no extra tool) and reconciles the result against the running cluster, scoped to the
+# namespaces the overlay touches. The reconcile is the coarse presence + image grain (replicas too),
+# which keeps it low-false-positive -- it answers "is the right workload running, with the right
+# image?", not the hundred fields the cluster mutates server-side. The drifts map cleanly to
+# verify-the-left: ADDED = declared in Git but not running, MODIFIED = running but drifted from Git
+# (e.g. an out-of-band image change), REMOVED = running in those namespaces but not in Git.
+
+
+def _objects_from_kubectl_json(text: str, *, tool: str) -> list[dict]:
+    """Parse kubectl JSON output into a list of objects -- a ``List``, a bare array, a single
+    object, or (defensively) a stream of concatenated objects, since a given kubectl version may
+    wrap multi-resource output either way. Pure; raises ``SourceError`` on genuinely unparseable
+    output."""
+    text = text.strip()
+    if not text:
+        return []
+    try:
+        return _normalize(json.loads(text))
+    except json.JSONDecodeError:
+        pass  # maybe a stream of concatenated objects -> decode them in sequence
+    objects: list[dict] = []
+    decoder = json.JSONDecoder()
+    index = 0
+    while index < len(text):
+        while index < len(text) and text[index].isspace():
+            index += 1
+        if index >= len(text):
+            break
+        try:
+            obj, index = decoder.raw_decode(text, index)
+        except json.JSONDecodeError as exc:
+            raise SourceError(f"'{tool}' produced unparseable JSON") from exc
+        if isinstance(obj, dict):
+            objects.append(obj)
+    return objects
+
+
+def render_kustomize(
+    path: Path, *, context: str = "", kubeconfig: str = "", timeout: float = 30.0
+) -> list[dict]:
+    """Render a Kustomize overlay (a dir with ``kustomization.yaml``) to K8s objects -- the declared
+    'left'. Two offline kubectl steps so it needs no extra tooling and no YAML parser (the project
+    is stdlib-only): ``kubectl kustomize`` builds the overlay to YAML, then ``kubectl create -f -
+    --dry-run=client -o json`` converts it to JSON without contacting the cluster. Raises
+    ``SourceError`` on a bad overlay / missing kubectl, never a false empty."""
+    yaml = run_tool(["kubectl", "kustomize", str(path)], timeout=timeout, tool="kubectl kustomize")
+    if not yaml.strip():
+        return []
+    convert = ["kubectl", "create", "-f", "-", "--dry-run=client", "-o", "json"]
+    out = run_tool(convert, timeout=timeout, tool="kubectl create", input=yaml)
+    return _objects_from_kubectl_json(out, tool="kubectl create")
+
+
+class KustomizeLiveSource:
+    """Verify the running cluster against your declared Git state: render a Kustomize overlay and
+    reconcile it against the live cluster, scoped to the namespaces the overlay touches. Point it at
+    the overlay dir (the positional path) and aim it at a cluster with ``--context``. Observe-only;
+    it never acts. ``declared``/``observed`` are injectable for tests (skip the kubectl reads)."""
+
+    name = "kustomize-live"
+    commands = Capabilities(
+        observe=(
+            "kubectl kustomize <dir>",
+            f"kubectl get {_LIVE_WORKLOAD_KINDS} --all-namespaces -o json",
+        ),
+    )
+
+    def __init__(
+        self,
+        path: Path,
+        *,
+        declared: list[dict] | None = None,
+        observed: object | None = None,
+        timeout: float = 30.0,
+    ) -> None:
+        self._dir = Path(path)
+        self._declared = declared  # injected rendered objects (tests) -- else render live
+        self._observed = observed  # injected live `get` doc (tests) -- else read live
+        self._context: str | None = None
+        self._kubeconfig: str | None = None
+        self.timeout = timeout
+        self._declared_cache: list[dict] | None = None
+
+    def use_context(self, context: str) -> None:
+        self._context = context or None
+
+    def use_kubeconfig(self, kubeconfig: str) -> None:
+        self._kubeconfig = kubeconfig or None
+
+    def _declared_objects(self) -> list[dict]:
+        if self._declared_cache is None:
+            self._declared_cache = (
+                self._declared
+                if self._declared is not None
+                else render_kustomize(
+                    self._dir,
+                    context=self._context or "",
+                    kubeconfig=self._kubeconfig or "",
+                    timeout=self.timeout,
+                )
+            )
+        return self._declared_cache
+
+    def _declared_namespaces(self) -> set[str]:
+        return {
+            ns
+            for obj in self._declared_objects()
+            if isinstance(obj, dict) and (ns := (obj.get("metadata") or {}).get("namespace"))
+        }
+
+    def collect_declared(self) -> list[Resource]:
+        return resources_from_manifests(self._declared_objects())
+
+    def collect_observed(self) -> list[Resource]:
+        doc = self._observed if self._observed is not None else self._run_live_get()
+        namespaces = self._declared_namespaces()
+        objects = _normalize(doc)
+        if namespaces:  # scope to the overlay's namespaces, so unrelated apps aren't false REMOVEs
+            objects = [
+                o for o in objects if (o.get("metadata") or {}).get("namespace") in namespaces
+            ]
+        return observed_resources_from_kubectl(objects)
+
+    def collect_drift(self) -> list[Drift]:
+        declared = self.collect_declared()
+        if not declared:  # an overlay rendering nothing declares nothing to verify -> no live read
+            return []
+        return reconcile_k8s(declared, self.collect_observed())
+
+    def _run_live_get(self) -> object:
+        argv = ["kubectl", "get", _LIVE_WORKLOAD_KINDS, "--all-namespaces", "-o", "json"]
+        if self._context:
+            argv += ["--context", self._context]
+        if self._kubeconfig:
+            argv += ["--kubeconfig", self._kubeconfig]
+        return loads_json(
+            run_tool(argv, timeout=self.timeout, tool="kubectl get"), tool="kubectl get"
+        )
