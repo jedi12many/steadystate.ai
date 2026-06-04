@@ -38,7 +38,7 @@ from ..reason.cost import roll_up, roll_up_by_period, scan_cost_line
 from ..reason.report import Report
 from ..reconcile_state import _fingerprints, alert_suppressed, finding_evidence, seen_findings
 from ..serialize import finding_to_dict, report_to_dict
-from ..state import Finding, PendingAction, StateStore, filter_findings
+from ..state import FINDING_FILTERS, Finding, PendingAction, StateStore, filter_findings
 from ..sweep import render_sweep, sweep_targets
 from ..targets import load_targets_from_env
 from .base import (
@@ -307,25 +307,65 @@ def _json_error(message: str) -> str:
     return _json({"error": message})
 
 
-def _render_findings(state_path: str, status: str = "", flags: frozenset[str] = frozenset()) -> str:
+_STATUS_WORDS = frozenset(FINDING_FILTERS) - {""}  # open / resolved / muted / snoozed / all
+
+
+def _split_findings_query(query: str) -> tuple[str, str]:
+    """Split a chat `findings` query into (status_filter, keyword). The first token is the status
+    filter when it's a status word (open/resolved/muted/snoozed/all); everything else is the
+    free-text keyword. Lowercased. So `findings web` -> ("", "web"), `findings resolved timeout` ->
+    ("resolved", "timeout"), `findings open` -> ("open", "")."""
+    parts = query.split()
+    status = ""
+    if parts and parts[0].lower() in _STATUS_WORDS:
+        status, parts = parts[0].lower(), parts[1:]
+    return status, " ".join(parts).lower()
+
+
+def _finding_matches(finding: Finding, keyword: str) -> bool:
+    """True if ``keyword`` (already lowercased) is a substring of the finding's searchable text --
+    its title, fingerprint, severity, status, and captured evidence values. The chat equivalent of
+    grepping the `findings` list, since you can't pipe a chat reply."""
+    haystack = " ".join(
+        [
+            finding.last_title,
+            finding.fingerprint,
+            finding.last_severity,
+            finding.status,
+            *finding.details.values(),
+        ]
+    ).lower()
+    return keyword in haystack
+
+
+def _render_findings(state_path: str, query: str = "", flags: frozenset[str] = frozenset()) -> str:
     """The chat view of `steadystate findings`: every remembered finding, its fingerprint, status
-    (open/muted/snoozed/resolved) and last severity -- the keys for mute/approve. ``status`` filters
-    (`findings resolved`/`open`/`muted`/`all`); resolved are hidden by default. `json` returns the
-    (filtered) list as JSON for an agent. Read-only."""
+    (open/muted/snoozed/resolved) and last severity -- the keys for mute/approve. ``query`` is an
+    optional status word and/or a free-text keyword: a status (`findings resolved`/`open`/`muted`/
+    `all`; resolved hidden by default) filters by lifecycle, and a keyword greps the list in chat --
+    `findings web` keeps only findings whose title/fingerprint/severity/evidence mention 'web', and
+    `findings resolved timeout` does both. `json` returns the filtered list as JSON. Read-only."""
     want_json = "json" in flags
+    status, keyword = _split_findings_query(query)
     if not state_path or not Path(state_path).exists():
         return _json([]) if want_json else "No findings recorded yet."
     with StateStore(state_path) as store:
         every = store.all_findings()
     rows = filter_findings(every, status)
+    if keyword:
+        rows = [f for f in rows if _finding_matches(f, keyword)]
     if want_json:
         return _json([finding_to_dict(f) for f in rows])
     if not rows:
+        if keyword:
+            scope = f" {status}" if status else ""
+            return f"No{scope} findings match '{keyword}'."
         hidden = len(every) - len(rows)
         if hidden:
             return f"No findings to show ({hidden} resolved hidden -- `findings all` to include)."
         return "No findings recorded yet."
-    lines = [f"{len(rows)} finding(s):"]
+    suffix = f" matching '{keyword}'" if keyword else ""
+    lines = [f"{len(rows)} finding(s){suffix}:"]
     lines += [f"  {f.fingerprint}  {f.status:<8} {f.last_severity:<6} {f.last_title}" for f in rows]
     return "\n".join(lines)
 

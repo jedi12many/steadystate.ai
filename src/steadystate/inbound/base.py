@@ -62,9 +62,10 @@ COMMANDS: dict[str, tuple[str, str]] = {
     ),
     COST: ("cost [day|week]", "show LLM spend -- a rollup, or a day/week trend"),
     FINDINGS: (
-        "findings [open|resolved|muted|all] [json]",
-        "list remembered findings (fingerprint, status, severity); resolved are hidden by default "
-        "-- `findings resolved`/`all` to show them, `open`/`muted` to filter, `json` for JSON",
+        "findings [open|resolved|muted|all] [keyword] [json]",
+        "list remembered findings (fingerprint, status, severity); resolved hidden by default "
+        "(`resolved`/`all` to show, `open`/`muted` to filter). Add a keyword to grep them in chat "
+        "-- `findings web`, `findings all timeout` (matches title/evidence). `json` for JSON",
     ),
     SHOW: (
         "show <fingerprint> [json]",
@@ -195,7 +196,7 @@ _TOOL_ARGS: dict[str, tuple[tuple[str, bool], ...]] = {
     PENDING: (),
     PROBE: (("target", True),),  # a target name, or "all" for the fleet
     COST: (("period", False),),  # day | week, optional
-    FINDINGS: (),
+    FINDINGS: (("filter", False),),  # an optional status word and/or keyword to grep
     SHOW: (("fingerprint", True),),
     HISTORY: (),
     HOLD: (),
@@ -286,9 +287,14 @@ def command_from_text(text: str, actor: str) -> Command | None:
             if is_alias:  # bare `scan`/`refresh` -> refresh the whole fleet (probe all)
                 return Command(verb, actor, "all", flags=flags)
             continue  # a required argument is absent (e.g. bare `probe`) -> not actionable
-        # Optional-argument verbs (cost/findings) and approve/decline, which may be bare. approve
-        # takes an OPTIONAL second token -- the break-glass confirm target (`approve <fp> <name>`).
-        argument = args[0] if (verb in _OPTIONAL_ARGUMENT and args) else ""
+        # Optional-argument verbs (cost/findings) and approve/decline, which may be bare. `findings`
+        # takes a status word and/or a free-text keyword filter, joined here -- the handler splits
+        # them (`findings resolved timeout`). approve takes an OPTIONAL second token -- the
+        # break-glass confirm target (`approve <fp> <name>`).
+        if verb == FINDINGS:
+            argument = " ".join(args)
+        else:
+            argument = args[0] if (verb in _OPTIONAL_ARGUMENT and args) else ""
         second = args[1] if (verb in _OPTIONAL_SECOND and len(args) >= 2) else ""
         return Command(verb, actor, argument, flags=flags, argument2=second)
     return None
