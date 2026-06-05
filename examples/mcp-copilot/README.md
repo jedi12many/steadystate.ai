@@ -44,13 +44,14 @@ a parent folder that can see every region, or you've merged the walls back toget
 
 ## 3. Sanity-check the server before wiring it up
 
-`steadystate mcp` speaks JSON-RPC over stdio. Drive it by hand to confirm the wall answers:
+`steadystate mcp` speaks JSON-RPC over stdio. Drive it by hand to confirm the wall answers — and
+point it at the wall with **`--dir`** (more on that next):
 
 ```sh
 printf '%s\n' \
   '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{}}}' \
   '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"summary","arguments":{}}}' \
-  | steadystate mcp --state ~/ssai/akeyless/us-east-1/state.db
+  | steadystate mcp --dir ~/ssai/akeyless/us-east-1
 ```
 
 You'll get back the `initialize` handshake and this wall's `summary` — exactly what Copilot sees.
@@ -58,7 +59,11 @@ You'll get back the `initialize` handshake and this wall's `summary` — exactly
 ## 4. Register each wall with Copilot CLI
 
 Copilot CLI reads `~/.copilot/mcp-config.json` (top-level `mcpServers`, `"type": "local"` for a
-stdio server). Add **one server per wall** — note the *trust differs per wall*:
+stdio server). **The one thing to get right:** Copilot launches the server from *its own* working
+directory, not your wall folder — so the cwd-relative defaults (`.steadystate/state.db`, targets,
+kubeconfigs) would miss. **`--dir <wall>` fixes that with a single absolute path** (it resolves
+everything as if you'd `cd`'d there). Add **one server per wall** — note the *trust differs per
+wall*:
 
 ```json
 {
@@ -66,30 +71,28 @@ stdio server). Add **one server per wall** — note the *trust differs per wall*
     "ssai-akeyless-use1": {
       "type": "local",
       "command": "steadystate",
-      "args": ["mcp", "--state", "/Users/you/ssai/akeyless/us-east-1/state.db"],
-      "env": {
-        "STEADYSTATE_TARGETS": "/Users/you/ssai/akeyless/us-east-1/.steadystate/targets.json",
-        "KUBECONFIG": "/Users/you/ssai/akeyless/us-east-1/kubeconfig"
-      },
+      "args": ["mcp", "--dir", "/Users/you/ssai/akeyless/us-east-1"],
       "tools": ["summary", "findings", "show", "probe", "hold"]
     },
     "ssai-squid-use1": {
       "type": "local",
       "command": "steadystate",
-      "args": ["mcp", "--state", "/Users/you/ssai/squid/us-east-1/state.db", "--write"],
-      "env": {
-        "STEADYSTATE_TARGETS": "/Users/you/ssai/squid/us-east-1/.steadystate/targets.json",
-        "KUBECONFIG": "/Users/you/ssai/squid/us-east-1/kubeconfig"
-      },
+      "args": ["mcp", "--dir", "/Users/you/ssai/squid/us-east-1", "--write"],
       "tools": ["*"]
     }
   }
 }
 ```
 
+One `--dir` per wall — no `--state`/`STEADYSTATE_TARGETS`/`KUBECONFIG` to keep in sync. (If your
+`targets.json` references kubeconfigs by *absolute* path, they work regardless; by *relative* path,
+`--dir` resolves those too.) Prefer to pin paths explicitly instead? Pass absolute `--state` +
+`STEADYSTATE_TARGETS`/`KUBECONFIG` in `env` — but then *every* path, including kubeconfigs inside
+`targets.json`, must be absolute.
+
 Three independent walls of defense, one per concern:
 
-- **Reach** — each server's `STEADYSTATE_TARGETS` + `KUBECONFIG` cover *only* that deployment+region,
+- **Reach** — each server's `--dir` scopes it to *only* that deployment+region's targets + kubeconfig,
   so a sweep or an agent in `ssai-akeyless-use1` can't enumerate or touch Squid, or `eu-west-1`.
 - **Write grant** — `akeyless-use1` is read-only (observe/diagnose only); `squid-use1` adds `--write`,
   so an agent can run guardrailed `approve`/`fix`/`run` there — and only there.

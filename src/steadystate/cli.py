@@ -1364,6 +1364,14 @@ def summary_status(state: Path = _STATE_OPTION) -> None:
 @app.command()
 def mcp(
     state: Path = _STATE_OPTION,
+    directory: str = typer.Option(
+        "",
+        "--dir",
+        help="Run as if from this directory -- resolve the default .steadystate/state.db, "
+        "STEADYSTATE_TARGETS, and any relative kubeconfig paths against it. Use it when an MCP "
+        "client (Claude Code, Copilot CLI) launches the server from a different working directory "
+        "than your wall folder -- one absolute --dir per server instead of pinning every path.",
+    ),
     write: bool = typer.Option(
         False,
         "--write",
@@ -1376,9 +1384,21 @@ def mcp(
     or any agent can drive the vetted command grammar -- `summary`/`findings`/`show`/`probe` to
     observe, and (with --write) `approve`/`fix`/`run` to act within the SAME guardrails a human.
     The agent picks WHAT; steadystate's gate still decides WHETHER. Speaks JSON-RPC over stdio (the
-    standard local MCP transport); point your MCP client's command at `steadystate mcp`."""
+    standard local MCP transport); point your MCP client's command at `steadystate mcp`.
+
+    A client launches this server from *its* working directory, not your wall folder -- so the
+    cwd-relative defaults (.steadystate/state.db, targets, kubeconfigs) miss. Pass `--dir <folder>`
+    so they resolve against that folder, exactly as if you'd run it from there."""
     from .inbound.mcp import serve_stdio
 
+    if directory:
+        target = Path(directory)
+        if not target.is_dir():
+            typer.echo(f"--dir: not a directory: {directory}", err=True)
+            raise typer.Exit(1)
+        os.chdir(
+            target
+        )  # resolve every relative default against the wall folder, like a `cd` there
     env = os.environ.get("STEADYSTATE_MCP_WRITE", "").strip().lower()
     serve_stdio(str(state), write=write or env in ("1", "true", "yes", "on"))
 
