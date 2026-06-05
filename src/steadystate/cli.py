@@ -1351,6 +1351,16 @@ def pending(state: Path = _STATE_OPTION) -> None:
             typer.echo("    (no remediation recorded)")
 
 
+@app.command("summary")
+def summary_status(state: Path = _STATE_OPTION) -> None:
+    """A one-glance status: open findings by severity, what's pending your approval, the homeostat's
+    posture, and the single worst thing right now -- the 'what do I look at first' rollup. Reads the
+    last probe/sweep from the store (no fresh scan); mirrors the chat `summary` command."""
+    from .inbound.server import _render_summary
+
+    typer.echo(_render_summary(str(state)))
+
+
 @app.command()
 def history(
     label: str = typer.Option(
