@@ -20,41 +20,42 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from .bounds import Envelope, Impact, Reversibility
-from .cleanup import _CONTEXT_TAIL, _KUBECONFIG_TAIL, CLEANUP_ENVELOPE, is_safe_cleanup
+from .cleanup import CLEANUP_ENVELOPE, is_safe_cleanup, safe_kubectl
 
 # -- per-action command allow-patterns ---------------------------------------------------------
-# Each is anchored (^...$) and character-classed so no alternate verb, extra flag, selector, or
-# shell metacharacter can slip through: the regex IS the action's blast-radius guarantee. Two rules
-# every k8s entry follows: pin EXACTLY ONE namespace (`-n <ns>` -- never `-A`/`--all-namespaces`,
-# the difference between one tenant and the whole fleet), and forbid `--all`/selectors (which would
-# silently widen the impact the envelope claims). Re-checked at the gate (decide.gate_proposal).
+# Each validator declares its one safe shape to `safe_kubectl` (cleanup.py): the fixed verb, the
+# single positional resource it may target, the required valued flags, and whether a namespace is
+# required/forbidden. `safe_kubectl` matches order-INDEPENDENTLY (so a correct command isn't rejected
+# for writing its flags in a different order) but rejects any unknown/extra token or shell
+# metacharacter -- so the SHAPE can vary while the action can never be widened: still EXACTLY ONE
+# namespace (never `-A`/`--all-namespaces`), never an extra flag/selector. Re-checked at the gate.
 
-# delete Succeeded (completed) pod tombstones in one namespace -- lossless, like the evicted clean.
-_SAFE_COMPLETED_CLEANUP = re.compile(
-    r"^kubectl delete pods(?: -n [\w.-]+)? "
-    r"--field-selector=status\.phase=Succeeded" + _CONTEXT_TAIL + _KUBECONFIG_TAIL + r"$"
-)
-
-# rollout-restart ONE workload in one namespace. The `<controller>/<name>` shape is the safety: the
-# command can only target a Deployment / StatefulSet / DaemonSet (all controllers that recreate
-# their pods, no data loss -- a StatefulSet's PVCs persist across a restart), so the restart is
-# self-healing BY CONSTRUCTION -- a bare pod can't be named, so the envelope can't be lied into.
-_SAFE_ROLLOUT_RESTART = re.compile(
-    r"^kubectl rollout restart (?:deployment|statefulset|daemonset)/[\w.-]+ "
-    r"-n [\w.-]+" + _CONTEXT_TAIL + _KUBECONFIG_TAIL + r"$"
-)
+# The single positional resource each action targets -- a controller `<kind>/<name>` (never a bare
+# pod, so the self-healing envelope can't be lied into) or a bare node name.
+_RESTART_TARGET = re.compile(r"^(?:deployment|statefulset|daemonset)/[\w.-]+$")
+_SCALE_TARGET = re.compile(r"^(?:deployment|statefulset)/[\w.-]+$")
+_NODE_TARGET = re.compile(r"^[\w.-]+$")
 
 
 def is_safe_completed_cleanup(command: str) -> bool:
     """True iff ``command`` is exactly the Succeeded-phase pod cleanup shape. Pure."""
-    return bool(_SAFE_COMPLETED_CLEANUP.match(command.strip()))
+    return safe_kubectl(
+        command,
+        verb=("kubectl", "delete", "pods"),
+        required=(("--field-selector", "status.phase=Succeeded"),),
+    )
 
 
 def is_safe_rollout_restart(command: str) -> bool:
     """True iff ``command`` is exactly a single-workload, single-namespace rollout restart of a
     Deployment / StatefulSet / DaemonSet. Pure. The `<controller>/<name>` shape guarantees the
     target is a self-healing controller, never a bare pod."""
-    return bool(_SAFE_ROLLOUT_RESTART.match(command.strip()))
+    return safe_kubectl(
+        command,
+        verb=("kubectl", "rollout", "restart"),
+        positional=_RESTART_TARGET,
+        namespace="required",
+    )
 
 
 # -- break-glass shapes (OUT of the autonomous bound -- human-only, friction-gated) -------------
@@ -62,28 +63,27 @@ def is_safe_rollout_restart(command: str) -> bool:
 # default bound, so `fix`/`run` won't run them autonomously -- only an authorized human can, through
 # the break-glass confirmation. They are NOT offered (no `categories`): you must name one.
 
-# scale a workload to zero replicas -- take a misbehaving service offline. Recoverable (scale back
-# up) but out of bound (RECOVERABLE never auto), so it's a light-tier break-glass.
-_SAFE_SCALE_TO_ZERO = re.compile(
-    r"^kubectl scale (?:deployment|statefulset)/[\w.-]+ --replicas=0 "
-    r"-n [\w.-]+" + _CONTEXT_TAIL + _KUBECONFIG_TAIL + r"$"
-)
-
-# delete ONE node -- the canonical break-glass: irreversible, node-scope. The bare `node <name>`
-# shape (no `-n`, no selector) can target only a single named node.
-_SAFE_DELETE_NODE = re.compile(
-    r"^kubectl delete node [\w.-]+" + _CONTEXT_TAIL + _KUBECONFIG_TAIL + r"$"
-)
-
 
 def is_safe_scale_to_zero(command: str) -> bool:
     """True iff ``command`` is exactly a scale-to-zero of one Deployment/StatefulSet in one ns."""
-    return bool(_SAFE_SCALE_TO_ZERO.match(command.strip()))
+    return safe_kubectl(
+        command,
+        verb=("kubectl", "scale"),
+        positional=_SCALE_TARGET,
+        required=(("--replicas", "0"),),
+        namespace="required",
+    )
 
 
 def is_safe_delete_node(command: str) -> bool:
-    """True iff ``command`` is exactly a single-node delete. Pure."""
-    return bool(_SAFE_DELETE_NODE.match(command.strip()))
+    """True iff ``command`` is exactly a single-node delete. The bare `node <name>` shape (no `-n`,
+    no selector) can target only a single named node. Pure."""
+    return safe_kubectl(
+        command,
+        verb=("kubectl", "delete", "node"),
+        positional=_NODE_TARGET,
+        namespace="forbidden",
+    )
 
 
 # -- composing a command from a finding's stored keys ------------------------------------------

@@ -123,6 +123,17 @@ def test_llm_decider_degrades_to_none_when_no_model_is_configured():
     assert LLMDecider(_stub("I think you should delete some pods")).propose(_symptom()) is None
 
 
+def test_prompt_gives_the_model_the_resource_name_and_namespace_explicitly():
+    # The live soak showed the model mis-read the name out of the slash-joined identity
+    # ("default/apps/Deployment/demo/web" -> it used "demo"). Give it name + namespace as fields.
+    from steadystate.act.decide import _resource_fields, _user_prompt
+
+    s = _symptom()  # identity "apps/Deployment/prod/web", evidence namespace=prod
+    assert _resource_fields(s) == ("web", "prod")
+    prompt = _user_prompt(s)
+    assert "name: web" in prompt and "namespace: prod" in prompt
+
+
 # -- propose_for: only findings hold can't already handle ------------------------
 
 

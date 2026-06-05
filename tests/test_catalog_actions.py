@@ -8,7 +8,9 @@ from steadystate.act.catalog import (
     FindingFields,
     action_for_command,
     is_safe_cleanup,
+    is_safe_delete_node,
     is_safe_rollout_restart,
+    is_safe_scale_to_zero,
     offered_action,
 )
 from steadystate.act.catalog import catalog_action as cat
@@ -46,6 +48,31 @@ def test_rollout_restart_still_pins_one_namespace_and_a_controller():
     assert not is_safe_rollout_restart("kubectl rollout restart deployment/web -A")
     assert not is_safe_rollout_restart("kubectl rollout restart pod/web -n prod")  # bare pod
     assert not is_safe_rollout_restart("kubectl delete deployment/web -n prod")  # not a restart
+
+
+def test_validators_accept_flexible_argument_order():
+    # The point of the flexible parser: a command that does EXACTLY the safe thing but writes its
+    # flags in a different order (what an LLM proposer does) is no longer rejected on a technicality
+    assert is_safe_scale_to_zero(
+        "kubectl scale deployment/web -n demo --replicas=0 --context default"  # the soak's order
+    )
+    assert is_safe_scale_to_zero("kubectl scale deployment/web --replicas=0 --namespace=demo")
+    assert is_safe_rollout_restart(
+        "kubectl rollout restart deployment/web --context default -n demo"  # flags reordered
+    )
+    assert is_safe_cleanup("kubectl delete pods --field-selector=status.phase=Failed -n prod")
+
+
+def test_validators_stay_strict_on_safety_despite_flexible_order():
+    # Flexible on order, strict on safety: no extra flag, no wrong value, no bare pod, no injection.
+    assert not is_safe_scale_to_zero("kubectl scale deployment/web --replicas=0 -n demo --force")
+    assert not is_safe_scale_to_zero("kubectl scale deployment/web --replicas=5 -n demo")  # value
+    assert not is_safe_scale_to_zero("kubectl scale pod/web --replicas=0 -n demo")  # bare pod
+    assert not is_safe_scale_to_zero("kubectl scale deployment/web --replicas=0")  # ns required
+    assert not is_safe_scale_to_zero(
+        "kubectl scale deployment/web --replicas=0 -n demo && curl evil"  # injection
+    )
+    assert not is_safe_delete_node("kubectl delete node n1 -n kube-system")  # node takes no ns
 
 
 # -- composing a command from a finding's keys ------------------------------------------------

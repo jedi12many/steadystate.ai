@@ -41,16 +41,102 @@ CLEANUP_SOURCE = "kubectl-cleanup"
 _CONTEXT_TAIL = r"(?: --context [\w.@:/-]+)?"
 _KUBECONFIG_TAIL = r"(?: --kubeconfig [\w.@:/~-]+)?"
 
-_SAFE_CLEANUP = re.compile(
-    r"^kubectl delete pods(?: -n [\w.-]+)? "
-    r"--field-selector=status\.phase=Failed" + _CONTEXT_TAIL + _KUBECONFIG_TAIL + r"$"
-)
+# -- the flexible, injection-proof command checker shared by every k8s allow-pattern -------------
+# The old allow-patterns were rigid positional regexes -- the flags had to appear in one exact
+# order, so a command that did EXACTLY the safe thing but wrote `-n ns` before `--replicas=0` was
+# rejected on a technicality (and an LLM proposer, which doesn't memorise arg order, kept tripping
+# it). `safe_kubectl` instead TOKENISES and matches order-independently: the fixed verb, an optional
+# single positional, the required valued flags, and only the allowed -n/--context/--kubeconfig --
+# rejecting any unknown/extra/duplicate token or shell metacharacter. So the SHAPE can vary but the
+# command can never do anything but the one vetted operation. Flexible on shape, sure on safety.
+
+# A flag value is a k8s name, a context, or a kubeconfig path -- never a shell construct.
+_NSNAME = re.compile(r"^[\w.-]+$")  # namespace / resource name
+_CONTEXT_VAL = re.compile(r"^[\w.@:/-]+$")
+_KUBECONFIG_VAL = re.compile(r"^[\w.@:/~-]+$")
+# Any of these in the raw string -> reject outright (chaining / redirection / expansion / globbing).
+# A vetted command is plain tokens; none of its values need any of these, and we exec argv with no
+# shell anyway -- this just refuses to even validate an injected string.
+_SHELL_META = ";&|`$<>(){}[]*?!\\'\"\n\r\t"
+
+
+def _value_ok(flag: str, value: str | None) -> bool:
+    if value is None:
+        return False
+    if flag in ("-n", "--namespace"):
+        return bool(_NSNAME.match(value))
+    if flag == "--context":
+        return bool(_CONTEXT_VAL.match(value))
+    if flag == "--kubeconfig":
+        return bool(_KUBECONFIG_VAL.match(value))
+    return False
+
+
+def safe_kubectl(
+    command: str,
+    *,
+    verb: tuple[str, ...],
+    positional: re.Pattern[str] | None = None,
+    required: tuple[tuple[str, str], ...] = (),
+    namespace: str = "optional",
+) -> bool:
+    """Flexible, injection-proof check that ``command`` is EXACTLY one vetted kubectl operation.
+
+    Matches order-INDEPENDENTLY: the fixed ``verb`` prefix, an optional single ``positional`` (e.g.
+    ``deployment/<name>``), the ``required`` valued flags (each a ``(name, exact_value)`` accepted
+    as ``--k=v`` OR ``--k v``), and only the always-allowed ``-n/--namespace``, ``--context`` and
+    ``--kubeconfig``. ANY unknown / extra / out-of-place token, or shell metacharacter, is False.
+    ``namespace`` is "optional" | "required" | "forbidden". Pure; the run-time security gate."""
+    if any(c in _SHELL_META for c in command):
+        return False
+    toks = command.split()
+    if tuple(toks[: len(verb)]) != verb:
+        return False
+    rest, req = toks[len(verb) :], dict(required)
+    seen_required: set[str] = set()
+    seen_ns = False
+    got_positional = positional is None
+    i = 0
+    while i < len(rest):
+        tok = rest[i]
+        key, has_eq, inline = tok.partition("=")
+        value = inline if has_eq else (rest[i + 1] if i + 1 < len(rest) else None)
+        is_positional = (
+            not got_positional
+            and not tok.startswith("-")
+            and positional is not None
+            and bool(positional.match(tok))
+        )
+        if key in req:
+            if value != req[key]:
+                return False
+            seen_required.add(key)
+        elif key in ("-n", "--namespace", "--context", "--kubeconfig"):
+            if not _value_ok(key, value):
+                return False
+            seen_ns = seen_ns or key in ("-n", "--namespace")
+        elif is_positional:
+            got_positional = True
+            i += 1
+            continue
+        else:
+            return False  # unknown / extra / out-of-place token
+        i += 1 if has_eq else 2
+    if not got_positional or set(req) - seen_required:
+        return False
+    if namespace == "required" and not seen_ns:
+        return False
+    return not (namespace == "forbidden" and seen_ns)
 
 
 def is_safe_cleanup(command: str) -> bool:
     """True iff ``command`` is exactly the evicted-pod cleanup we generate -- the only thing approve
     will run on the cleanup path. Pure; the security gate for command execution."""
-    return bool(_SAFE_CLEANUP.match(command.strip()))
+    return safe_kubectl(
+        command,
+        verb=("kubectl", "delete", "pods"),
+        required=(("--field-selector", "status.phase=Failed"),),
+    )
 
 
 def record_cleanups(store: StateStore, report, now: datetime) -> int:
