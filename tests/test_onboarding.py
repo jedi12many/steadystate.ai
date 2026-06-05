@@ -131,6 +131,30 @@ def test_doctor_never_prints_a_secret_value(tmp_path):
     assert "SUPER-SECRET-TOKEN" not in result.stdout  # only the *status*, never the value
 
 
+def test_doctor_includes_the_runtime_dials_section(tmp_path):
+    f = tmp_path / ".env"
+    f.write_text("STEADYSTATE_REFLEX_AUTO=1\n")
+    result = _run(["doctor", "--env-file", str(f)])
+    assert result.exit_code == 0 and "Runtime dials" in result.stdout
+
+
+def test_render_dials_shows_set_values_and_defaults():
+    # Dials carry a live value or fall back to their default -- never blank. Render at full width
+    # (the CliRunner truncates at 80 cols) so the full var names are assertable.
+    import os
+    from io import StringIO
+
+    from rich.console import Console
+
+    from steadystate.cli import _render_dials
+
+    buf = StringIO()
+    _render_dials(Console(file=buf, width=200), {**os.environ, "STEADYSTATE_DECIDER_AUTO": "1"})
+    out = buf.getvalue()
+    assert "STEADYSTATE_DECIDER_AUTO" in out  # the dial is listed by full name
+    assert "default: off" in out  # an unset dial (e.g. MCP_WRITE) shows its default, not a blank
+
+
 # -- init wizard ---------------------------------------------------------------
 
 
