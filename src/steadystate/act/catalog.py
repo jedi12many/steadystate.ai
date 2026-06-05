@@ -25,8 +25,8 @@ from .cleanup import CLEANUP_ENVELOPE, is_safe_cleanup, safe_kubectl
 # -- per-action command allow-patterns ---------------------------------------------------------
 # Each validator declares its one safe shape to `safe_kubectl` (cleanup.py): the fixed verb, the
 # single positional resource it may target, the required valued flags, and whether a namespace is
-# required/forbidden. `safe_kubectl` matches order-INDEPENDENTLY (so a correct command isn't rejected
-# for writing its flags in a different order) but rejects any unknown/extra token or shell
+# required/forbidden. `safe_kubectl` matches order-INDEPENDENTLY (so a correct command isn't
+# rejected for writing its flags in a different order) but rejects any unknown/extra token or shell
 # metacharacter -- so the SHAPE can vary while the action can never be widened: still EXACTLY ONE
 # namespace (never `-A`/`--all-namespaces`), never an extra flag/selector. Re-checked at the gate.
 
