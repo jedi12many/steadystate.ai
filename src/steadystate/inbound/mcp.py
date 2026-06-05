@@ -232,7 +232,29 @@ def _tools_call(req_id: Any, params: dict[str, Any], state_path: str, *, write: 
     return _result(req_id, {"content": [{"type": "text", "text": output}], "isError": False})
 
 
-def handle_request(request: Any, state_path: str, *, write: bool) -> dict[str, Any] | None:
+_HOW_TO = (
+    "steadystate's infrastructure malfunction/drift detector. Use `summary` for a one-glance "
+    "status, `findings`/`show` to inspect, `probe` to refresh + scan a target. Effectful verbs "
+    "(approve/fix/run/...) are exposed only when the operator grants write; they run through the "
+    "bound + catalog guardrails and are audited."
+)
+
+
+def _server_instructions(state_path: str, label: str) -> str:
+    """The `initialize` instructions, made **stateful**: a header naming this wall, then the live
+    summary (open findings, what's pending, how fresh the data is), then the how-to -- so an agent
+    resumes already knowing the state, no tool round-trip. The summary is a cheap store read."""
+    who = f"steadystate -- wall: {label}" if label else "steadystate"
+    snapshot = run_command(Command(SUMMARY, _MCP_ACTOR), state_path).strip()
+    header = (
+        f"{who}\nCurrent state (call `summary` to refresh):\n{snapshot}\n\n" if snapshot else ""
+    )
+    return f"{header}{_HOW_TO}"
+
+
+def handle_request(
+    request: Any, state_path: str, *, write: bool, label: str = ""
+) -> dict[str, Any] | None:
     """Dispatch one parsed JSON-RPC message to its handler, returning the response object -- or None
     for a notification (no ``id``: ``notifications/initialized`` and friends need no reply). Pure
     given ``run_command``; the stdio loop is the only side-effecting part."""
@@ -243,6 +265,9 @@ def handle_request(request: Any, state_path: str, *, write: bool) -> dict[str, A
     if method == "initialize":
         params = request.get("params") or {}
         version = params.get("protocolVersion") if isinstance(params, dict) else None
+        server_info: dict[str, Any] = {"name": "steadystate", "version": __version__}
+        if label:  # a display title so a client can tell this wall's server from another's
+            server_info["title"] = f"steadystate ({label})"
         return _result(
             req_id,
             {
@@ -252,13 +277,8 @@ def handle_request(request: Any, state_path: str, *, write: bool) -> dict[str, A
                     "resources": {"listChanged": False},
                     "prompts": {"listChanged": False},
                 },
-                "serverInfo": {"name": "steadystate", "version": __version__},
-                "instructions": (
-                    "steadystate's infrastructure malfunction/drift detector. Use `summary` for a "
-                    "one-glance status, `findings`/`show` to inspect, `probe` to scan a target. "
-                    "Effectful verbs (approve/fix/run/...) are exposed only when the operator "
-                    "grants write; they run through the bound + catalog guardrails and are audited."
-                ),
+                "serverInfo": server_info,
+                "instructions": _server_instructions(state_path, label),
             },
         )
     if method == "tools/list":
@@ -292,7 +312,9 @@ def handle_request(request: Any, state_path: str, *, write: bool) -> dict[str, A
     return _error(req_id, -32601, f"method not found: {method!r}")
 
 
-def serve_stdio(state_path: str, *, write: bool) -> None:  # pragma: no cover -- the I/O loop
+def serve_stdio(
+    state_path: str, *, write: bool, label: str = ""
+) -> None:  # pragma: no cover -- I/O
     """Run the MCP server over stdio until EOF: read newline-delimited JSON-RPC from stdin,
     dispatch, write each response as one line to stdout (kept clean -- only JSON-RPC; logs go to
     stderr)."""
@@ -305,7 +327,7 @@ def serve_stdio(state_path: str, *, write: bool) -> None:  # pragma: no cover --
         except ValueError:
             _write(_error(None, -32700, "parse error"))
             continue
-        response = handle_request(request, state_path, write=write)
+        response = handle_request(request, state_path, write=write, label=label)
         if response is not None:
             _write(response)
 
