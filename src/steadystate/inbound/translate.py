@@ -16,11 +16,17 @@ typed grammar it has today. Rides the analyst's ``_complete`` seam (kill switch,
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from ..state import StateStore, filter_findings
+
+if TYPE_CHECKING:
+    from ..reason.cost import LlmCall
 from .base import (
     _TOOL_EFFECT,
     APPROVE,
@@ -120,6 +126,21 @@ def _tool_lines() -> str:
     return "\n".join(
         f"  {t['name']}: {t['usage']}  [{t['effect']}]" for t in tool_schema()["tools"]
     )
+
+
+def persist_llm_calls(state_path: str, calls: list[LlmCall]) -> None:
+    """Append the model calls made resolving an NL line to the cost ledger, so ``cost`` counts
+    chat/listener spend (the report was previously blind to it -- a scan persisted its calls, the
+    chat path didn't). Best-effort and off the critical path: a no-op without a state path or calls,
+    and never raises -- a telemetry write must never break answering an operator. The same ``cost``
+    command (CLI and chat) reads these rows back, tagged under the ``chat-nl`` caller."""
+    if not calls or not state_path:
+        return
+    with contextlib.suppress(Exception):
+        now = datetime.now(UTC)
+        with StateStore(state_path) as store:
+            for call in calls:
+                store.record_llm_call(call, now)
 
 
 def _evidence_line(details: dict[str, str], *, max_fields: int = 6, clip: int = 120) -> str:

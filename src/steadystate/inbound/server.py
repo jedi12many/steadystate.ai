@@ -35,6 +35,7 @@ from ..notify import SURFACES
 from ..onboarding import Status, capabilities
 from ..reason.alert import Alert, Layer, Severity
 from ..reason.cost import roll_up, roll_up_by_period, scan_cost_line
+from ..reason.llm import LLMAnalyst
 from ..reason.report import Report
 from ..reconcile_state import _fingerprints, alert_suppressed, finding_evidence, seen_findings
 from ..serialize import finding_to_dict, report_to_dict
@@ -66,21 +67,19 @@ from .base import (
     InboundAdapter,
     render_help,
 )
-from .translate import confident_command, nl_to_command
+from .translate import confident_command, nl_to_command, persist_llm_calls
 
 logger = logging.getLogger(__name__)
 
 
-def _nl_complete() -> Callable[[str, str, str], str | None] | None:
-    """The LLM `complete` seam for the natural-language fallback, or None when no provider is
-    configured (then the listener is exactly the typed grammar it has always been). A signed
-    webhook is already an authenticated operator, so -- like a headless scan -- there's no
-    interactive egress gate; the STEADYSTATE_LLM_ENABLED kill switch and cost accounting still
-    apply."""
-    from ..reason.llm import LLMAnalyst
-
+def _nl_analyst() -> LLMAnalyst | None:
+    """The analyst backing the natural-language fallback, or None when no provider is configured
+    (then the listener is exactly the typed grammar it has always been). A signed webhook is already
+    an authenticated operator, so -- like a headless scan -- there's no interactive egress gate; the
+    STEADYSTATE_LLM_ENABLED kill switch applies, and its model calls are persisted to the cost
+    ledger so chat spend is counted, not invisible."""
     analyst = LLMAnalyst()
-    return analyst._complete if analyst._provider() != "none" else None
+    return analyst if analyst._provider() != "none" else None
 
 
 def _resolve_text(
@@ -96,14 +95,15 @@ def _resolve_text(
     msg = getter(body) if getter is not None else None
     if msg is None:
         return None, None
-    complete = _nl_complete()
-    if complete is None:
+    analyst = _nl_analyst()
+    if analyst is None:
         return None, None
     text, actor = msg
     command = confident_command(text, actor)
     if command is not None:
-        return command, None
-    result = nl_to_command(text, actor, complete, state_path=state_path)
+        return command, None  # a real typed command -> no model call, no spend
+    result = nl_to_command(text, actor, analyst._complete, state_path=state_path)
+    persist_llm_calls(state_path, analyst.calls)  # count this request's spend in the ledger
     if result.command is not None:
         return result.command, None  # a read-only verb -> run it through the normal path
     return None, result.message  # an answer / confirm-echo / clarify -> reply as-is

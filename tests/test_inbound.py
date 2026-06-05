@@ -965,18 +965,32 @@ def test_dispatch_does_not_defer_a_fast_verb_even_when_supported(monkeypatch):
 # -- the natural-language fallback on the listener (when a model is configured) -----------------
 
 
-def _fake_complete(payload):
-    """A stand-in for the analyst's `complete` that returns ``payload`` as JSON."""
-    import json as _json
+class _FakeAnalyst:
+    """A stand-in analyst: `_complete` returns ``payload`` as JSON and records a spend row (as the
+    real one does), so the listener's cost-ledger persistence can be exercised. ``raises`` makes
+    `_complete` blow up if called -- to prove a confident typed command never consults the model."""
 
-    return lambda system, user, caller: _json.dumps(payload)
+    def __init__(self, payload=None, *, raises=False):
+        import json as _json
+
+        self._reply = _json.dumps(payload) if payload is not None else ""
+        self._raises = raises
+        self.calls: list = []
+
+    def _complete(self, system, user, caller):
+        if self._raises:
+            raise AssertionError("the model must not be consulted for a confident typed command")
+        from steadystate.reason.cost import LlmCall
+
+        self.calls.append(LlmCall(caller, "anthropic", "claude-haiku-4-5", input_tokens=10))
+        return self._reply
 
 
 def test_listener_answers_a_question_in_natural_language(monkeypatch):
     # A free-text question with a model configured -> the model's grounded answer, replied as-is.
     monkeypatch.setattr(
-        "steadystate.inbound.server._nl_complete",
-        lambda: _fake_complete({"verb": None, "answer": "web is CrashLoopBackOff -- OOMKilled."}),
+        "steadystate.inbound.server._nl_analyst",
+        lambda: _FakeAnalyst({"verb": None, "answer": "web is CrashLoopBackOff -- OOMKilled."}),
     )
     adapter = _FakeAdapter(command=None, message_text=("why is web down?", "amy"))
     status, body, deferred = dispatch(adapter, {}, "body", ":memory:")
@@ -986,8 +1000,8 @@ def test_listener_answers_a_question_in_natural_language(monkeypatch):
 def test_listener_runs_a_read_command_resolved_from_free_text(monkeypatch):
     monkeypatch.setattr("steadystate.inbound.server.run_command", lambda command, path: "fleet ok")
     monkeypatch.setattr(
-        "steadystate.inbound.server._nl_complete",
-        lambda: _fake_complete({"verb": "probe", "argument": "all"}),
+        "steadystate.inbound.server._nl_analyst",
+        lambda: _FakeAnalyst({"verb": "probe", "argument": "all"}),
     )
     adapter = _FakeAdapter(command=None, message_text=("how's the whole fleet?", "amy"))
     status, body, _ = dispatch(adapter, {}, "body", ":memory:")
@@ -1001,8 +1015,8 @@ def test_listener_echoes_an_effectful_command_for_confirmation_never_runs_it(mon
         "steadystate.inbound.server.run_command", lambda command, path: ran.append(command) or "x"
     )
     monkeypatch.setattr(
-        "steadystate.inbound.server._nl_complete",
-        lambda: _fake_complete({"verb": "approve", "argument": "a1b2c3"}),
+        "steadystate.inbound.server._nl_analyst",
+        lambda: _FakeAnalyst({"verb": "approve", "argument": "a1b2c3"}),
     )
     adapter = _FakeAdapter(command=None, message_text=("go ahead and approve the web fix", "amy"))
     status, body, _ = dispatch(adapter, {}, "body", ":memory:")
@@ -1012,11 +1026,7 @@ def test_listener_echoes_an_effectful_command_for_confirmation_never_runs_it(mon
 def test_listener_prefers_a_confident_command_without_calling_the_model(monkeypatch):
     # A real typed command runs deterministically -- the model is never consulted (no spend).
     monkeypatch.setattr("steadystate.inbound.server.run_command", lambda command, path: "pending!")
-
-    def _must_not_send(system, user, caller):
-        raise AssertionError("the model must not be consulted for a confident typed command")
-
-    monkeypatch.setattr("steadystate.inbound.server._nl_complete", lambda: _must_not_send)
+    monkeypatch.setattr("steadystate.inbound.server._nl_analyst", lambda: _FakeAnalyst(raises=True))
     adapter = _FakeAdapter(command=None, message_text=("pending", "amy"))
     status, body, _ = dispatch(adapter, {}, "body", ":memory:")
     assert status == 200 and body == b"pending!"
@@ -1025,12 +1035,43 @@ def test_listener_prefers_a_confident_command_without_calling_the_model(monkeypa
 def test_listener_without_a_model_is_exactly_the_typed_grammar(monkeypatch):
     # No provider -> the NL layer is a no-op; the deterministic parse stands (unchanged behaviour).
     monkeypatch.setattr("steadystate.inbound.server.run_command", lambda command, path: "typed")
-    monkeypatch.setattr("steadystate.inbound.server._nl_complete", lambda: None)
+    monkeypatch.setattr("steadystate.inbound.server._nl_analyst", lambda: None)
     adapter = _FakeAdapter(
         command=Command(PENDING, "amy"), message_text=("anything broken?", "amy")
     )
     status, body, _ = dispatch(adapter, {}, "body", ":memory:")
     assert status == 200 and body == b"typed"  # the parse result, no model call
+
+
+def test_listener_persists_nl_spend_to_the_cost_ledger(monkeypatch, tmp_path):
+    # The chat path used to spend silently -- `cost` read $0 while the model was being called. A
+    # listener NL call now records its spend under the `chat-nl` caller, so the ledger is honest.
+    from steadystate.reason.cost import roll_up
+    from steadystate.state import StateStore
+
+    db = str(tmp_path / "s.db")
+    monkeypatch.setattr(
+        "steadystate.inbound.server._nl_analyst",
+        lambda: _FakeAnalyst({"verb": None, "answer": "all good"}),
+    )
+    adapter = _FakeAdapter(command=None, message_text=("how are things?", "amy"))
+    status, _, _ = dispatch(adapter, {}, "body", db)
+    assert status == 200
+    with StateStore(db) as store:
+        rows = roll_up(store.llm_calls_since(None))
+    assert any(r.caller == "chat-nl" and r.calls == 1 for r in rows)  # spend landed in the ledger
+
+
+def test_listener_confident_command_records_no_spend(monkeypatch, tmp_path):
+    # A confident typed command takes no model call, so it must add nothing to the ledger.
+    from steadystate.state import StateStore
+
+    db = str(tmp_path / "s.db")
+    monkeypatch.setattr("steadystate.inbound.server.run_command", lambda command, path: "pending!")
+    monkeypatch.setattr("steadystate.inbound.server._nl_analyst", lambda: _FakeAnalyst(raises=True))
+    dispatch(_FakeAdapter(command=None, message_text=("pending", "amy")), {}, "body", db)
+    with StateStore(db) as store:
+        assert store.llm_calls_since(None) == []  # no spend rows
 
 
 # -- the registry ---------------------------------------------------------------

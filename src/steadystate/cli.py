@@ -65,7 +65,7 @@ from .engine import build_report, collect_resources
 from .inbound import INBOUND, build_inbound
 from .inbound.base import PROBE, Command, command_from_text, tool_schema
 from .inbound.server import run_command, serve
-from .inbound.translate import confident_command, nl_to_command
+from .inbound.translate import confident_command, nl_to_command, persist_llm_calls
 from .notify import SURFACES, build_surfaces
 from .notify.base import Surface
 from .notify.console import ConsoleSurface
@@ -1487,6 +1487,7 @@ def chat(state: Path = _STATE_OPTION) -> None:
     # ("show me the findings") isn't mis-grabbed as `show me` -- it falls through to the model. With
     # no model, keep the tolerant parser (it's the only chance to act on the line).
     parse = confident_command if complete is not None else command_from_text
+    persisted = 0  # how many of the analyst's calls are already in the cost ledger
     try:
         while True:
             try:
@@ -1506,6 +1507,10 @@ def chat(state: Path = _STATE_OPTION) -> None:
                 typer.echo("unrecognized -- type `help` for the commands this accepts.")
                 continue
             result = nl_to_command(line, actor, complete, state_path=str(state))
+            # Count this line's model spend in the ledger (the analyst is long-lived across the
+            # loop, so persist only the calls added since last time).
+            persist_llm_calls(str(state), analyst.calls[persisted:])
+            persisted = len(analyst.calls)
             if result.command is not None:
                 note = f"(read as `{result.interpreted}`)\n" if result.interpreted else ""
                 typer.echo(note + run_command(result.command, str(state)))
