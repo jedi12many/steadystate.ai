@@ -105,6 +105,22 @@ def test_several_different_fixes_are_not_yet_a_safe_action_to_promote(monkeypatc
     assert "earned a promotion review" not in lesson.recommendation
 
 
+def test_ready_to_promote_flags_one_consistent_fix_only(monkeypatch):
+    monkeypatch.delenv("STEADYSTATE_REFLEX_AUTO", raising=False)
+    # one repeated fix on a dormant reflex -> a clear case to grant autonomy -> ready_to_promote
+    consistent = [_finding(c * 64, "Evicted", note="raise the limit") for c in ("a", "b")]
+    assert learn(consistent, acted=set())[0].ready_to_promote is True
+    # different fixes -> not a single safe action -> NOT ready
+    varied = [_finding("a" * 64, "Evicted", note="x"), _finding("b" * 64, "Evicted", note="y")]
+    assert learn(varied, acted=set())[0].ready_to_promote is False
+    # no recorded fix -> nothing to judge consistency on -> NOT ready
+    nofix = [_finding(c * 64, "Evicted") for c in ("a", "b")]
+    assert learn(nofix, acted=set())[0].ready_to_promote is False
+    # a self-heal category (no reflex) is never a promotion candidate
+    selfheal = [_finding(c * 64, "CrashLoopBackOff", note="z") for c in ("a", "b")]
+    assert learn(selfheal, acted=set())[0].ready_to_promote is False
+
+
 def test_a_recurring_fix_adds_a_caution_to_the_promotion(monkeypatch):
     monkeypatch.delenv("STEADYSTATE_REFLEX_AUTO", raising=False)
     fix = "deleted the evicted pods"

@@ -730,12 +730,16 @@ def _render_summary(state_path: str) -> str:
     findings: list[Finding] = []
     pendings: list = []
     as_of = ""
+    promotable = 0
     if state_path and Path(state_path).exists():
         with StateStore(state_path) as store:
             every = store.all_findings()
             findings = filter_findings(every, "")  # the open view (hides resolved)
             pendings = store.all_pending()
             as_of = _freshness(every)
+            # Learning: responses you keep applying by hand that have earned an autonomy review.
+            lessons = derive_lessons(every, store.acted_fingerprints())
+            promotable = sum(1 for le in lessons if le.ready_to_promote)
     # Findings line: count + per-severity breakdown (worst first), and what's awaiting you.
     counts: dict[str, int] = {}
     for f in findings:
@@ -774,6 +778,10 @@ def _render_summary(state_path: str) -> str:
     if findings:
         worst = min(findings, key=lambda f: (-_SEVERITY_RANK.get(f.last_severity, 0), f.first_seen))
         lines.append(f"worst: {worst.last_title}  [{worst.last_severity}]")
+    # Learning line: a response you keep applying by hand has earned an autonomy review (`learn`).
+    if promotable:
+        s = "s" if promotable != 1 else ""
+        lines.append(f"learning: {promotable} response{s} earned a promotion review (`learn`)")
     return "\n".join(lines)
 
 
