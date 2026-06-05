@@ -105,8 +105,24 @@ app = typer.Typer(
 )
 
 
+def _version_callback(value: bool) -> None:
+    if value:
+        from . import __version__
+
+        typer.echo(f"steadystate {__version__}")
+        raise typer.Exit()
+
+
 @app.callback()
-def _root() -> None:
+def _root(
+    version: bool = typer.Option(
+        False,
+        "--version",
+        callback=_version_callback,
+        is_eager=True,
+        help="Show the steadystate version and exit.",
+    ),
+) -> None:
     """Stateful monitoring: reconcile declared state vs reality, reason about drift."""
 
 
@@ -842,6 +858,22 @@ def findings(
         typer.echo(
             f"{f.fingerprint}  {f.status:<8}  {f.first_seen}  {f.last_severity:<8}  {f.last_title}"
         )
+
+
+@app.command()
+def show(
+    fingerprint: str = typer.Argument(..., help="A finding's fingerprint (or a unique prefix)."),
+    state: Path = _STATE_OPTION,
+    json_out: bool = typer.Option(False, "--json", help="Emit the finding as JSON instead."),
+) -> None:
+    """Show one finding's captured evidence -- the structured fields a probe/scan recorded
+    (namespace, cluster, pod count, the failing pod's last log line, ...) plus first/last seen. The
+    deterministic single-finding drill-down (no LLM -- that's `explain`); mirrors the chat/MCP
+    `show` verb. Accepts a unique fingerprint prefix."""
+    from .inbound.server import _render_show
+
+    flags = frozenset({"json"}) if json_out else frozenset()
+    typer.echo(_render_show(fingerprint, str(state), flags))
 
 
 @app.command()

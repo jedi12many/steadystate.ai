@@ -380,6 +380,30 @@ def test_cli_snooze_then_unmute_roundtrip(tmp_path, monkeypatch):
     assert _stored_status(db, fp) == "open"
 
 
+def test_cli_version_prints_the_version():
+    from steadystate import __version__
+    from steadystate.cli import app
+
+    out = _runner().invoke(app, ["--version"])
+    assert out.exit_code == 0 and __version__ in out.output and "steadystate" in out.output
+
+
+def test_cli_show_renders_one_findings_evidence(tmp_path, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    from steadystate.cli import app
+
+    db = tmp_path / "state.db"
+    plan = _plan_with_one_drift(tmp_path)
+    runner = _runner()
+    runner.invoke(app, ["scan", str(plan), "--state", str(db)])
+    fp = _only_fingerprint(db)
+    # the deterministic single-finding drill-down -- parity with the chat/MCP `show` verb
+    shown = runner.invoke(app, ["show", fp, "--state", str(db)])
+    assert shown.exit_code == 0 and "fingerprint" in shown.output and fp in shown.output
+    js = runner.invoke(app, ["show", fp, "--state", str(db), "--json"])
+    assert js.exit_code == 0 and '"fingerprint"' in js.output
+
+
 def test_cli_findings_token_mutes_without_creating_junk(tmp_path, monkeypatch):
     # Regression: the first token of a `findings` row must be the *full* fingerprint, so
     # muting that token targets the existing finding rather than upserting a new one.
