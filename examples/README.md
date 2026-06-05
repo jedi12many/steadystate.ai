@@ -18,6 +18,7 @@ the scenarios reference them and add the environment-specific glue.
 | [k8s-cronjob](./k8s-cronjob/) | in-cluster CronJob | a read-only ServiceAccount (the K8s API) |
 | [chat-listener](./chat-listener/) | long-lived Deployment | named targets + a chat provider, shared SQLite |
 | [fleet-health](./fleet-health/) | listener over many clusters | a dir of kubeconfigs, discovered into targets |
+| [mcp-copilot](./mcp-copilot/) | an MCP server per wall, driven by an agent | a kubeconfig per deployment+region, walled by db + registry |
 
 New to steadystate? Start on a **[bastion-host](./bastion-host/)** — run it on a jump box you
 already use, deploy nothing into the cluster, and probe the live clusters with `steadystate chat`.
