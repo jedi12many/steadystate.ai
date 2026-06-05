@@ -103,6 +103,16 @@ class SlackInbound:
             return command_from_text(form.get("text", [""])[0], actor)
         return None
 
+    def message(self, body: str) -> tuple[str, str] | None:
+        # The free text of a slash command (text + user_name), for the NL fallback. A button click
+        # (payload=...) carries no free text, so it returns None and keeps the deterministic path.
+        form = urllib.parse.parse_qs(body)
+        if "payload" in form or not form.get("command"):
+            return None
+        text = form.get("text", [""])[0].strip()
+        actor = form.get("user_name", ["slack"])[0]
+        return (text, actor) if text else None
+
     def respond(self, message: str) -> bytes:
         # replace_original=False -> post the outcome as a follow-up, keep the alert visible.
         return json.dumps({"text": message, "replace_original": False}).encode()

@@ -884,12 +884,16 @@ class _FakeAdapter:
     name = "fake"
     content_type = "application/json"
 
-    def __init__(self, ok=True, handshake_reply=None, command=None, defer_ack=None):
+    def __init__(
+        self, ok=True, handshake_reply=None, command=None, defer_ack=None, message_text=None
+    ):
         self._ok, self._handshake, self._command = ok, handshake_reply, command
         self.completed: list[str] = []
         if defer_ack is not None:
             self.defer = lambda body: defer_ack
             self.complete = lambda body, message: self.completed.append(message)
+        if message_text is not None:  # carries free text -> eligible for the NL fallback
+            self.message = lambda body: message_text
 
     def ready(self):
         return None
@@ -956,6 +960,77 @@ def test_dispatch_does_not_defer_a_fast_verb_even_when_supported(monkeypatch):
     adapter = _FakeAdapter(command=Command(PENDING, "x"), defer_ack=b'{"type":5}')
     status, body, deferred = dispatch(adapter, {}, "body", ":memory:")
     assert status == 200 and body == b"open fps" and deferred is None  # pending isn't slow
+
+
+# -- the natural-language fallback on the listener (when a model is configured) -----------------
+
+
+def _fake_complete(payload):
+    """A stand-in for the analyst's `complete` that returns ``payload`` as JSON."""
+    import json as _json
+
+    return lambda system, user, caller: _json.dumps(payload)
+
+
+def test_listener_answers_a_question_in_natural_language(monkeypatch):
+    # A free-text question with a model configured -> the model's grounded answer, replied as-is.
+    monkeypatch.setattr(
+        "steadystate.inbound.server._nl_complete",
+        lambda: _fake_complete({"verb": None, "answer": "web is CrashLoopBackOff -- OOMKilled."}),
+    )
+    adapter = _FakeAdapter(command=None, message_text=("why is web down?", "amy"))
+    status, body, deferred = dispatch(adapter, {}, "body", ":memory:")
+    assert status == 200 and b"OOMKilled" in body and deferred is None
+
+
+def test_listener_runs_a_read_command_resolved_from_free_text(monkeypatch):
+    monkeypatch.setattr("steadystate.inbound.server.run_command", lambda command, path: "fleet ok")
+    monkeypatch.setattr(
+        "steadystate.inbound.server._nl_complete",
+        lambda: _fake_complete({"verb": "probe", "argument": "all"}),
+    )
+    adapter = _FakeAdapter(command=None, message_text=("how's the whole fleet?", "amy"))
+    status, body, _ = dispatch(adapter, {}, "body", ":memory:")
+    assert status == 200 and body == b"fleet ok"  # mapped to `probe all` and run
+
+
+def test_listener_echoes_an_effectful_command_for_confirmation_never_runs_it(monkeypatch):
+    # An effectful verb is NEVER fired from fuzzy text -- the concrete command is echoed to confirm.
+    ran = []
+    monkeypatch.setattr(
+        "steadystate.inbound.server.run_command", lambda command, path: ran.append(command) or "x"
+    )
+    monkeypatch.setattr(
+        "steadystate.inbound.server._nl_complete",
+        lambda: _fake_complete({"verb": "approve", "argument": "a1b2c3"}),
+    )
+    adapter = _FakeAdapter(command=None, message_text=("go ahead and approve the web fix", "amy"))
+    status, body, _ = dispatch(adapter, {}, "body", ":memory:")
+    assert status == 200 and b"approve a1b2c3" in body and ran == []  # echoed, not executed
+
+
+def test_listener_prefers_a_confident_command_without_calling_the_model(monkeypatch):
+    # A real typed command runs deterministically -- the model is never consulted (no spend).
+    monkeypatch.setattr("steadystate.inbound.server.run_command", lambda command, path: "pending!")
+
+    def _must_not_send(system, user, caller):
+        raise AssertionError("the model must not be consulted for a confident typed command")
+
+    monkeypatch.setattr("steadystate.inbound.server._nl_complete", lambda: _must_not_send)
+    adapter = _FakeAdapter(command=None, message_text=("pending", "amy"))
+    status, body, _ = dispatch(adapter, {}, "body", ":memory:")
+    assert status == 200 and body == b"pending!"
+
+
+def test_listener_without_a_model_is_exactly_the_typed_grammar(monkeypatch):
+    # No provider -> the NL layer is a no-op; the deterministic parse stands (unchanged behaviour).
+    monkeypatch.setattr("steadystate.inbound.server.run_command", lambda command, path: "typed")
+    monkeypatch.setattr("steadystate.inbound.server._nl_complete", lambda: None)
+    adapter = _FakeAdapter(
+        command=Command(PENDING, "amy"), message_text=("anything broken?", "amy")
+    )
+    status, body, _ = dispatch(adapter, {}, "body", ":memory:")
+    assert status == 200 and body == b"typed"  # the parse result, no model call
 
 
 # -- the registry ---------------------------------------------------------------

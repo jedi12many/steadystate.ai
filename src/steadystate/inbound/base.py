@@ -331,3 +331,10 @@ class InboundAdapter(Protocol):
     def respond(self, message: str) -> bytes:
         """Wrap an outcome message as the provider's reply body."""
         ...
+
+    # Optional, duck-typed (NOT declared as a protocol method, so an adapter without it -- e.g.
+    # Discord's structured slash commands -- still satisfies InboundAdapter): an adapter MAY define
+    #     def message(self, body: str) -> tuple[str, str] | None
+    # returning the operator's *free text* + actor for a slash command / @mention. The listener
+    # uses it for the natural-language fallback when `parse` finds no typed command; None (or no
+    # method) means no free text, so the deterministic `parse` path stands.

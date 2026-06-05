@@ -66,8 +66,47 @@ from .base import (
     InboundAdapter,
     render_help,
 )
+from .translate import confident_command, nl_to_command
 
 logger = logging.getLogger(__name__)
+
+
+def _nl_complete() -> Callable[[str, str, str], str | None] | None:
+    """The LLM `complete` seam for the natural-language fallback, or None when no provider is
+    configured (then the listener is exactly the typed grammar it has always been). A signed
+    webhook is already an authenticated operator, so -- like a headless scan -- there's no
+    interactive egress gate; the STEADYSTATE_LLM_ENABLED kill switch and cost accounting still
+    apply."""
+    from ..reason.llm import LLMAnalyst
+
+    analyst = LLMAnalyst()
+    return analyst._complete if analyst._provider() != "none" else None
+
+
+def _resolve_text(
+    adapter: InboundAdapter, body: str, state_path: str
+) -> tuple[Command | None, str | None]:
+    """Resolve a free-text message to either a command to run or an immediate reply. Returns
+    ``(command, None)`` to run a (read-only) command, or ``(None, reply)`` to answer directly (an
+    NL answer, an effectful command echoed for confirmation, a clarifying question). When no model
+    is configured or there's no free text, returns ``(None, None)`` so the caller falls back to the
+    deterministic ``parse``. Prefers a *confident* typed command before consulting the model, so a
+    real command ('probe all') never burns an LLM call and a sentence isn't mis-grabbed."""
+    getter = getattr(adapter, "message", None)
+    msg = getter(body) if getter is not None else None
+    if msg is None:
+        return None, None
+    complete = _nl_complete()
+    if complete is None:
+        return None, None
+    text, actor = msg
+    command = confident_command(text, actor)
+    if command is not None:
+        return command, None
+    result = nl_to_command(text, actor, complete, state_path=state_path)
+    if result.command is not None:
+        return result.command, None  # a read-only verb -> run it through the normal path
+    return None, result.message  # an answer / confirm-echo / clarify -> reply as-is
 
 
 def _render_pending(state_path: str) -> str:
@@ -891,7 +930,15 @@ def dispatch(
     reply = adapter.handshake(body)
     if reply is not None:
         return 200, reply, None
-    command = adapter.parse(body)
+    # Natural-language layer: with a model configured, a free-text message (a slash command /
+    # @mention) is resolved by the confident parser then the model -- so a verb-leading sentence
+    # isn't mis-grabbed, and a question gets a grounded answer. An answer / confirmation / clarify
+    # replies immediately; a resolved read command runs the normal path. With no model, or for a
+    # button/structured payload, this is a no-op and the deterministic parse stands.
+    nl_command, nl_reply = _resolve_text(adapter, body, state_path)
+    if nl_reply is not None:
+        return 200, adapter.respond(nl_reply), None
+    command = nl_command or adapter.parse(body)
     if command is None:
         return 200, adapter.respond("Nothing to do."), None
     if command.verb in _DEFERRABLE:

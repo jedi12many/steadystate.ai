@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 
-from steadystate.inbound.base import FINDINGS, PROBE, SHOW, Command
+from steadystate.inbound.base import APPROVE, FINDINGS, PROBE, SHOW, Command
 from steadystate.inbound.translate import confident_command, nl_to_command, state_snapshot
 from steadystate.state import PendingAction, StateStore
 
@@ -137,6 +137,14 @@ def test_confident_command_declines_a_verb_leading_sentence():
     assert confident_command("run the restart on web please", "amy") is None
     # bare numeric / hex references are still confident commands (ordinal + prefix resolution).
     assert confident_command("show 3", "amy") == Command(SHOW, "amy", "3")
+
+
+def test_confident_command_guards_an_optional_fingerprint_but_not_a_bare_verb():
+    # `approve` takes an OPTIONAL fingerprint: bare is a confident command (the only pending), but
+    # "approve the web fix" ('approve the') must fall through to the model -- never fire it.
+    assert confident_command("approve", "amy") == Command(APPROVE, "amy", "")
+    assert confident_command("approve 2", "amy") == Command(APPROVE, "amy", "2")
+    assert confident_command("go ahead and approve the web fix", "amy") is None
 
 
 # -- grounding: the exact catalog action names, so `run` isn't filled with an abbreviation ----
