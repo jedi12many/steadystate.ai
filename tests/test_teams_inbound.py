@@ -62,6 +62,17 @@ def test_parse_approve_decline_and_strips_the_mention():
     )
 
 
+def test_mention_stripping_is_linear_and_handles_repeats():
+    # The mention regex uses a negated class (not `.*?`), so it can't backtrack quadratically on
+    # adversarial input (CodeQL py/polynomial-redos). Behaviour is unchanged for real payloads:
+    # every <at>..</at> is stripped, case-insensitively, leaving the command.
+    assert command_from_activity(_activity("<at>bot</at> <AT>team</AT> approve fp1")) == Command(
+        APPROVE, "Jeff", "fp1"
+    )
+    # a pathological run of opening tags doesn't hang -- it just doesn't parse to a command
+    assert command_from_activity(_activity("<at>" * 5000)) is None
+
+
 def test_parse_readonly_help_and_pending():
     assert command_from_activity(_activity("<at>steadystate</at> help")) == Command(HELP, "Jeff")
     assert command_from_activity(_activity("pending", name="Amy")) == Command(PENDING, "Amy")

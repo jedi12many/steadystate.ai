@@ -29,8 +29,11 @@ from collections.abc import Mapping
 
 from .base import Command, command_from_text
 
-# Teams wraps an @mention as <at>name</at> in the activity text; strip it before scanning.
-_MENTION = re.compile(r"<at>.*?</at>", re.IGNORECASE | re.DOTALL)
+# Teams wraps an @mention as <at>name</at> in the activity text; strip it before scanning. The
+# inner match is `[^<]*` (not `.*?`): a negated class can't backtrack ambiguously, so stripping is
+# linear in the text length -- no polynomial-ReDoS on adversarial input. A Teams mention's display
+# text never contains `<`, so this matches exactly what the lazy form did for real payloads.
+_MENTION = re.compile(r"<at>[^<]*</at>", re.IGNORECASE)
 
 
 def verify_teams_signature(token: str, body: str, authorization: str) -> bool:
