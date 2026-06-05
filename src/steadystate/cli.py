@@ -1362,6 +1362,28 @@ def summary_status(state: Path = _STATE_OPTION) -> None:
 
 
 @app.command()
+def mcp(
+    state: Path = _STATE_OPTION,
+    write: bool = typer.Option(
+        False,
+        "--write",
+        help="Also expose the EFFECTFUL verbs (approve/decline/fix/run/mute/snooze/send). They "
+        "still run through the bound + catalog guardrails and are audited as `mcp`. Off by default "
+        "(an agent can observe + diagnose, not act). Also enabled by STEADYSTATE_MCP_WRITE=1.",
+    ),
+) -> None:
+    """Run steadystate as an MCP (Model Context Protocol) server over stdio, so Claude Code/Desktop
+    or any agent can drive the vetted command grammar -- `summary`/`findings`/`show`/`probe` to
+    observe, and (with --write) `approve`/`fix`/`run` to act within the SAME guardrails a human.
+    The agent picks WHAT; steadystate's gate still decides WHETHER. Speaks JSON-RPC over stdio (the
+    standard local MCP transport); point your MCP client's command at `steadystate mcp`."""
+    from .inbound.mcp import serve_stdio
+
+    env = os.environ.get("STEADYSTATE_MCP_WRITE", "").strip().lower()
+    serve_stdio(str(state), write=write or env in ("1", "true", "yes", "on"))
+
+
+@app.command()
 def history(
     label: str = typer.Option(
         "", "--label", help="Filter to one environment label (from scan --label)."
