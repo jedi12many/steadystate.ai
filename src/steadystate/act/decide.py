@@ -136,17 +136,33 @@ _SYSTEM = (
     "You are a Kubernetes SRE deciding the single safest remediation for one malfunctioning "
     "resource. You may ONLY choose from the vetted action menu you are given -- never invent an "
     "action or a command outside the stated shape. If no menu action fits, return action null. "
+    "Build the command's resource (`<kind>/<name>`) and `-n <namespace>` from the explicit "
+    "**name** and **namespace** fields given below -- NOT by parsing the identity string. Use the "
+    "action's stated command shape; argument order need not be exact, but it must be that one "
+    "action targeting THAT resource. "
     'Reply with ONLY JSON: {"action": <menu name or null>, "command": <exact command string>, '
     '"rationale": <one sentence>}.'
 )
 
 
+def _resource_fields(symptom: Symptom) -> tuple[str, str]:
+    """The workload's name + namespace, given to the model explicitly so it never has to parse them
+    out of the slash-joined identity (where it once read the namespace as the name). name = the last
+    identity segment; namespace = the stored evidence, else the second-to-last segment."""
+    parts = symptom.identity.split("/")
+    name = parts[-1] if parts else ""
+    namespace = symptom.evidence.get("namespace") or (parts[-2] if len(parts) >= 2 else "")
+    return name, namespace
+
+
 def _user_prompt(symptom: Symptom, context: str = "") -> str:
     evidence = "\n".join(f"  {k}: {v}" for k, v in symptom.evidence.items())
     grounding = f"How THIS fleet has handled this before:\n{context}\n\n" if context else ""
+    name, namespace = _resource_fields(symptom)
     return (
         f"Finding: {symptom.title}\n"
         f"category: {symptom.category}\nidentity: {symptom.identity}\n"
+        f"kind: {symptom.kind}\nname: {name}\nnamespace: {namespace}\n"
         f"evidence:\n{evidence}\n\n"
         f"{grounding}"
         f"Vetted action menu:\n{catalog_menu()}\n\n"
