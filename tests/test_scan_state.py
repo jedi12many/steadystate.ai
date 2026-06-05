@@ -404,6 +404,23 @@ def test_cli_show_renders_one_findings_evidence(tmp_path, monkeypatch):
     assert js.exit_code == 0 and '"fingerprint"' in js.output
 
 
+def test_cli_resolve_records_the_solution_for_learning(tmp_path, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    from steadystate.cli import app
+
+    db = tmp_path / "state.db"
+    plan = _plan_with_one_drift(tmp_path)
+    runner = _runner()
+    runner.invoke(app, ["scan", str(plan), "--state", str(db)])
+    fp = _only_fingerprint(db)
+
+    out = runner.invoke(app, ["resolve", fp, "reverted the console change", "--state", str(db)])
+    assert out.exit_code == 0 and "recorded fix" in out.output
+    assert _stored_status(db, fp) == "resolved"
+    with StateStore(str(db)) as store:
+        assert store.get(fp).note == "reverted the console change"  # the fix is kept for `learn`
+
+
 def test_cli_findings_token_mutes_without_creating_junk(tmp_path, monkeypatch):
     # Regression: the first token of a `findings` row must be the *full* fingerprint, so
     # muting that token targets the existing finding rather than upserting a new one.
