@@ -30,6 +30,7 @@ APPROVE = "approve"
 DECLINE = "decline"
 HELP = "help"
 PENDING = "pending"
+SUMMARY = "summary"
 PROBE = "probe"
 COST = "cost"
 MUTE = "mute"
@@ -52,6 +53,11 @@ ACTIONS_LIST = "actions"
 # lands -- the table is the single source of truth for both dispatch and self-documentation.
 COMMANDS: dict[str, tuple[str, str]] = {
     HELP: ("help", "list the commands this listener accepts"),
+    SUMMARY: (
+        "summary",
+        "a one-glance status -- open findings by severity, what's pending your approval, the "
+        "homeostat's posture, and the single worst thing right now",
+    ),
     TARGETS: ("targets", "list the probe targets this listener knows"),
     PENDING: ("pending", "show remediations awaiting approval, with their fingerprints"),
     PROBE: (
@@ -192,6 +198,7 @@ def render_help() -> str:
 # A two-arg verb (send) lists both; a verb with an optional arg marks it not-required.
 _TOOL_ARGS: dict[str, tuple[tuple[str, bool], ...]] = {
     HELP: (),
+    SUMMARY: (),
     TARGETS: (),
     PENDING: (),
     PROBE: (("target", True),),  # a target name, or "all" for the fleet
@@ -217,6 +224,7 @@ _TOOL_ARGS: dict[str, tuple[tuple[str, bool], ...]] = {
 # (approve -> applies a remediation through the executor guardrails), external-send (push outward).
 _TOOL_EFFECT: dict[str, str] = {
     HELP: "read-only",
+    SUMMARY: "read-only",
     TARGETS: "read-only",
     PENDING: "read-only",
     PROBE: "read-only",  # scans + records findings, never acts on infra

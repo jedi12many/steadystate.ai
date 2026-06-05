@@ -60,6 +60,7 @@ from .base import (
     SEND,
     SHOW,
     SNOOZE,
+    SUMMARY,
     SURFACES_LIST,
     TARGETS,
     UNMUTE,
@@ -695,6 +696,59 @@ def _render_hold(state_path: str) -> str:
     return "\n".join(lines)
 
 
+_SEVERITY_RANK = {"critical": 3, "high": 2, "medium": 1, "low": 0}
+
+
+def _render_summary(state_path: str) -> str:
+    """A glanceable, deterministic rollup of the current state -- open findings by severity, what's
+    pending your approval, the homeostat's posture, and the single worst thing right now. The
+    'morning glance': what to look at first, without piecing it together from `findings` / `pending`
+    / `hold`. Reads stored state (the last probe/sweep) -- no fresh scan. Read-only."""
+    findings: list[Finding] = []
+    pendings: list = []
+    if state_path and Path(state_path).exists():
+        with StateStore(state_path) as store:
+            findings = filter_findings(store.all_findings(), "")  # the open view (hides resolved)
+            pendings = store.all_pending()
+    # Findings line: count + per-severity breakdown (worst first), and what's awaiting you.
+    counts: dict[str, int] = {}
+    for f in findings:
+        counts[f.last_severity] = counts.get(f.last_severity, 0) + 1
+    breakdown = ", ".join(
+        f"{counts[s]} {s}" for s in sorted(counts, key=lambda s: -_SEVERITY_RANK.get(s, 0))
+    )
+    pend = f" -- {len(pendings)} pending your approval" if pendings else ""
+    if not findings and not pendings:
+        head = "all clear -- 0 open findings, nothing pending"
+    else:
+        n = len(findings)
+        head = f"{n} open finding{'s' if n != 1 else ''}" + (f" ({breakdown})" if breakdown else "")
+        head += pend
+    lines = [head]
+    # Homeostat line: reflexes (how many auto), whether any fix isn't holding, the decider grant.
+    active = reflexes()
+    if active:
+        auto = sum(1 for r in active if r.autonomy == "auto")
+        churn = 0
+        if findings and state_path and Path(state_path).exists():
+            with StateStore(state_path) as store:
+                churn = sum(
+                    reflex_recurrence(
+                        store.all_findings(), store.acted_fingerprints(), active
+                    ).values()
+                )
+        not_holding = f", {churn} not holding" if churn else ""
+        grant = "auto" if decider_auto_enabled() else "manual"
+        lines.append(
+            f"homeostat: {len(active)} reflex(es), {auto} auto{not_holding} | decider: {grant}"
+        )
+    # Worst line: the highest-severity finding, oldest-first on a tie -- what to look at first.
+    if findings:
+        worst = min(findings, key=lambda f: (-_SEVERITY_RANK.get(f.last_severity, 0), f.first_seen))
+        lines.append(f"worst: {worst.last_title}  [{worst.last_severity}]")
+    return "\n".join(lines)
+
+
 def _render_learn(state_path: str) -> str:
     """The chat view of `steadystate learn`: what steadystate has learned from findings that
     resolved on their own (out-of-band -- a human fixed it, or it self-healed). Surfaces the
@@ -832,6 +886,8 @@ def run_command(command: Command, state_path: str) -> str:
     reports, so chat stays a trigger, never a bypass; mute only silences a finding."""
     if command.verb == HELP:
         return render_help()
+    if command.verb == SUMMARY:
+        return _render_summary(state_path)
     if command.verb == TARGETS:
         return _render_targets()
     if command.verb == PENDING:
