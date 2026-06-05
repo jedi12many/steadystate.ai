@@ -24,7 +24,8 @@ import sys
 from typing import Any
 
 from .. import __version__
-from .base import COMMANDS, PROBE, Command, tool_schema
+from ..state import StateStore, filter_findings
+from .base import COMMANDS, FINDINGS, PROBE, SHOW, SUMMARY, Command, tool_schema
 from .server import run_command
 
 # The MCP protocol revision we implement. We echo the client's requested version when it sends one
@@ -93,6 +94,111 @@ def command_from_tool_call(name: str, arguments: dict[str, Any]) -> Command | No
     return Command(name, _MCP_ACTOR, argument, flags=flags, argument2=argument2)
 
 
+# -- resources: steadystate's state an agent can PULL into context (vs. a tool it invokes) -------
+# MCP resources are read-only data the client browses/attaches as context. We expose the same
+# views the read-only tools render -- so an agent can either *call* `summary` or *attach* the
+# summary resource -- backed by the same guardrailed `run_command`. Per-finding resources are
+# enumerated from the store, so the agent can browse open findings like files.
+_FINDING_URI = "steadystate://finding/"
+
+
+def mcp_resources(state_path: str) -> list[dict[str, Any]]:
+    """The resources an agent can read: the fleet `summary` and `findings` list (always), plus one
+    per open finding (its `show` evidence). Read-only; reads the last probe/sweep from the store."""
+    resources: list[dict[str, Any]] = [
+        {
+            "uri": "steadystate://summary",
+            "name": "summary",
+            "description": "One-glance fleet status (open findings by severity, pending, posture).",
+            "mimeType": "text/plain",
+        },
+        {
+            "uri": "steadystate://findings",
+            "name": "findings",
+            "description": "The remembered findings (fingerprint, status, severity).",
+            "mimeType": "text/plain",
+        },
+    ]
+    from pathlib import Path
+
+    if state_path and Path(state_path).exists():
+        with StateStore(state_path) as store:
+            for finding in filter_findings(store.all_findings(), ""):  # open view
+                resources.append(
+                    {
+                        "uri": f"{_FINDING_URI}{finding.fingerprint}",
+                        "name": f"finding: {finding.last_title}",
+                        "description": f"{finding.last_severity} -- captured evidence (`show`).",
+                        "mimeType": "text/plain",
+                    }
+                )
+    return resources
+
+
+def read_resource(uri: str, state_path: str) -> str | None:
+    """The text of one resource, or None if the URI isn't one of ours. Each maps to the same
+    read-only `run_command` view a chat user would see."""
+    if uri == "steadystate://summary":
+        return run_command(Command(SUMMARY, _MCP_ACTOR), state_path)
+    if uri == "steadystate://findings":
+        return run_command(Command(FINDINGS, _MCP_ACTOR), state_path)
+    if uri.startswith(_FINDING_URI):
+        return run_command(Command(SHOW, _MCP_ACTOR, uri[len(_FINDING_URI) :]), state_path)
+    return None
+
+
+# -- prompts: one-click templates that drop steadystate's state into the conversation ------------
+
+
+def mcp_prompts() -> list[dict[str, Any]]:
+    """Reusable prompt templates a client offers the operator -- each fills itself with live state.
+    The client lists these; invoking one (`prompts/get`) returns ready-to-send messages."""
+    return [
+        {
+            "name": "triage",
+            "description": "Review steadystate's open findings and recommend what to fix first.",
+            "arguments": [],
+        },
+        {
+            "name": "explain-finding",
+            "description": "Explain one finding (by fingerprint) in plain language.",
+            "arguments": [
+                {
+                    "name": "fingerprint",
+                    "description": "the finding's fingerprint",
+                    "required": True,
+                }
+            ],
+        },
+    ]
+
+
+def _prompt_message(text: str) -> dict[str, Any]:
+    return {"role": "user", "content": {"type": "text", "text": text}}
+
+
+def get_prompt(name: str, arguments: dict[str, Any], state_path: str) -> dict[str, Any] | None:
+    """Render one prompt's messages, dropping the relevant live state in. None if unknown."""
+    if name == "triage":
+        summary = run_command(Command(SUMMARY, _MCP_ACTOR), state_path)
+        findings = run_command(Command(FINDINGS, _MCP_ACTOR), state_path)
+        text = (
+            "Here is steadystate's current state.\n\n"
+            f"Summary:\n{summary}\n\nFindings:\n{findings}\n\n"
+            "Which should I fix first, and why? Be brief -- the worst one and the next step."
+        )
+        return {"description": "Triage the current findings", "messages": [_prompt_message(text)]}
+    if name == "explain-finding":
+        fingerprint = str(arguments.get("fingerprint", "")).strip()
+        show = run_command(Command(SHOW, _MCP_ACTOR, fingerprint), state_path)
+        text = (
+            "Explain this steadystate finding in plain language -- what it is, why it matters, "
+            f"and the one concrete next step:\n\n{show}"
+        )
+        return {"description": "Explain one finding", "messages": [_prompt_message(text)]}
+    return None
+
+
 # -- JSON-RPC 2.0 plumbing ----------------------------------------------------------------------
 
 
@@ -141,7 +247,11 @@ def handle_request(request: Any, state_path: str, *, write: bool) -> dict[str, A
             req_id,
             {
                 "protocolVersion": version if isinstance(version, str) else _PROTOCOL_VERSION,
-                "capabilities": {"tools": {"listChanged": False}},
+                "capabilities": {
+                    "tools": {"listChanged": False},
+                    "resources": {"listChanged": False},
+                    "prompts": {"listChanged": False},
+                },
                 "serverInfo": {"name": "steadystate", "version": __version__},
                 "instructions": (
                     "steadystate's infrastructure malfunction/drift detector. Use `summary` for a "
@@ -158,6 +268,25 @@ def handle_request(request: Any, state_path: str, *, write: bool) -> dict[str, A
         return _tools_call(
             req_id, params if isinstance(params, dict) else {}, state_path, write=write
         )
+    if method == "resources/list":
+        return _result(req_id, {"resources": mcp_resources(state_path)})
+    if method == "resources/read":
+        params = request.get("params") or {}
+        uri = params.get("uri") if isinstance(params, dict) else None
+        text = read_resource(uri, state_path) if isinstance(uri, str) else None
+        if text is None:
+            return _error(req_id, -32602, f"unknown resource: {uri!r}")
+        return _result(req_id, {"contents": [{"uri": uri, "mimeType": "text/plain", "text": text}]})
+    if method == "prompts/list":
+        return _result(req_id, {"prompts": mcp_prompts()})
+    if method == "prompts/get":
+        params = request.get("params") or {}
+        name = params.get("name") if isinstance(params, dict) else None
+        args = params.get("arguments") or {} if isinstance(params, dict) else {}
+        prompt = get_prompt(name, args, state_path) if isinstance(name, str) else None
+        if prompt is None:
+            return _error(req_id, -32602, f"unknown prompt: {name!r}")
+        return _result(req_id, prompt)
     if method == "ping":
         return _result(req_id, {})
     return _error(req_id, -32601, f"method not found: {method!r}")
