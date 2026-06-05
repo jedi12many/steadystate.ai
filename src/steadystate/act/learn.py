@@ -35,7 +35,7 @@ from datetime import datetime
 from statistics import median
 
 from ..state import RESOLVED, Finding
-from .reflex import AUTO, reflex_for_category
+from .reflex import AUTO, reflex_for_category, reflex_recurrence
 
 # Lesson kinds. ADOPT: we have a response for this category -- promote the reflex the human keeps
 # re-supplying by hand. SELF_HEAL: nothing of ours answers it, yet it keeps clearing alone --
@@ -105,16 +105,17 @@ def learn(findings: list[Finding], acted: set[str], *, min_occurrences: int = 2)
     by_category: dict[str, list[Demonstration]] = defaultdict(list)
     for demo in gather_demonstrations(findings, acted):
         by_category[demo.category].append(demo)
+    recurred = reflex_recurrence(findings, acted)  # per-reflex fixes that DIDN'T hold (the caution)
     lessons: list[Lesson] = []
     for category, group in by_category.items():
         if len(group) < min_occurrences:
             continue
-        lessons.append(_lesson_for(category, group))
+        lessons.append(_lesson_for(category, group, recurred))
     lessons.sort(key=lambda lesson: lesson.occurrences, reverse=True)
     return lessons
 
 
-def _lesson_for(category: str, group: list[Demonstration]) -> Lesson:
+def _lesson_for(category: str, group: list[Demonstration], recurred: dict[str, int]) -> Lesson:
     reflex = reflex_for_category(category)
     med = median(sorted(d.open_seconds for d in group))
     scope = _scope(group)
@@ -124,13 +125,10 @@ def _lesson_for(category: str, group: list[Demonstration]) -> Lesson:
             rec = (
                 f"'{reflex.name}' is auto but {count} {category} resolved out-of-band -- "
                 "schedule `hold --apply` so it catches them"
-            )
-        else:
-            rec = (
-                f"you resolved {count} {category} by hand -- promote '{reflex.name}' "
-                f"(STEADYSTATE_REFLEX_AUTO={reflex.name}) so hold reclaims them"
-            )
-        return Lesson(category, ADOPT, count, scope, med, rec + _fix_hint(group), reflex.name)
+            ) + _fix_hint(group)
+        else:  # a dormant reflex you keep re-supplying by hand: is it ready to promote?
+            rec = _promotion_recommendation(category, group, reflex, recurred.get(reflex.name, 0))
+        return Lesson(category, ADOPT, count, scope, med, rec, reflex.name)
     rec = (
         f"{count} {category} cleared without intervention (median {_humanize(med)}) -- "
         "a candidate to mute (stop paging), or a future reflex"
@@ -138,18 +136,55 @@ def _lesson_for(category: str, group: list[Demonstration]) -> Lesson:
     return Lesson(category, SELF_HEAL, count, scope, med, rec + _fix_hint(group), None)
 
 
-def _fix_hint(group: list[Demonstration]) -> str:
-    """The operator's recorded fix(es) for this category, appended to a recommendation -- so `learn`
-    shows *how* it was fixed and the decider's grounding can reuse it. The most recent distinct
-    solution (+ a count of others), or '' when none. The real payoff of `resolve <fp> "..."`."""
+def _distinct_fixes(group: list[Demonstration]) -> list[str]:
+    """The recorded fixes for this category, most-recent-first, de-duplicated -- the evidence a
+    consistent (or inconsistent) response leaves. Empty when none were recorded."""
     fixes: list[str] = []
     for demo in reversed(group):  # most recent first
         if demo.solution and demo.solution not in fixes:
             fixes.append(demo.solution)
+    return fixes
+
+
+def _fix_hint(group: list[Demonstration]) -> str:
+    """The operator's recorded fix(es), appended to a recommendation -- so `learn` shows *how* it
+    was fixed and the decider's grounding can reuse it. '' when none recorded."""
+    fixes = _distinct_fixes(group)
     if not fixes:
         return ""
     more = f" (+{len(fixes) - 1} other recorded)" if len(fixes) > 1 else ""
     return f' -- recorded fix: "{fixes[0]}"{more}'
+
+
+def _promotion_recommendation(
+    category: str, group: list[Demonstration], reflex, recurred: int
+) -> str:
+    """An **evidence-backed** promotion recommendation for a dormant reflex the operator keeps
+    fixing by hand. Learning never flips the switch -- it hands the human the track record: the
+    demand (how often, by hand), the *consistency* of the recorded fix (one repeated fix = a safe
+    candidate; many different fixes = NOT a single safe action, don't promote), and the hold record
+    (past auto-fixes that recurred -- the counterweight). The human still grants via the env var."""
+    count = len(group)
+    cta = f"STEADYSTATE_REFLEX_AUTO={reflex.name}"
+    fixes = _distinct_fixes(group)
+    caution = (
+        f" (caution: {recurred} past auto-fix(es) recurred -- may not hold)" if recurred else ""
+    )
+    if not fixes:  # demand only, no recorded fix to judge consistency
+        return (
+            f"you resolved {count} {category} by hand -- promote '{reflex.name}' "
+            f"({cta}) so hold reclaims them{caution}"
+        )
+    if len(fixes) == 1:  # one repeated, consistent fix -> a real promotion candidate
+        return (
+            f'you resolved {count} {category} by hand, one consistent fix ("{fixes[0]}") -- '
+            f"this has earned a promotion review: promote with {cta}{caution}"
+        )
+    # several different fixes -> there isn't a single safe action to automate yet
+    return (
+        f"you resolved {count} {category} by hand but with {len(fixes)} different fixes (e.g. "
+        f"\"{fixes[0]}\") -- not yet a single safe action; review before promoting '{reflex.name}'"
+    )
 
 
 def _scope(group: list[Demonstration]) -> str:

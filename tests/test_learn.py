@@ -79,13 +79,42 @@ def test_a_category_with_no_reflex_proposes_to_stop_paging():
 # -- the recorded fix (resolve <fp> "..."): how it was fixed, fed into the lesson ----------------
 
 
-def test_a_recorded_fix_rides_into_the_lesson(monkeypatch):
+def test_one_consistent_fix_earns_a_promotion_review(monkeypatch):
     monkeypatch.delenv("STEADYSTATE_REFLEX_AUTO", raising=False)
     fix = "raised the ephemeral-storage limit to 200Mi"
     findings = [_finding("a" * 64, "Evicted", note=fix), _finding("b" * 64, "Evicted", note=fix)]
     [lesson] = learn(findings, acted=set())
-    # the operator's fix is surfaced -> shown by `learn` AND fed to the decider's grounding
-    assert f'recorded fix: "{fix}"' in lesson.recommendation
+    # one repeated, consistent fix -> the lesson cites it as evidence the response is ready
+    assert fix in lesson.recommendation and "consistent fix" in lesson.recommendation
+    assert "earned a promotion review" in lesson.recommendation
+
+
+def test_several_different_fixes_are_not_yet_a_safe_action_to_promote(monkeypatch):
+    monkeypatch.delenv("STEADYSTATE_REFLEX_AUTO", raising=False)
+    findings = [
+        _finding("a" * 64, "Evicted", note="raised the storage limit"),
+        _finding("b" * 64, "Evicted", note="deleted the pod"),
+        _finding("c" * 64, "Evicted", note="cordoned the node"),
+    ]
+    [lesson] = learn(findings, acted=set())
+    # inconsistent fixes -> there isn't a single safe action; learning withholds the promotion
+    assert (
+        "different fixes" in lesson.recommendation
+        and "review before promoting" in lesson.recommendation
+    )
+    assert "earned a promotion review" not in lesson.recommendation
+
+
+def test_a_recurring_fix_adds_a_caution_to_the_promotion(monkeypatch):
+    monkeypatch.delenv("STEADYSTATE_REFLEX_AUTO", raising=False)
+    fix = "deleted the evicted pods"
+    findings = [
+        _finding("a" * 64, "Evicted", note=fix),
+        _finding("b" * 64, "Evicted", note=fix),
+        _finding("d" * 64, "Evicted", status="open"),  # acted on, yet open again -> didn't hold
+    ]
+    [lesson] = learn(findings, acted={"d" * 64})  # the recurrence signal: a fix that didn't stick
+    assert "caution" in lesson.recommendation and "recurred" in lesson.recommendation
 
 
 def test_distinct_recorded_fixes_are_summarized_most_recent_first():
