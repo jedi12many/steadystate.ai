@@ -151,3 +151,77 @@ def test_stdio_messages_serialize_as_one_json_line_each():
     out = handle_request(_req("initialize", {}), ":memory:", write=False)
     line = json.dumps(out)
     assert "\n" not in line and json.loads(line)["id"] == 1
+
+
+# -- resources: state an agent can pull into context ----------------------------
+
+
+def _db_with_findings(tmp_path):
+    from datetime import UTC, datetime
+
+    db = str(tmp_path / "s.db")
+    with StateStore(db) as store:
+        store.record(
+            {"a" * 64: ("high", "web is CrashLoopBackOff")},
+            datetime(2026, 6, 5, tzinfo=UTC),
+            evidence={"a" * 64: {"namespace": "demo", "last_log": "OOMKilled"}},
+        )
+    return db
+
+
+def test_resources_list_includes_summary_findings_and_one_per_open_finding(tmp_path):
+    db = _db_with_findings(tmp_path)
+    out = handle_request(_req("resources/list"), db, write=False)
+    uris = {r["uri"] for r in out["result"]["resources"]}
+    assert "steadystate://summary" in uris and "steadystate://findings" in uris
+    assert f"steadystate://finding/{'a' * 64}" in uris  # one resource per open finding
+
+
+def test_resources_read_returns_the_view_and_errors_on_an_unknown_uri(tmp_path):
+    db = _db_with_findings(tmp_path)
+    summary = handle_request(
+        _req("resources/read", {"uri": "steadystate://summary"}), db, write=False
+    )
+    content = summary["result"]["contents"][0]
+    assert content["uri"] == "steadystate://summary" and "open finding" in content["text"]
+    # a per-finding resource reads its `show` evidence
+    finding = handle_request(
+        _req("resources/read", {"uri": f"steadystate://finding/{'a' * 64}"}), db, write=False
+    )
+    assert "OOMKilled" in finding["result"]["contents"][0]["text"]
+    # an unknown URI is a clean error, never a crash
+    bad = handle_request(_req("resources/read", {"uri": "steadystate://nope"}), db, write=False)
+    assert bad["error"]["code"] == -32602
+
+
+# -- prompts: one-click templates that carry live state -------------------------
+
+
+def test_prompts_list_and_get_fill_in_live_state(tmp_path):
+    db = _db_with_findings(tmp_path)
+    listed = {
+        p["name"]
+        for p in handle_request(_req("prompts/list"), db, write=False)["result"]["prompts"]
+    }
+    assert {"triage", "explain-finding"} <= listed
+    # triage drops the summary + findings into the message
+    triage = handle_request(_req("prompts/get", {"name": "triage"}), db, write=False)["result"]
+    text = triage["messages"][0]["content"]["text"]
+    assert "Which should I fix first" in text and "open finding" in text
+    # explain-finding takes a fingerprint argument and reads that finding
+    explain = handle_request(
+        _req("prompts/get", {"name": "explain-finding", "arguments": {"fingerprint": "a" * 64}}),
+        db,
+        write=False,
+    )
+    assert "OOMKilled" in explain["result"]["messages"][0]["content"]["text"]
+    # an unknown prompt errors cleanly
+    assert (
+        handle_request(_req("prompts/get", {"name": "nope"}), db, write=False)["error"]["code"]
+        == -32602
+    )
+
+
+def test_initialize_advertises_tools_resources_and_prompts():
+    caps = handle_request(_req("initialize", {}), ":memory:", write=False)["result"]["capabilities"]
+    assert set(caps) == {"tools", "resources", "prompts"}
