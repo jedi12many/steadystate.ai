@@ -225,3 +225,41 @@ def test_prompts_list_and_get_fill_in_live_state(tmp_path):
 def test_initialize_advertises_tools_resources_and_prompts():
     caps = handle_request(_req("initialize", {}), ":memory:", write=False)["result"]["capabilities"]
     assert set(caps) == {"tools", "resources", "prompts"}
+
+
+# -- the `mcp` CLI command: --dir makes the launch cwd-proof ---------------------
+
+
+def test_mcp_dir_chdirs_into_the_wall_then_serves(tmp_path, monkeypatch):
+    # A client launches the server from ITS cwd, so the relative defaults miss; --dir resolves them
+    # against the wall folder by chdir-ing there before serving (like running it from there).
+    import os
+
+    from typer.testing import CliRunner
+
+    from steadystate.cli import app
+
+    monkeypatch.delenv("STEADYSTATE_MCP_WRITE", raising=False)
+    seen: dict = {}
+    monkeypatch.setattr(os, "chdir", lambda p: seen.__setitem__("chdir", str(p)))
+    monkeypatch.setattr(
+        "steadystate.inbound.mcp.serve_stdio",
+        lambda state_path, write: seen.__setitem__("serve", (state_path, write)),
+    )
+    result = CliRunner().invoke(app, ["mcp", "--dir", str(tmp_path)])
+    assert result.exit_code == 0
+    assert seen["chdir"] == str(tmp_path)  # chdir'd into the wall before serving
+    assert seen["serve"][1] is False  # still read-only by default
+
+
+def test_mcp_dir_rejects_a_missing_directory(monkeypatch):
+    from typer.testing import CliRunner
+
+    from steadystate.cli import app
+
+    monkeypatch.setattr(
+        "steadystate.inbound.mcp.serve_stdio",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not serve on a bad --dir")),
+    )
+    result = CliRunner().invoke(app, ["mcp", "--dir", "/no/such/steadystate/wall"])
+    assert result.exit_code == 1 and "not a directory" in result.output

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "steadystate": {
+      "command": "c:/Users/dilla/steadystate.ai/.venv/Scripts/steadystate.exe",
+      "args": ["mcp", "--state", "c:/tmp/ssai-verify/soak.db"]
+    }
+  }
+}
