@@ -23,7 +23,9 @@ from pathlib import Path
 from ..state import StateStore, filter_findings
 from .base import (
     _TOOL_EFFECT,
+    APPROVE,
     COMMANDS,
+    DECLINE,
     FIX,
     MUTE,
     RUN,
@@ -41,6 +43,11 @@ from .base import (
 # run as a command; the fingerprint-shape guard in confident_command() sends it to the model.
 # (For `run` the fingerprint is the *second* argument, the first being the action -- handled below.)
 _FINGERPRINT_ARG_VERBS = frozenset({SHOW, FIX, MUTE, UNMUTE, SNOOZE, SEND})
+# Verbs whose fingerprint is *optional* (a bare `approve`/`decline` acts on the only pending). Bare
+# is a confident command; a NON-empty argument, though, must still be reference-shaped -- so "go
+# ahead and approve the web fix" ('approve the') falls through to the model instead of (on a
+# listener) firing an effectful approve against a bogus reference.
+_OPTIONAL_FINGERPRINT_VERBS = frozenset({APPROVE, DECLINE})
 
 
 def _reference_shaped(arg: str) -> bool:
@@ -57,16 +64,19 @@ def confident_command(text: str, actor: str) -> Command | None:
     anywhere and takes the next token as its argument, so a natural sentence that merely contains a
     verb gets mis-grabbed ('show me the findings' -> ``show me``). When a fingerprint verb's
     reference isn't fingerprint-shaped, decline -- the line then falls through to the model, which
-    reads it as English. (The webhook adapters keep the tolerant ``command_from_text``; this only
-    gates the REPL, where a model is the fallback.)"""
+    reads it as English. (The webhook adapters keep the tolerant ``command_from_text`` for typed
+    commands; this gates the model fallback in the REPL and the listener.)"""
     command = command_from_text(text, actor)
     if command is None:
         return None
     # `run <action> <fingerprint>`: the fingerprint is the second arg; for the rest it's the first.
     reference = command.argument2 if command.verb == RUN else command.argument
-    if (command.verb in _FINGERPRINT_ARG_VERBS or command.verb == RUN) and not _reference_shaped(
-        reference
-    ):
+    # Guard a finding reference: required ones always, an optional one only when it's actually
+    # present (a bare approve/decline -- no argument -- stays a confident command).
+    guarded = command.verb in _FINGERPRINT_ARG_VERBS or command.verb == RUN
+    if command.verb in _OPTIONAL_FINGERPRINT_VERBS and command.argument:
+        guarded = True
+    if guarded and not _reference_shaped(reference):
         return None
     return command
 

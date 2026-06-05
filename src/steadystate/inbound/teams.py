@@ -29,8 +29,11 @@ from collections.abc import Mapping
 
 from .base import Command, command_from_text
 
-# Teams wraps an @mention as <at>name</at> in the activity text; strip it before scanning.
-_MENTION = re.compile(r"<at>.*?</at>", re.IGNORECASE | re.DOTALL)
+# Teams wraps an @mention as <at>name</at> in the activity text; strip it before scanning. The
+# inner match is `[^<]*` (not `.*?`): a negated class can't backtrack ambiguously, so stripping is
+# linear in the text length -- no polynomial-ReDoS on adversarial input. A Teams mention's display
+# text never contains `<`, so this matches exactly what the lazy form did for real payloads.
+_MENTION = re.compile(r"<at>[^<]*</at>", re.IGNORECASE)
 
 
 def verify_teams_signature(token: str, body: str, authorization: str) -> bool:
@@ -51,15 +54,23 @@ def verify_teams_signature(token: str, body: str, authorization: str) -> bool:
     return hmac.compare_digest(expected, provided)
 
 
-def command_from_activity(activity: dict) -> Command | None:
-    """A Command from a Teams message Activity, or None if the text isn't one of ours. The
-    operator types ``@steadystate <verb> [arg]`` -- e.g. ``approve <fingerprint>``, or just
-    ``help`` / ``pending``; we strip the ``<at>..</at>`` mention and parse the shared grammar."""
+def _activity_message(activity: dict) -> tuple[str, str] | None:
+    """The operator's free text (mention stripped) + actor from a Teams Activity, or None when
+    there's no text. Shared by the command parse and the NL fallback."""
     text = activity.get("text")
     if not isinstance(text, str):
         return None
     actor = (activity.get("from") or {}).get("name") or "teams"
-    return command_from_text(_MENTION.sub(" ", text), actor)
+    stripped = _MENTION.sub(" ", text).strip()
+    return (stripped, actor) if stripped else None
+
+
+def command_from_activity(activity: dict) -> Command | None:
+    """A Command from a Teams message Activity, or None if the text isn't one of ours. The
+    operator types ``@steadystate <verb> [arg]`` -- e.g. ``approve <fingerprint>``, or just
+    ``help`` / ``pending``; we strip the ``<at>..</at>`` mention and parse the shared grammar."""
+    msg = _activity_message(activity)
+    return command_from_text(msg[0], msg[1]) if msg else None
 
 
 class TeamsInbound:
@@ -88,6 +99,14 @@ class TeamsInbound:
         except ValueError:
             return None
         return command_from_activity(activity) if isinstance(activity, dict) else None
+
+    def message(self, body: str) -> tuple[str, str] | None:
+        # The @mention's free text + actor, for the NL fallback (mention stripped).
+        try:
+            activity = json.loads(body)
+        except ValueError:
+            return None
+        return _activity_message(activity) if isinstance(activity, dict) else None
 
     def respond(self, message: str) -> bytes:
         return json.dumps({"type": "message", "text": message}).encode()
