@@ -30,7 +30,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@v4
         with:
           languages: python
           # security-extended adds the deeper security queries beyond the default set,
@@ -38,4 +38,4 @@ jobs:
           queries: security-extended
       # Python is interpreted, so no build step -- CodeQL extracts the source directly.
       - name: Analyze
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@v4
