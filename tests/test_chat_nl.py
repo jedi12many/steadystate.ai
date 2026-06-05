@@ -88,6 +88,15 @@ def test_a_command_still_wins_over_an_answer():
     assert result.command == Command(PROBE, "amy", "all")
 
 
+def test_answers_are_instructed_to_be_short_not_a_report():
+    # A chat reply should be terse -- LLMs default to long, multi-step walls; the prompt says so.
+    from steadystate.inbound.translate import _SYSTEM
+
+    low = _SYSTEM.lower()
+    assert "at most two" in low  # a hard sentence cap
+    assert "step-by-step" in low and "runbook" in low  # no plans/lists unless asked
+
+
 def test_snapshot_evidence_carries_finding_fields_for_answering(tmp_path):
     db = str(tmp_path / "s.db")
     now = datetime(2026, 6, 4, tzinfo=UTC)
