@@ -1,10 +1,14 @@
 # steadystate.ai
 
-**Detect drift *and* malfunction in your infrastructure, reason about what matters, and remediate — guardrailed.**
+**Detect drift *and* malfunction across your infrastructure, reason about what matters, and remediate within a bound you set.** A deterministic, stdlib-only core; an optional LLM that advises and proposes but never decides; guardrailed throughout.
 
-You already declared what your infrastructure *should* be (Terraform, Ansible, Kubernetes/Rancher, ArgoCD, docker-compose, Helm). steadystate.ai watches whether it's still in **steady state** — running *as declared* **and** *healthy* — and reasons about every departure: **drift** (config diverged) and **malfunction** (the config's fine, but it's failing). It surfaces only what matters and, at the autonomy level *you* choose, brings it back — guardrailed and approvable from your phone.
+You declare desired state as IaC — Terraform, Ansible, Kubernetes/Rancher, ArgoCD, docker-compose, Helm. steadystate reconciles **declared vs. observed** by riding each tool's *own* machine-readable output (`terraform show -json`, `kubectl`, `helm`, …) rather than parsing raw files, and separates two distinct failure modes: **drift** (config diverged from what you declared) and **malfunction** (config is fine, but the resource is failing *right now* — read from the platform's own health verdict as a first-class `Symptom`). When a failing resource *also* drifted, the Symptom and Drift fold into one root-caused alert (*"failing — likely cause: this drift"*).
 
-It's **not** a dashboard to babysit. Steady state is silence; you hear from it only when something departs in a way worth your attention.
+**Everything pluggable is a seam.** Sources (what to reconcile), domain packs (security/compliance scoring), surfaces (where alerts go), and probes (live health) are entry-point plugins — a third-party package adds one without forking. The core runs with **no model at all**: detection, scoring, correlation, and the apply decision are deterministic and fully testable. An LLM is an optional add-on (an Anthropic key or any OpenAI-compatible endpoint) for plain-language reasoning and, where you grant it, *proposing* a fix or *driving* the tool as an agent.
+
+**Operate it where you work** — the terminal, chat (Slack/Teams/Discord, with natural-language understanding when an LLM is configured, so *"why is web crashlooping?"* resolves to a vetted command), or an agent over **MCP** (steadystate runs as a Model Context Protocol server). Remediation is gated identically through all three: a vetted action catalog, an impact×reversibility **bound**, and an approve + immutable audit trail. **The LLM proposes _what_; a deterministic gate decides _whether_** — the full control model is **[LLM_SAFETY.md](./LLM_SAFETY.md)**.
+
+It's not a dashboard to babysit: steady state is silence — you hear from it only when something departs in a way worth attention.
 
 ```
 detect → probe → reason → surface → suggest → approve → act
