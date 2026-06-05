@@ -65,6 +65,44 @@ def test_unparseable_reply_degrades_to_help():
     assert nl_to_command("hi", "amy", lambda *_a: None).command is None
 
 
+# -- ask mode: a question gets a grounded answer, not a command ------------------------------
+
+
+def test_a_question_gets_a_grounded_answer():
+    complete, _ = _complete_returning(
+        {
+            "verb": None,
+            "answer": "web is CrashLoopBackOff -- its last log was OOMKilled, so it's hitting its "
+            "memory limit.",
+        }
+    )
+    result = nl_to_command("why is web unhealthy?", "amy", complete)
+    assert result.command is None
+    assert "OOMKilled" in result.message  # the model's prose answer, shown as-is
+
+
+def test_a_command_still_wins_over_an_answer():
+    # If the model fills both a verb and an answer, the action intent wins -- run the command.
+    complete, _ = _complete_returning({"verb": "probe", "argument": "all", "answer": "looks busy"})
+    result = nl_to_command("check everything", "amy", complete)
+    assert result.command == Command(PROBE, "amy", "all")
+
+
+def test_snapshot_evidence_carries_finding_fields_for_answering(tmp_path):
+    db = str(tmp_path / "s.db")
+    now = datetime(2026, 6, 4, tzinfo=UTC)
+    with StateStore(db) as store:
+        store.record(
+            {"c" * 64: ("high", "web is CrashLoopBackOff")},
+            now,
+            evidence={"c" * 64: {"namespace": "demo", "last_log": "OOMKilled: memory limit"}},
+        )
+    plain = state_snapshot(db)
+    rich = state_snapshot(db, with_evidence=True)
+    assert "OOMKilled" not in plain  # compact view: titles only, no evidence
+    assert "evidence:" in rich and "OOMKilled" in rich and "namespace=demo" in rich
+
+
 # -- grounding: the snapshot the model resolves references against ----------------------------
 
 
