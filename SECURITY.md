@@ -47,7 +47,11 @@ guardrails**, for example:
 - an ineligible drift (e.g. a destroy) being treated as eligible;
 - circumventing the snapshot / verify / revert path;
 - a Surface input (chat / API) reaching an apply without the same eligibility +
-  confirmation checks (chat is a trigger, never a bypass).
+  confirmation checks (chat is a trigger, never a bypass);
+- an LLM-proposed or **agent-driven (MCP)** action reaching a live change
+  without the catalog + bound + confirmation checks a human hits. The control
+  model is documented in **[LLM_SAFETY.md](./LLM_SAFETY.md)**; a way around any
+  of those layers is in scope here.
 
 Findings that turn a read-only drift scan into an unintended change to real
 infrastructure are the highest severity.
