@@ -65,7 +65,12 @@ from .engine import build_report, collect_resources
 from .inbound import INBOUND, build_inbound
 from .inbound.base import PROBE, Command, command_from_text, tool_schema
 from .inbound.server import run_command, serve
-from .inbound.translate import confident_command, nl_to_command, persist_llm_calls
+from .inbound.translate import (
+    confident_command,
+    nl_to_command,
+    persist_llm_calls,
+    state_snapshot,
+)
 from .notify import SURFACES, build_surfaces
 from .notify.base import Surface
 from .notify.console import ConsoleSurface
@@ -73,6 +78,7 @@ from .onboarding import SECTIONS, Status, audit, read_env_file, summary, write_e
 from .probe import PROBE_CAPABILITIES, PROBES
 from .reason.cost import roll_up, roll_up_by_period, scan_cost_line
 from .reason.enrich import ENRICHERS
+from .reason.explain import explain_finding, explain_state, finding_facts
 from .reason.llm import LLMAnalyst
 from .reason.pipeline import CORRELATORS
 from .reconcile_state import reconcile
@@ -1518,6 +1524,62 @@ def chat(state: Path = _STATE_OPTION) -> None:
                 typer.echo(result.message)
     finally:
         _save_history(history_path)  # persist so up-arrow survives a restart
+
+
+@app.command()
+def explain(
+    fingerprint: str = typer.Argument(
+        "",
+        help="A finding's fingerprint (prefix ok) to explain in plain language; omit to summarize "
+        "the whole current state.",
+    ),
+    state: Path = _STATE_OPTION,
+) -> None:
+    """Explain a finding -- or the current state -- in plain language: the LLM's grounded read.
+
+    `explain <fingerprint>` narrates ONE finding from its captured evidence (what it is, why it
+    matters, the next step); bare `explain` synthesizes what's open + pending. It reasons over only
+    the stored facts, so it never invents risk the data doesn't support. With no LLM configured it
+    degrades honestly to the raw facts. The model spend is recorded in the cost ledger under the
+    `explain` caller."""
+    analyst = LLMAnalyst()  # no egress gate: a local CLI is already trusted
+    complete = analyst._complete if analyst._provider() != "none" else None
+    _RAW = "(no LLM configured -- showing the raw facts.)\n\n"
+    _DEGRADED = "(the model was unavailable -- showing the raw facts.)\n\n"
+    with _open_store(state) as store:
+        if fingerprint:
+            finding = store.get(fingerprint)
+            if finding is None:
+                matches = store.find_by_prefix(fingerprint)
+                if len(matches) == 1:
+                    finding = matches[0]
+                elif not matches:
+                    typer.echo(f"No finding matches '{fingerprint}'. Run `findings` to list them.")
+                    raise typer.Exit(1)
+                else:
+                    typer.echo(
+                        f"'{fingerprint}' matches {len(matches)} findings -- "
+                        "use more of the fingerprint."
+                    )
+                    raise typer.Exit(1)
+            facts = finding_facts(finding)
+            if complete is None:
+                typer.echo(_RAW + facts)
+                return
+            narrative = explain_finding(finding, complete)
+            persist_llm_calls(str(state), analyst.calls)  # count the spend in the ledger
+            typer.echo(narrative or (_DEGRADED + facts))
+        else:
+            snapshot = state_snapshot(str(state), with_evidence=True)
+            if not snapshot.strip():  # nothing open -> no need to spend a model call
+                typer.echo("Nothing open right now -- the cluster looks clear.")
+                return
+            if complete is None:
+                typer.echo(_RAW + snapshot)
+                return
+            summary = explain_state(snapshot, complete)
+            persist_llm_calls(str(state), analyst.calls)
+            typer.echo(summary or (_DEGRADED + snapshot))
 
 
 @app.command()
