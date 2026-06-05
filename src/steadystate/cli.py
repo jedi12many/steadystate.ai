@@ -1744,6 +1744,45 @@ def _render_audit(console: Console, env: dict[str, str], *, title: str) -> None:
     )
 
 
+# The runtime *dials* -- behavior tuners that the capability audit doesn't cover (they're not
+# ready/partial/off, they're a value with a default). (env var, default shown when unset, effect).
+# None are secrets, so doctor prints their live values. The full table lives in CONFIG.md.
+_DIALS: tuple[tuple[str, str, str], ...] = (
+    ("STEADYSTATE_TARGETS", ".steadystate/targets.json", "named-targets registry (your wall)"),
+    ("STEADYSTATE_DECIDER_AUTO", "off", "let the LLM decider act autonomously (within the bound)"),
+    ("STEADYSTATE_REFLEX_AUTO", "off", "let reflexes act autonomously"),
+    ("STEADYSTATE_MCP_WRITE", "off", "expose effectful verbs over MCP (= mcp --write)"),
+    ("STEADYSTATE_BOUND", "built-in", "override the impact x reversibility bound"),
+    ("STEADYSTATE_BREAKGLASS_USERS", "(nobody)", "who may confirm an out-of-bound action"),
+    ("STEADYSTATE_LLM_ENABLED", "on", "LLM kill switch (false/0/no/off disables all calls)"),
+    ("STEADYSTATE_LLM_PROVIDER", "auto", "force anthropic | openai"),
+    ("STEADYSTATE_LLM_TIMEOUT", "30", "per-call timeout (seconds)"),
+    ("STEADYSTATE_MODEL", "claude-sonnet-4-6", "default model"),
+    ("STEADYSTATE_MODEL_CHEAP", "claude-haiku-4-5", "cheap tier (routing callers, e.g. chat-nl)"),
+    ("STEADYSTATE_REACHABLE_TIMEOUT", "8s", "cluster reachability probe timeout (0 = no cap)"),
+    ("STEADYSTATE_RESOLVE_AFTER", "30m", "grace before a gone finding resolves (0 = immediate)"),
+    ("STEADYSTATE_PATCH_DIR", ".steadystate/patches", "where remediation patch files are written"),
+    ("STEADYSTATE_ENRICH_QUERY", "(none)", "PromQL bar for --enrich prometheus"),
+)
+
+
+def _render_dials(console: Console, env: dict[str, str]) -> None:
+    """The runtime dials with their live values -- the behavior tuners the capability audit omits.
+    Each shows the set value, or its default when unset. None are secrets. See CONFIG.md for all."""
+    table = Table(show_header=True, header_style="bold", title_justify="left")
+    table.add_column("runtime dial")
+    table.add_column("value")
+    table.add_column("effect", overflow="fold")
+    for name, default, effect in _DIALS:
+        value = env.get(name, "").strip()
+        shown = value if value else f"[dim](default: {default})[/dim]"
+        table.add_row(name, shown, effect)
+    console.print(
+        "\n[bold]Runtime dials[/bold] [dim](behavior tuners -- full table in CONFIG.md)[/dim]"
+    )
+    console.print(table)
+
+
 @app.command()
 def doctor(
     env_file: Path | None = typer.Option(
@@ -1753,12 +1792,14 @@ def doctor(
     """Show what's configured and what each capability still needs -- a read-only preflight.
 
     Inspects the live environment (plus an optional --env-file) and reports every capability as
-    ready / partial / off. Never prints a secret value, only whether it's set -- safe to run and
-    paste. The answer to 'if I didn't set this up, what do I need?'"""
+    ready / partial / off, then the runtime dials with their live values. Never prints a secret
+    value -- safe to run and paste. The answer to 'if I didn't set this up, what do I need?'"""
     env = dict(os.environ)
     if env_file:
         env = {**read_env_file(env_file), **env}  # live env overrides the file
-    _render_audit(Console(), env, title="Configuration")
+    console = Console()
+    _render_audit(console, env, title="Configuration")
+    _render_dials(console, env)
 
 
 def _create_targets(

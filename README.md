@@ -34,6 +34,8 @@ steadystate catalog     # every source, pack, surface + command this build offer
 
 No dashboard to babysit — point it at your IaC and run it in CI or as a scheduled job; operate it from the terminal, chat (Slack/Teams/Discord), or an agent over **MCP**.
 
+Every environment variable — providers, surfaces, listeners, and the autonomy dials — is in **[CONFIG.md](./CONFIG.md)**; `steadystate doctor` shows what's set (and the live value of each dial).
+
 ## Getting started — point it at *your* setup
 
 Not sure which `--source` fits, or what to feed it? Start from the directory holding your IaC and let the tool tell you. The four steps escalate: **what's possible → what's actually there → register it → scan it.**
