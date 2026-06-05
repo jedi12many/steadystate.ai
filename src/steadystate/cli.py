@@ -65,7 +65,7 @@ from .engine import build_report, collect_resources
 from .inbound import INBOUND, build_inbound
 from .inbound.base import PROBE, Command, command_from_text, tool_schema
 from .inbound.server import run_command, serve
-from .inbound.translate import nl_to_command
+from .inbound.translate import confident_command, nl_to_command
 from .notify import SURFACES, build_surfaces
 from .notify.base import Surface
 from .notify.console import ConsoleSurface
@@ -1483,6 +1483,10 @@ def chat(state: Path = _STATE_OPTION) -> None:
     complete = analyst._complete if analyst._provider() != "none" else None
     nl = " -- LLM on: you can also just ask in plain English." if complete else ""
     typer.echo(f"steadystate chat -- type `help`, or a command. Ctrl-D (or `exit`) to quit.{nl}")
+    # With a model as fallback, guard the deterministic-first shortcut so a verb-leading *sentence*
+    # ("show me the findings") isn't mis-grabbed as `show me` -- it falls through to the model. With
+    # no model, keep the tolerant parser (it's the only chance to act on the line).
+    parse = confident_command if complete is not None else command_from_text
     try:
         while True:
             try:
@@ -1494,7 +1498,7 @@ def chat(state: Path = _STATE_OPTION) -> None:
                 continue
             if line in ("exit", "quit"):
                 break
-            command = command_from_text(line, actor)
+            command = parse(line, actor)
             if command is not None:
                 typer.echo(run_command(command, str(state)))
                 continue
