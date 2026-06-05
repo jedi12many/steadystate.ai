@@ -18,7 +18,9 @@ from steadystate.state import APPLIED, RESOLVED, AuditEntry, Finding, StateStore
 _T0 = datetime(2026, 6, 2, 12, 0, 0, tzinfo=UTC)
 
 
-def _finding(fp: str, category: str, *, namespace="prod", cluster="east", status=RESOLVED, mins=4):
+def _finding(
+    fp: str, category: str, *, namespace="prod", cluster="east", status=RESOLVED, mins=4, note=None
+):
     first = _T0.isoformat()
     last = _T0.replace(minute=mins).isoformat()
     details = {"category": category, "namespace": namespace, "cluster": cluster, "workload": "web"}
@@ -32,6 +34,7 @@ def _finding(fp: str, category: str, *, namespace="prod", cluster="east", status
         last_title=f"web is {category}",
         status=status,
         details=details,
+        note=note,  # the operator's recorded fix, from `resolve <fp> "..."`
     )
 
 
@@ -71,6 +74,35 @@ def test_a_category_with_no_reflex_proposes_to_stop_paging():
     [lesson] = learn(findings, acted=set())
     assert lesson.kind == SELF_HEAL and lesson.reflex_name is None
     assert "mute" in lesson.recommendation and "median 4m" in lesson.recommendation
+
+
+# -- the recorded fix (resolve <fp> "..."): how it was fixed, fed into the lesson ----------------
+
+
+def test_a_recorded_fix_rides_into_the_lesson(monkeypatch):
+    monkeypatch.delenv("STEADYSTATE_REFLEX_AUTO", raising=False)
+    fix = "raised the ephemeral-storage limit to 200Mi"
+    findings = [_finding("a" * 64, "Evicted", note=fix), _finding("b" * 64, "Evicted", note=fix)]
+    [lesson] = learn(findings, acted=set())
+    # the operator's fix is surfaced -> shown by `learn` AND fed to the decider's grounding
+    assert f'recorded fix: "{fix}"' in lesson.recommendation
+
+
+def test_distinct_recorded_fixes_are_summarized_most_recent_first():
+    findings = [
+        _finding("a" * 64, "CrashLoopBackOff", note="rolled back the image"),
+        _finding("b" * 64, "CrashLoopBackOff", note="bumped the memory limit"),
+        _finding("c" * 64, "CrashLoopBackOff"),  # no fix recorded -- fine, just not shown
+    ]
+    [lesson] = learn(findings, acted=set())
+    # most recent distinct fix, with a count of the others
+    assert 'recorded fix: "bumped the memory limit" (+1 other recorded)' in lesson.recommendation
+
+
+def test_no_recorded_fix_leaves_the_recommendation_unchanged():
+    findings = [_finding(c * 64, "CrashLoopBackOff") for c in ("a", "b")]
+    [lesson] = learn(findings, acted=set())
+    assert "recorded fix" not in lesson.recommendation  # nothing recorded -> no fix clause
 
 
 def test_a_promoted_reflex_still_resolving_out_of_band_says_schedule_hold(monkeypatch):

@@ -55,6 +55,7 @@ class Demonstration:
     namespace: str
     cluster: str
     open_seconds: float  # how long it was open (first_seen -> last_seen) before it cleared
+    solution: str = ""  # the operator's recorded fix (from `resolve <fp> "..."`), if any
 
 
 @dataclass(frozen=True)
@@ -90,6 +91,7 @@ def gather_demonstrations(findings: list[Finding], acted: set[str]) -> list[Demo
                 namespace=finding.details.get("namespace", ""),
                 cluster=finding.details.get("cluster", ""),
                 open_seconds=_open_seconds(finding.first_seen, finding.last_seen),
+                solution=finding.note or "",  # the operator's recorded fix, if they used `resolve`
             )
         )
     return demos
@@ -128,12 +130,26 @@ def _lesson_for(category: str, group: list[Demonstration]) -> Lesson:
                 f"you resolved {count} {category} by hand -- promote '{reflex.name}' "
                 f"(STEADYSTATE_REFLEX_AUTO={reflex.name}) so hold reclaims them"
             )
-        return Lesson(category, ADOPT, count, scope, med, rec, reflex.name)
+        return Lesson(category, ADOPT, count, scope, med, rec + _fix_hint(group), reflex.name)
     rec = (
         f"{count} {category} cleared without intervention (median {_humanize(med)}) -- "
         "a candidate to mute (stop paging), or a future reflex"
     )
-    return Lesson(category, SELF_HEAL, count, scope, med, rec, None)
+    return Lesson(category, SELF_HEAL, count, scope, med, rec + _fix_hint(group), None)
+
+
+def _fix_hint(group: list[Demonstration]) -> str:
+    """The operator's recorded fix(es) for this category, appended to a recommendation -- so `learn`
+    shows *how* it was fixed and the decider's grounding can reuse it. The most recent distinct
+    solution (+ a count of others), or '' when none. The real payoff of `resolve <fp> "..."`."""
+    fixes: list[str] = []
+    for demo in reversed(group):  # most recent first
+        if demo.solution and demo.solution not in fixes:
+            fixes.append(demo.solution)
+    if not fixes:
+        return ""
+    more = f" (+{len(fixes) - 1} other recorded)" if len(fixes) > 1 else ""
+    return f' -- recorded fix: "{fixes[0]}"{more}'
 
 
 def _scope(group: list[Demonstration]) -> str:

@@ -129,6 +129,22 @@ def test_resolve_absent_resolves_open_then_recurrence_reactivates():
     assert store.status(fp) == OPEN
 
 
+def test_resolve_by_hand_records_the_solution_and_reopens_if_still_present():
+    store = StateStore()
+    fp = _drift().fingerprint
+    store.record({fp: ("medium", "hog Evicted")}, _t(1))
+
+    # an operator resolves it by hand, recording HOW -- status resolved, the fix kept as the note.
+    store.resolve(fp, "raised the ephemeral-storage limit", "jeff", _t(2))
+    finding = store.get(fp)
+    assert finding.status == RESOLVED and finding.note == "raised the ephemeral-storage limit"
+    assert finding.actor == "jeff"
+
+    # if the finding is in fact still present, the next scan reopens it (can't resolve a live fire).
+    store.record({fp: ("medium", "hog Evicted")}, _t(3))
+    assert store.status(fp) == OPEN
+
+
 def test_resolve_absent_keeps_present_findings_open():
     store = StateStore()
     fp = _drift().fingerprint

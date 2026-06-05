@@ -827,6 +827,28 @@ def snooze(
 
 
 @app.command()
+def resolve(
+    fingerprint: str = typer.Argument(..., help="The Event fingerprint (from `findings`)."),
+    solution: str = typer.Argument(
+        "",
+        help="Optional: how you fixed it. Recorded with the finding and fed to `learn` + the "
+        "decider's grounding, so next time this category recurs steadystate knows what worked.",
+    ),
+    actor: str = typer.Option("cli", "--actor", help="Who resolved it (recorded for audit)."),
+    state: Path = _STATE_OPTION,
+) -> None:
+    """Mark a finding resolved by hand -- and, optionally, record *how* you fixed it.
+
+    Unlike the automatic resolve-on-absence, this captures the human's fix as a **learnable
+    demonstration**: `learn` surfaces it, and it grounds the decider ("last time this fleet hit X,
+    it was fixed by Y"). The next scan reopens it if the finding is in fact still present."""
+    with _open_store(state) as store:
+        store.resolve(fingerprint, solution or None, actor, datetime.now(UTC))
+    tail = f' -- recorded fix: "{solution}"' if solution else ""
+    typer.echo(f"resolved {fingerprint}{tail}")
+
+
+@app.command()
 def findings(
     state: Path = _STATE_OPTION,
     open_: bool = typer.Option(False, "--open", help="Only open findings."),

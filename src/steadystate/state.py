@@ -447,6 +447,17 @@ class StateStore:
             fingerprint, SNOOZED, snooze_until=_iso(until), note=None, actor=actor, now=now
         )
 
+    def resolve(self, fingerprint: str, note: str | None, actor: str | None, now: datetime) -> None:
+        """Mark a finding **resolved by hand**, optionally recording the operator's fix in ``note``.
+
+        Distinct from the automatic resolve-on-absence: here a human says "I fixed this" (and how),
+        so the resolution -- *and its solution* -- becomes a learnable demonstration (see act/learn)
+        that can ground the decider next time the category recurs. Upserts like :meth:`mute`; the
+        next scan reopens it if the finding is still present (you can't resolve a live fire)."""
+        self._upsert_status(
+            fingerprint, RESOLVED, snooze_until=None, note=note, actor=actor, now=now
+        )
+
     def _upsert_status(
         self,
         fingerprint: str,
