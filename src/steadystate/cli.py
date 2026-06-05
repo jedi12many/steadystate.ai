@@ -1372,6 +1372,20 @@ def mcp(
         "client (Claude Code, Copilot CLI) launches the server from a different working directory "
         "than your wall folder -- one absolute --dir per server instead of pinning every path.",
     ),
+    label: str = typer.Option(
+        "",
+        "--label",
+        help="A name for this wall, stamped into the server's identity + the connect summary so a "
+        "client (and you) can tell one wall's server from another's. Defaults to the --dir folder "
+        "name.",
+    ),
+    refresh: str = typer.Option(
+        "",
+        "--refresh",
+        help="Probe this target once at startup, so a connecting agent gets CURRENT state instead "
+        "of the last stored scan. Trades a few seconds of connect latency for freshness; off by "
+        "default (a slow cluster could trip a client's handshake timeout).",
+    ),
     write: bool = typer.Option(
         False,
         "--write",
@@ -1388,7 +1402,9 @@ def mcp(
 
     A client launches this server from *its* working directory, not your wall folder -- so the
     cwd-relative defaults (.steadystate/state.db, targets, kubeconfigs) miss. Pass `--dir <folder>`
-    so they resolve against that folder, exactly as if you'd run it from there."""
+    so they resolve against that folder, exactly as if you'd run it from there. On connect the
+    server hands the agent a live status summary (this wall, what's open/pending, how fresh) so it
+    resumes without a round-trip; `--refresh <target>` makes that summary current first."""
     from .inbound.mcp import serve_stdio
 
     if directory:
@@ -1399,8 +1415,11 @@ def mcp(
         os.chdir(
             target
         )  # resolve every relative default against the wall folder, like a `cd` there
+    if refresh:  # freshen the store before serving, so a connecting agent sees current state
+        run_command(Command(PROBE, _local_actor(), refresh), str(state))
+    wall = label or (Path(directory).name if directory else "")
     env = os.environ.get("STEADYSTATE_MCP_WRITE", "").strip().lower()
-    serve_stdio(str(state), write=write or env in ("1", "true", "yes", "on"))
+    serve_stdio(str(state), write=write or env in ("1", "true", "yes", "on"), label=wall)
 
 
 @app.command()

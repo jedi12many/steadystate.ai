@@ -71,18 +71,23 @@ wall*:
     "ssai-akeyless-use1": {
       "type": "local",
       "command": "steadystate",
-      "args": ["mcp", "--dir", "/Users/you/ssai/akeyless/us-east-1"],
+      "args": ["mcp", "--dir", "/Users/you/ssai/akeyless/us-east-1", "--label", "akeyless-use1"],
       "tools": ["summary", "findings", "show", "probe", "hold"]
     },
     "ssai-squid-use1": {
       "type": "local",
       "command": "steadystate",
-      "args": ["mcp", "--dir", "/Users/you/ssai/squid/us-east-1", "--write"],
+      "args": ["mcp", "--dir", "/Users/you/ssai/squid/us-east-1", "--label", "squid-use1", "--write"],
       "tools": ["*"]
     }
   }
 }
 ```
+
+`--label` names each wall in the server's identity + the connect summary (defaults to the `--dir`
+folder name). On connect, the server hands the agent a **live status line** — *which wall, what's
+open/pending, how fresh* — so it resumes without a "let me check" round-trip; add `--refresh
+<target>` to probe that summary *current* at connect (trades a few seconds of startup for freshness).
 
 One `--dir` per wall — no `--state`/`STEADYSTATE_TARGETS`/`KUBECONFIG` to keep in sync. (If your
 `targets.json` references kubeconfigs by *absolute* path, they work regardless; by *relative* path,

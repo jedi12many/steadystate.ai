@@ -244,7 +244,7 @@ def test_mcp_dir_chdirs_into_the_wall_then_serves(tmp_path, monkeypatch):
     monkeypatch.setattr(os, "chdir", lambda p: seen.__setitem__("chdir", str(p)))
     monkeypatch.setattr(
         "steadystate.inbound.mcp.serve_stdio",
-        lambda state_path, write: seen.__setitem__("serve", (state_path, write)),
+        lambda state_path, write, label: seen.__setitem__("serve", (state_path, write, label)),
     )
     result = CliRunner().invoke(app, ["mcp", "--dir", str(tmp_path)])
     assert result.exit_code == 0
@@ -263,3 +263,57 @@ def test_mcp_dir_rejects_a_missing_directory(monkeypatch):
     )
     result = CliRunner().invoke(app, ["mcp", "--dir", "/no/such/steadystate/wall"])
     assert result.exit_code == 1 and "not a directory" in result.output
+
+
+def test_mcp_label_defaults_to_the_dir_basename_and_explicit_wins(tmp_path, monkeypatch):
+    import os
+
+    from typer.testing import CliRunner
+
+    from steadystate.cli import app
+
+    seen: dict = {}
+    monkeypatch.setattr(os, "chdir", lambda p: None)
+    monkeypatch.setattr(
+        "steadystate.inbound.mcp.serve_stdio",
+        lambda state_path, write, label: seen.__setitem__("label", label),
+    )
+    wall = tmp_path / "akeyless-use1"
+    wall.mkdir()
+    CliRunner().invoke(app, ["mcp", "--dir", str(wall)])
+    assert seen["label"] == "akeyless-use1"  # defaults to the wall folder name
+    CliRunner().invoke(app, ["mcp", "--dir", str(wall), "--label", "custom"])
+    assert seen["label"] == "custom"  # an explicit --label wins
+
+
+def test_mcp_refresh_probes_before_serving(monkeypatch):
+    from typer.testing import CliRunner
+
+    import steadystate.cli as climod
+    from steadystate.cli import app
+
+    calls: list = []
+    monkeypatch.setattr(
+        "steadystate.inbound.mcp.serve_stdio", lambda *a, **k: calls.append("served")
+    )
+    monkeypatch.setattr(
+        climod, "run_command", lambda cmd, sp: calls.append(("probe", cmd.verb, cmd.argument))
+    )
+    CliRunner().invoke(app, ["mcp", "--refresh", "prod"])
+    # the probe runs FIRST (freshen the store), then we serve
+    assert calls == [("probe", "probe", "prod"), "served"]
+
+
+def test_initialize_carries_the_wall_label_and_live_state(tmp_path):
+    db = _db_with_findings(tmp_path)  # one high CrashLoopBackOff finding
+    out = handle_request(_req("initialize", {}), db, write=False, label="akeyless-use1")["result"]
+    assert out["serverInfo"]["title"] == "steadystate (akeyless-use1)"  # the wall self-identifies
+    instr = out["instructions"]
+    assert "wall: akeyless-use1" in instr
+    # the live summary is embedded, so a connecting agent resumes WITHOUT a tool round-trip
+    assert "open finding" in instr and "CrashLoopBackOff" in instr
+
+
+def test_initialize_without_a_label_omits_the_title():
+    out = handle_request(_req("initialize", {}), ":memory:", write=False)["result"]
+    assert "title" not in out["serverInfo"]  # no label -> no per-wall title

@@ -699,17 +699,43 @@ def _render_hold(state_path: str) -> str:
 _SEVERITY_RANK = {"critical": 3, "high": 2, "medium": 1, "low": 0}
 
 
+def _freshness(findings: list[Finding]) -> str:
+    """'12m ago' / '3h ago' / '2d ago' from the most recent finding timestamp -- how stale the
+    stored state is (when the last scan/probe touched it). '' when there's nothing recorded. So a
+    glance (and an MCP-connected agent) knows whether to trust the snapshot or refresh it."""
+    stamps = [f.last_seen for f in findings if f.last_seen]
+    if not stamps:
+        return ""
+    try:
+        latest = datetime.fromisoformat(max(stamps))
+    except ValueError:
+        return ""
+    if latest.tzinfo is None:
+        latest = latest.replace(tzinfo=UTC)
+    secs = max(0, int((datetime.now(UTC) - latest).total_seconds()))
+    if secs < 90:
+        return "just now"
+    if secs < 5400:
+        return f"{secs // 60}m ago"
+    if secs < 172800:
+        return f"{secs // 3600}h ago"
+    return f"{secs // 86400}d ago"
+
+
 def _render_summary(state_path: str) -> str:
     """A glanceable, deterministic rollup of the current state -- open findings by severity, what's
-    pending your approval, the homeostat's posture, and the single worst thing right now. The
-    'morning glance': what to look at first, without piecing it together from `findings` / `pending`
-    / `hold`. Reads stored state (the last probe/sweep) -- no fresh scan. Read-only."""
+    pending your approval, the homeostat's posture, the single worst thing right now, and how fresh
+    the data is. The 'morning glance': what to look at first, without piecing it together from
+    `findings` / `pending` / `hold`. Reads stored state (the last probe/sweep) -- no fresh scan."""
     findings: list[Finding] = []
     pendings: list = []
+    as_of = ""
     if state_path and Path(state_path).exists():
         with StateStore(state_path) as store:
-            findings = filter_findings(store.all_findings(), "")  # the open view (hides resolved)
+            every = store.all_findings()
+            findings = filter_findings(every, "")  # the open view (hides resolved)
             pendings = store.all_pending()
+            as_of = _freshness(every)
     # Findings line: count + per-severity breakdown (worst first), and what's awaiting you.
     counts: dict[str, int] = {}
     for f in findings:
@@ -724,6 +750,8 @@ def _render_summary(state_path: str) -> str:
         n = len(findings)
         head = f"{n} open finding{'s' if n != 1 else ''}" + (f" ({breakdown})" if breakdown else "")
         head += pend
+    if as_of:
+        head += f"  (as of {as_of})"
     lines = [head]
     # Homeostat line: reflexes (how many auto), whether any fix isn't holding, the decider grant.
     active = reflexes()

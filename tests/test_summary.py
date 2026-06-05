@@ -52,6 +52,17 @@ def test_summary_orders_critical_before_low(tmp_path):
     assert "(1 critical, 1 low)" in out and "worst: boom  [critical]" in out
 
 
+def test_summary_shows_data_freshness(tmp_path):
+    db = str(tmp_path / "s.db")
+    with StateStore(db) as store:
+        store.record({"a" * 64: ("high", "web down")}, datetime.now(UTC))
+    assert "as of" in _render_summary(db)  # how stale the stored state is, for a glance/an agent
+    empty = str(tmp_path / "e.db")
+    with StateStore(empty):
+        pass
+    assert "as of" not in _render_summary(empty)  # nothing recorded -> no staleness line
+
+
 def test_summary_dispatches_as_a_read_only_chat_command(tmp_path):
     db = str(tmp_path / "s.db")
     with StateStore(db) as store:
