@@ -99,10 +99,12 @@ Three independent walls of defense, one per concern:
 
 - **Reach** — each server's `--dir` scopes it to *only* that deployment+region's targets + kubeconfig,
   so a sweep or an agent in `ssai-akeyless-use1` can't enumerate or touch Squid, or `eu-west-1`.
-- **Write grant** — `akeyless-use1` is read-only (observe/diagnose only); `squid-use1` adds `--write`,
-  so an agent can run guardrailed `approve`/`fix`/`run` there — and only there.
+- **Grant tier** — three levels: read-only (default, `akeyless-use1`); **`--author`** lets an agent
+  write custom checks (`add-check` — observe-only config, schema-gated) *without* touching infra;
+  **`--write`** (`squid-use1`) adds guardrailed `approve`/`fix`/`run`. So you can let Copilot help
+  *author* health checks on a wall without granting it remediation power.
 - **Tool allowlist** — Copilot's own `"tools"` field is a second gate: `akeyless-use1` exposes only
-  read verbs even if you forget the write flag.
+  read verbs even if you forget the write flag (and to call `add-check`, the list must include it).
 
 Prefer the wizard? `/mcp add` inside Copilot CLI walks the same fields (name → type STDIO →
 command/args → env → tools); `Ctrl+S` saves and the server is live immediately, no restart.

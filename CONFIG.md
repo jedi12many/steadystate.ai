@@ -45,7 +45,8 @@ wall** to control blast radius.
 |---|---|---|
 | `STEADYSTATE_DECIDER_AUTO` | off | Let the LLM decider **act** autonomously — still only within the bound + the vetted catalog, and audited. |
 | `STEADYSTATE_REFLEX_AUTO` | off | Let reflexes act autonomously on their known-safe categories (e.g. reclaim evicted pods). |
-| `STEADYSTATE_MCP_WRITE` | off | Expose the effectful verbs over MCP (identical to `steadystate mcp --write`). |
+| `STEADYSTATE_MCP_AUTHOR` | off | Expose the check-**authoring** verbs (`add-check`) over MCP **without** full write (= `mcp --author`) — an agent can write observe-only, schema-gated checks but can't `approve`/`fix`/`run` infra. The middle tier between read-only and `--write`. |
+| `STEADYSTATE_MCP_WRITE` | off | Expose the **effectful** verbs over MCP (identical to `steadystate mcp --write`) — `approve`/`fix`/`run`/mute/… infra remediation, gated + audited. |
 | `STEADYSTATE_BOUND` | built-in | Override the impact×reversibility **bound** (what may auto-run vs. escalate). |
 | `STEADYSTATE_BREAKGLASS_USERS` | *(nobody)* | Comma list of operators allowed to issue/confirm a break-glass (out-of-bound) action. Default-closed: unset = break-glass off. |
 | `STEADYSTATE_PATCH_DIR` | `.steadystate/patches` | Where remediation patch artifacts are written. |

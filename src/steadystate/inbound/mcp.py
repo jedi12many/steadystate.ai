@@ -75,15 +75,23 @@ def _input_schema(tool: dict[str, Any]) -> dict[str, Any]:
     return schema
 
 
-def mcp_tools(*, write: bool) -> list[dict[str, Any]]:
+# Write verbs that only author steadystate's own observe-only config (a custom check), not infra.
+# The ``author`` grant exposes these WITHOUT the full ``write`` (approve/fix/run) grant, so an agent
+# can help write safe, schema-gated checks without the power to remediate your infrastructure.
+_AUTHORING = frozenset({ADD_CHECK})
+
+
+def mcp_tools(*, write: bool, author: bool = False) -> list[dict[str, Any]]:
     """The vetted verbs as MCP tool definitions, built from the same ``tool_schema`` the chat
-    listener dispatches (so it can never drift). Only **read-only** verbs unless ``write`` -- then
-    the effectful verbs are exposed too, each annotated so a client confirms a destructive call."""
+    listener dispatches (so it can never drift). Three tiers: **read-only** always; ``author`` adds
+    the check-authoring verbs (observe-only config, schema-gated -- not infra); ``write`` adds every
+    effectful verb (approve/fix/run/...). Each is annotated so a client can confirm a risky one."""
     tools: list[dict[str, Any]] = []
     for tool in tool_schema()["tools"]:
         effect = tool["effect"]
-        if effect != "read-only" and not write:
-            continue  # effectful verbs need the explicit write grant
+        granted = effect == "read-only" or write or (author and tool["name"] in _AUTHORING)
+        if not granted:
+            continue
         tools.append(
             {
                 "name": tool["name"],
@@ -234,14 +242,16 @@ def _error(req_id: Any, code: int, message: str) -> dict[str, Any]:
     return {"jsonrpc": "2.0", "id": req_id, "error": {"code": code, "message": message}}
 
 
-def _tools_call(req_id: Any, params: dict[str, Any], state_path: str, *, write: bool) -> dict:
+def _tools_call(
+    req_id: Any, params: dict[str, Any], state_path: str, *, write: bool, author: bool = False
+) -> dict:
     """Run one tool call through ``run_command`` (the same guardrailed dispatch the chat path uses).
     A tool the grant doesn't expose, or an unknown one, is a JSON-RPC error -- never run. A command
     that runs but fails (a bad argument, a wedged store) is reported as an ``isError`` *result*, the
     MCP convention so the model sees the failure as tool output rather than a protocol fault."""
     name = params.get("name")
     arguments = params.get("arguments") or {}
-    exposed = {t["name"] for t in mcp_tools(write=write)}
+    exposed = {t["name"] for t in mcp_tools(write=write, author=author)}
     if not isinstance(name, str) or name not in exposed:
         return _error(req_id, -32602, f"unknown or unavailable tool: {name!r}")
     command = command_from_tool_call(name, arguments if isinstance(arguments, dict) else {})
@@ -258,9 +268,10 @@ def _tools_call(req_id: Any, params: dict[str, Any], state_path: str, *, write: 
 
 _HOW_TO = (
     "steadystate's infrastructure malfunction/drift detector. Use `summary` for a one-glance "
-    "status, `findings`/`show` to inspect, `probe` to refresh + scan a target. Effectful verbs "
-    "(approve/fix/run/...) are exposed only when the operator grants write; they run through the "
-    "bound + catalog guardrails and are audited."
+    "status, `findings`/`show` to inspect, `probe` to refresh + scan a target. If `add-check` is "
+    "available, you may author custom health checks (a vetted schema -- see the tool; "
+    "observe-only, never code). Effectful verbs (approve/fix/run/...) are exposed only with the "
+    "write grant; they run through the bound + catalog guardrails and are audited."
 )
 
 
@@ -277,7 +288,7 @@ def _server_instructions(state_path: str, label: str) -> str:
 
 
 def handle_request(
-    request: Any, state_path: str, *, write: bool, label: str = ""
+    request: Any, state_path: str, *, write: bool, author: bool = False, label: str = ""
 ) -> dict[str, Any] | None:
     """Dispatch one parsed JSON-RPC message to its handler, returning the response object -- or None
     for a notification (no ``id``: ``notifications/initialized`` and friends need no reply). Pure
@@ -306,11 +317,15 @@ def handle_request(
             },
         )
     if method == "tools/list":
-        return _result(req_id, {"tools": mcp_tools(write=write)})
+        return _result(req_id, {"tools": mcp_tools(write=write, author=author)})
     if method == "tools/call":
         params = request.get("params") or {}
         return _tools_call(
-            req_id, params if isinstance(params, dict) else {}, state_path, write=write
+            req_id,
+            params if isinstance(params, dict) else {},
+            state_path,
+            write=write,
+            author=author,
         )
     if method == "resources/list":
         return _result(req_id, {"resources": mcp_resources(state_path)})
@@ -337,7 +352,7 @@ def handle_request(
 
 
 def serve_stdio(
-    state_path: str, *, write: bool, label: str = ""
+    state_path: str, *, write: bool, author: bool = False, label: str = ""
 ) -> None:  # pragma: no cover -- I/O
     """Run the MCP server over stdio until EOF: read newline-delimited JSON-RPC from stdin,
     dispatch, write each response as one line to stdout (kept clean -- only JSON-RPC; logs go to
@@ -351,7 +366,7 @@ def serve_stdio(
         except ValueError:
             _write(_error(None, -32700, "parse error"))
             continue
-        response = handle_request(request, state_path, write=write, label=label)
+        response = handle_request(request, state_path, write=write, author=author, label=label)
         if response is not None:
             _write(response)
 
