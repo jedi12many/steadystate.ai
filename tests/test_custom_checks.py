@@ -15,6 +15,8 @@ from steadystate.probe.custom import (
     _fires,
     _mem_mib,
     _pod_values,
+    add_check,
+    define_check,
     evaluate_custom_checks,
     load_checks,
     parse_check,
@@ -294,3 +296,58 @@ def test_ansible_service_fires_when_a_host_is_not_in_the_expected_state(monkeypa
 def test_ansible_unavailable_or_no_hosts_is_no_finding(monkeypatch):
     assert _ansible_evaluator(_SQUID, None, monkeypatch).evaluate() == []  # ansible couldn't run
     assert _ansible_evaluator(_SQUID, {}, monkeypatch).evaluate() == []  # no hosts matched
+
+
+# -- authoring: validate + store (the gate), and natural-language -> check -------
+
+
+def test_add_check_validates_stores_and_replaces_by_name(tmp_path):
+    cp = str(tmp_path / "checks.json")
+    check, msg = add_check(_SQUID, cp)
+    assert check is not None and "added" in msg
+    assert [c.name for c in load_checks(cp)] == ["squid-up"]
+    # re-defining the same name UPDATES it (no duplicate) -- idempotent authoring
+    add_check({**_SQUID, "emit": {"severity": "medium", "title": "squid down (v2)"}}, cp)
+    loaded = load_checks(cp)
+    assert len(loaded) == 1 and loaded[0].severity.value == "medium"
+
+
+def test_add_check_rejects_an_invalid_check_and_stores_nothing(tmp_path):
+    cp = str(tmp_path / "checks.json")
+    # the validation IS the gate: an unvetted read kind never gets written
+    bad = {
+        "name": "x",
+        "read": {"kind": "exec-script", "selector": "y"},
+        "when": {},
+        "emit": {"severity": "high", "title": "t"},
+    }
+    check, msg = add_check(bad, cp)
+    assert check is None and "schema" in msg.lower()
+    assert load_checks(cp) == []  # nothing stored
+
+
+def test_define_check_translates_via_the_llm_and_degrades_cleanly():
+    ok = {
+        "name": "web-up",
+        "read": {"kind": "docker-log", "selector": "name=web"},
+        "when": {"pattern": "GET", "expect": "present"},
+        "emit": {"severity": "low", "title": "web idle"},
+    }
+    assert define_check("alert if web stops serving", lambda s, u, c: json.dumps(ok)) == ok
+    assert define_check("x", lambda *_a: None) is None  # no model configured -> None
+    assert define_check("x", lambda *_a: "not json at all") is None  # unparseable -> None
+
+
+def test_add_check_and_checks_dispatch_through_run_command(tmp_path, monkeypatch):
+    # the agent path: an MCP/chat caller fills the schema and dispatches add-check/checks like any
+    # other verb. The wall is the cwd (.steadystate/checks.json).
+    monkeypatch.chdir(tmp_path)
+    from steadystate.inbound.base import ADD_CHECK, CHECKS, Command
+    from steadystate.inbound.server import run_command
+
+    payload = json.dumps(_SQUID)
+    assert "added" in run_command(Command(ADD_CHECK, "mcp", payload), ":memory:")
+    listed = run_command(Command(CHECKS, "mcp"), ":memory:")
+    assert "squid-up" in listed and "ansible-service" in listed
+    # a malformed payload is refused, not stored
+    assert "parse" in run_command(Command(ADD_CHECK, "mcp", "{not json"), ":memory:").lower()

@@ -1,7 +1,7 @@
 """User-defined, per-wall health checks -- a DECLARATIVE rule (a vetted read + a condition) the
-operator (or an agent, via a future ``define-check``) stores in the wall's
-``.steadystate/checks.json``, which steadystate evaluates DETERMINISTICALLY into a Symptom. It never
-executes operator-supplied code.
+operator (in plain English via ``define-check``) or an agent (filling the schema, via ``add-check``)
+stores in the wall's ``.steadystate/checks.json``, which steadystate evaluates DETERMINISTICALLY
+into a Symptom. It never executes operator-supplied code; ``parse_check`` is the gate on the schema.
 
 The safety model mirrors the action catalog: WHAT to check is data (a schema of vetted, read-only
 reads); the reading and comparing are steadystate's. A check can only ever OBSERVE -- emit a finding
@@ -25,6 +25,7 @@ import os
 import re
 import shutil
 import subprocess  # noqa: S404 -- argv only, no shell; reads only
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote
@@ -156,6 +157,84 @@ def load_checks(path: str = DEFAULT_CHECKS_FILE) -> list[CustomCheck]:
     if not isinstance(raw, list):
         return []
     return [check for item in raw if (check := parse_check(item)) is not None]
+
+
+# -- authoring: validate + store a check, and translate natural language into one -----------------
+
+# A compact description of the vetted schema -- prompts the LLM (`define_check`) and tells a caller
+# what a *valid* check looks like when one is rejected. The schema IS the safety boundary.
+CHECK_SCHEMA_HINT = (
+    "A check is JSON: {name, read:{kind,...}, when:{...}, emit:{severity, title}}. "
+    "severity is low|medium|high|critical. Kinds:\n"
+    "- kubectl-cpu / kubectl-mem: read{selector(label, e.g. app=web), namespace, "
+    "agg?(sum|max|avg)}, when{op(<,>,<=,>=,==,!=), value} -- CPU millicores, memory MiB.\n"
+    "- kubectl-log: read{selector, namespace, tail?}, when{pattern(regex), "
+    "expect(present|absent)} -- present fires when MISSING (a success signal gone), absent "
+    "fires when it APPEARS.\n"
+    "- docker-log: read{selector(a `docker ps` filter, e.g. name=web), tail?}, "
+    "when{pattern, expect}.\n"
+    "- ansible-service: read{selector(host pattern), service}, when{expect(active|inactive)}."
+)
+
+
+def add_check(raw: dict, checks_path: str = DEFAULT_CHECKS_FILE) -> tuple[CustomCheck | None, str]:
+    """Validate ``raw`` against the vetted schema and, if valid, store it in the wall's checks.json
+    (replacing any check of the same name -- so re-defining one updates it). Returns (check, msg) on
+    success or (None, why) when it doesn't validate. **The validation is the gate**: only a
+    schema-valid check is ever written -- whoever authored it (a human, an agent) can't store code
+    or an unvetted read."""
+    check = parse_check(raw)
+    if check is None:
+        return None, f"that didn't validate -- a check must match the schema.\n{CHECK_SCHEMA_HINT}"
+    path = Path(checks_path)
+    items: list = []
+    if path.exists():
+        try:
+            loaded = json.loads(path.read_text())
+            items = loaded if isinstance(loaded, list) else []
+        except (OSError, ValueError):
+            items = []
+    items = [it for it in items if not (isinstance(it, dict) and it.get("name") == check.name)]
+    items.append(raw)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(items, indent=2))
+    return (
+        check,
+        f"check '{check.name}' added [{check.kind}] -- runs on the next probe of this wall.",
+    )
+
+
+def describe_check(check: CustomCheck) -> str:
+    """A one-line 'what it watches' for `checks` -- so an operator/agent reads back what's set."""
+    if check.kind in _NUMERIC_KINDS:
+        what = (
+            f"{check.selector} {check.kind.removeprefix('kubectl-')} {check.op} {check.value:.0f}"
+        )
+    elif check.kind == "ansible-service":
+        what = f"{check.service} {check.expect} on {check.selector}"
+    else:  # log kinds
+        what = f"/{check.pattern}/ {check.expect} in {check.selector}"
+    return f"{check.name}  [{check.kind}]  {what} -> {check.severity.value}"
+
+
+_DEFINE_SYSTEM = (
+    "You translate an operator's request into ONE steadystate custom health-check, as JSON. Use a "
+    "vetted read kind and only its fields; invent nothing outside the schema. Pick a short "
+    "kebab-case name and a clear title. Reply with ONLY the JSON object.\n\n" + CHECK_SCHEMA_HINT
+)
+
+
+def define_check(text: str, complete: Callable[[str, str, str], str | None]) -> dict | None:
+    """Translate a natural-language request into a check dict via the LLM seam (``complete``), or
+    None when no model is configured / the reply has no JSON. It only *proposes* the JSON -- the
+    caller runs it through :func:`add_check`, so the vetted-schema gate decides what's stored."""
+    from ..reason.llm import _extract_json  # reuse the analyst's lenient JSON extraction
+
+    reply = complete(_DEFINE_SYSTEM, text, "define-check")
+    if not reply:
+        return None
+    data = _extract_json(reply)
+    return data if isinstance(data, dict) else None
 
 
 # -- the read: live CPU / memory of the matching pods (metrics API) -----------------------------
