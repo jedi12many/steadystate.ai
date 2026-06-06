@@ -52,6 +52,26 @@ def test_summary_orders_critical_before_low(tmp_path):
     assert "(1 critical, 1 low)" in out and "worst: boom  [critical]" in out
 
 
+def test_summary_leads_with_your_apps_and_sets_platform_aside(tmp_path):
+    # 'is my app healthy' means YOUR workloads: the count + worst are app-only, the Rancher/k8s
+    # plumbing (coredns/svclb -- here title-only, the real CIS shape) is an aside, never hidden.
+    db = str(tmp_path / "s.db")
+    with StateStore(db) as store:
+        store.record(
+            {
+                "a" * 64: ("high", "postfix not routing mail"),
+                "b" * 64: ("medium", "workload 'coredns' adds Linux capabilities"),
+                "c" * 64: ("high", "workload 'svclb-traefik-3f72' adds NET_ADMIN"),
+            },
+            _NOW,
+            {"a" * 64: {"namespace": "mail", "workload": "postfix"}},  # the app one carries details
+        )
+    out = _render_summary(db)
+    assert "1 open finding (1 high)" in out  # your apps: just postfix
+    assert "2 platform" in out  # coredns + svclb set aside, not hidden
+    assert "worst: postfix not routing mail  [high]" in out  # worst APP finding, not the plumbing
+
+
 def test_summary_shows_data_freshness(tmp_path):
     db = str(tmp_path / "s.db")
     with StateStore(db) as store:
