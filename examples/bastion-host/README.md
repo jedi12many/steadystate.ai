@@ -3,8 +3,8 @@
 **The situation:** you want to try steadystate against your real clusters **without deploying
 anything into them**. You already have a Linux bastion / jump host that can reach the clusters (it's
 how you `kubectl` in) and holds the kubeconfigs. Run steadystate right there — it's a stdlib-only
-CLI, so it's just a process on a VM. Start fully interactive, add a schedule or a listener later if
-you want.
+CLI, so it's just a process on a VM. Start fully interactive, add a schedule, a chat listener, or a
+laptop agent over MCP-over-ssh later if you want.
 
 This is the lowest-commitment way to run the [fleet-health](../fleet-health/) flow: no in-cluster
 ServiceAccount, no CronJob, no manifests — just the binary on a host you already trust.
@@ -97,14 +97,55 @@ with your reverse proxy, or a tunnel for testing. **The network is not the secur
 listener verifies every request's signature (HMAC / Ed25519) before acting. If you'd rather not
 expose anything, stick to the local `chat` REPL (step 4) and the scheduled push (step 5).
 
+## 7. (Optional) drive it from a laptop agent — MCP over SSH
+
+You want an agent on your laptop — **GitHub Copilot CLI**, Claude Code — to ask steadystate about
+these clusters and (where you allow) act. But your laptop can't reach the clusters; the bastion can.
+steadystate's MCP server speaks **stdio** — the client launches it as a subprocess — and stdio is a
+transparent pipe, so make that subprocess **`ssh`** and let it run `steadystate mcp` *on the bastion*,
+where the kubeconfigs and the reach already are. (This is **not** the listener — an MCP agent doesn't
+speak the listener's signed-webhook protocol; it uses this ssh path instead.)
+
+```jsonc
+// ~/.copilot/mcp-config.json (Copilot CLI) — Claude Code's .mcp.json takes the same command/args.
+{
+  "mcpServers": {
+    "ssai-prod": {
+      "type": "local",
+      "command": "ssh",
+      "args": ["-T", "ops@bastion.internal",
+               "KUBECONFIG=/home/ops/.kube/merged",
+               "steadystate", "mcp", "--dir", "/home/ops", "--label", "prod"],
+      "tools": ["summary", "findings", "show", "probe", "hold"]
+    }
+  }
+}
+```
+
+Copilot runs `ssh` locally → ssh spawns `steadystate mcp` **on the bastion** → JSON-RPC flows back
+over the pipe. `--dir` resolves the wall (`.steadystate/state.db`, targets) on the *bastion's*
+filesystem; the `KUBECONFIG=` prefix gives the remote process cluster reach (a non-interactive ssh
+won't source your shell profile). Want walls? One server per leaf folder, exactly like the
+[mcp-copilot](../mcp-copilot/) layout — just with `command: ssh` in front.
+
+- **No daemon.** ssh spawns the server per connection; it lives only while the agent is connected.
+  Nothing new listens — the same outbound-only posture as the scheduled push (step 5).
+- **The laptop holds zero cluster credentials** — only an ssh key to the bastion. All cluster access
+  stays on the box you already trust for it (a stronger posture than running the MCP server locally).
+- **Read-only by default.** Add `--write` to the remote args to let the agent run guardrailed
+  `approve`/`fix`/`run` (audited as `mcp`) — per-wall, like everything else. Copilot's own `tools`
+  list is a second gate.
+- **stdio-only:** there's no HTTP MCP endpoint to point at (`https://bastion/mcp` won't work) —
+  ssh-stdio is the remote path, and it exposes no port.
+
 | | |
 |---|---|
 | **Shape** | a process on a Linux host you already use to reach the clusters — nothing in-cluster |
 | **Source** | `k8s-live` (the cluster's own workloads, health-checked) |
 | **Secrets** | a read-only (`view`) kubeconfig per cluster, on the host |
-| **Surface** | `chat` REPL + `sweep` (interactive) · `sweep --to slack` (scheduled push) · the listener (chat-back) |
+| **Surface** | `chat` REPL + `sweep` (interactive) · `sweep --to slack` (scheduled push) · the listener (chat-back) · a laptop agent over **MCP-over-ssh** |
 | **State** | a local SQLite file — memoryful sweeps with no infra |
-| **Act** | none — `k8s-live` is observe-only |
+| **Act** | none by default (`k8s-live` is observe-only); guardrailed `fix`/`approve` over chat or `mcp --write` |
 
 ✅ Uses only shipped pieces — no in-cluster footprint. The fastest way to try steadystate against
 real clusters before you decide where it should live.
