@@ -9,16 +9,19 @@ reads); the reading and comparing are steadystate's. A check can only ever OBSER
 (a mutable finding), never damage. Per-wall by construction: the checks live in the wall's
 ``.steadystate/``, so different cluster-sets carry different rules for free, no cross-wall reach.
 
-v1 read kind: ``kubectl-cpu`` / ``kubectl-mem`` -- the live CPU/memory of the pods matching a label
-selector (the metrics API), aggregated and compared to a threshold. Metrics unavailable -> no
-finding (never a false alarm from a read we couldn't take). The Symptoms ride the normal pipeline,
-so a custom finding is tracked new/recurring/resolved, muteable, and feeds ``resolve``/``learn``."""
+Read kinds: ``kubectl-cpu`` / ``kubectl-mem`` -- the live CPU/memory of the pods matching a label
+selector (metrics API), aggregated and compared to a threshold; and ``kubectl-log`` -- a regex that
+should be *present* (a success signal, e.g. postfix's ``status=sent``) or *absent* (an error) in the
+pods' recent logs, i.e. "running, but doing its job?". A read we couldn't take -> no finding (never
+a false alarm; a *down* app is the generic prober's call). The Symptoms ride the normal pipeline, so
+a custom finding is tracked new/recurring/resolved, muteable, and feeds ``resolve``/``learn``."""
 
 from __future__ import annotations
 
 import json
+import re
 import subprocess  # noqa: S404 -- argv only, no shell; reads only
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote
 
@@ -28,28 +31,39 @@ from .base import Symptom
 
 DEFAULT_CHECKS_FILE = ".steadystate/checks.json"
 
-_READ_KINDS = frozenset({"kubectl-cpu", "kubectl-mem"})
+_NUMERIC_KINDS = frozenset({"kubectl-cpu", "kubectl-mem"})  # a threshold over an aggregated value
+_LOG_KIND = (
+    "kubectl-log"  # a pattern that should/shouldn't be in the pods' logs (functional health)
+)
+_ALL_KINDS = _NUMERIC_KINDS | {_LOG_KIND}
 _OPS = frozenset({"<", ">", "<=", ">=", "==", "!="})
 _AGGS = frozenset({"sum", "max", "avg"})
+_EXPECT = frozenset({"present", "absent"})
 _SEVERITIES = {s.value: s for s in Severity}
 
 
 @dataclass(frozen=True)
 class CustomCheck:
-    """One declarative check: a vetted read, a condition over its aggregated value, and the finding
-    to emit when it holds. Parsed + validated from a JSON object; an invalid one is dropped (so a
-    single typo never sinks the rest). Pure data -- no code, no command, nothing to execute."""
+    """One declarative check: a vetted read, a condition, and the finding to emit when it holds.
+    Parsed + validated from a JSON object; an invalid one is dropped (so a single typo never sinks
+    the rest). Pure data -- no code, no command, nothing to execute. The numeric fields (op/value/
+    agg) apply to ``kubectl-cpu``/``kubectl-mem``; the log fields (pattern/expect/tail) apply to
+    ``kubectl-log`` -- ``parse_check`` fills whichever the kind uses."""
 
     name: str
-    kind: str  # read kind: kubectl-cpu | kubectl-mem
-    selector: str  # a label selector, e.g. "app=gateway"
+    kind: str  # read kind: kubectl-cpu | kubectl-mem | kubectl-log
+    selector: str  # a label selector, e.g. "app=postfix"
     namespace: str
-    op: str  # < > <= >= == !=
-    value: float  # the threshold (CPU in millicores; memory in MiB)
     severity: Severity
     title: str
-    agg: str = "sum"  # how to combine the matching pods' values: sum | max | avg
-    detail: str = field(default="")
+    # numeric (kubectl-cpu / kubectl-mem): a threshold over the aggregated value
+    op: str = ""  # < > <= >= == !=
+    value: float = 0.0  # CPU in millicores; memory in MiB
+    agg: str = "sum"  # combine the matching pods' values: sum | max | avg
+    # log (kubectl-log): a pattern that should be present (a success signal) or absent (an error)
+    pattern: str = ""  # a regex searched across the pods' recent logs
+    expect: str = ""  # present -> fire when MISSING; absent -> fire when FOUND
+    tail: int = 200  # lines of recent log per pod to read
 
     @property
     def unit(self) -> str:
@@ -64,30 +78,41 @@ def parse_check(raw: dict) -> CustomCheck | None:
     read, when, emit = raw.get("read") or {}, raw.get("when") or {}, raw.get("emit") or {}
     name = raw.get("name")
     kind, selector, namespace = read.get("kind"), read.get("selector"), read.get("namespace")
-    agg = read.get("agg", "sum")
-    op, value = when.get("op"), when.get("value")
     severity, title = emit.get("severity"), emit.get("title")
     if not (isinstance(name, str) and name):
         return None
-    if kind not in _READ_KINDS or not isinstance(selector, str) or not selector:
+    if kind not in _ALL_KINDS or not isinstance(selector, str) or not selector:
         return None
-    if not isinstance(namespace, str) or not namespace or agg not in _AGGS:
-        return None
-    if op not in _OPS or not isinstance(value, int | float) or isinstance(value, bool):
+    if not isinstance(namespace, str) or not namespace:
         return None
     if severity not in _SEVERITIES or not isinstance(title, str) or not title:
         return None
-    return CustomCheck(
-        name=name,
-        kind=kind,
-        selector=selector,
-        namespace=namespace,
-        op=op,
-        value=float(value),
-        severity=_SEVERITIES[severity],
-        title=title,
-        agg=agg,
-    )
+    common = {
+        "name": name,
+        "kind": kind,
+        "selector": selector,
+        "namespace": namespace,
+        "severity": _SEVERITIES[severity],
+        "title": title,
+    }
+    if kind in _NUMERIC_KINDS:
+        agg, op, value = read.get("agg", "sum"), when.get("op"), when.get("value")
+        if agg not in _AGGS or op not in _OPS:
+            return None
+        if not isinstance(value, int | float) or isinstance(value, bool):
+            return None
+        return CustomCheck(**common, op=op, value=float(value), agg=agg)
+    # kubectl-log: a pattern (regex) that should be present or absent in the pods' recent logs.
+    pattern, expect, tail = when.get("pattern"), when.get("expect"), read.get("tail", 200)
+    if not isinstance(pattern, str) or not pattern or expect not in _EXPECT:
+        return None
+    if not isinstance(tail, int) or isinstance(tail, bool) or tail <= 0:
+        return None
+    try:
+        re.compile(pattern)  # a check with a broken regex is dropped, not stored
+    except re.error:
+        return None
+    return CustomCheck(**common, pattern=pattern, expect=expect, tail=tail)
 
 
 def load_checks(path: str = DEFAULT_CHECKS_FILE) -> list[CustomCheck]:
@@ -221,20 +246,85 @@ class CustomCheckEvaluator:
             return None
         return payload if isinstance(payload, dict) else None
 
+    def _pod_logs(self, namespace: str, selector: str, tail: int) -> str | None:
+        """The recent logs (``--tail`` lines/pod, all containers) of the pods matching ``selector``,
+        or None when they can't be read (unreachable, too many pods for one request). None -> the
+        check yields no finding -- a *down* app is the generic prober's job; a log check answers
+        'running but is it doing its work?'."""
+        try:
+            done = subprocess.run(  # noqa: S603 -- argv list, no shell; read-only `logs`
+                self._kubectl(
+                    "logs",
+                    "-n",
+                    namespace,
+                    "-l",
+                    selector,
+                    f"--tail={tail}",
+                    "--all-containers=true",
+                    "--prefix=true",
+                ),
+                capture_output=True,
+                text=True,
+                timeout=self._timeout,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return done.stdout if done.returncode == 0 else None
+
     def evaluate(self) -> list[Symptom]:
-        """Read + compare every loaded check; emit a Symptom for each that fires. Read-only."""
+        """Read + check every loaded check; emit a Symptom for each that fires. Read-only."""
         symptoms: list[Symptom] = []
         for check in load_checks(self._checks_path):
-            payload = self._pod_metrics(check.namespace, check.selector)
-            if payload is None:
-                continue  # metrics unavailable -> no finding (never a false alarm)
-            values = _pod_values(payload, check.kind)
-            if not values:
-                continue  # no matching pods / no parseable usage -> nothing to compare
-            actual = _aggregate(values, check.agg)
-            if _fires(check.op, actual, check.value):
-                symptoms.append(_to_symptom(check, actual, len(values), self._context or ""))
+            fired = self._eval_log(check) if check.kind == _LOG_KIND else self._eval_numeric(check)
+            if fired is not None:
+                symptoms.append(fired)
         return symptoms
+
+    def _eval_numeric(self, check: CustomCheck) -> Symptom | None:
+        payload = self._pod_metrics(check.namespace, check.selector)
+        if payload is None:
+            return None  # metrics unavailable -> no finding (never a false alarm)
+        values = _pod_values(payload, check.kind)
+        if not values:
+            return None  # no matching pods / no parseable usage -> nothing to compare
+        actual = _aggregate(values, check.agg)
+        if not _fires(check.op, actual, check.value):
+            return None
+        detail = (
+            f"{check.kind.removeprefix('kubectl-')} {actual:.0f}{check.unit[:1]} {check.op} "
+            f"{check.value:.0f} ({check.agg} over {len(values)} pod(s) matching {check.selector})"
+        )
+        evidence = {
+            "value": f"{actual:.1f} {check.unit}",
+            "threshold": f"{check.op} {check.value:.0f}",
+            "namespace": check.namespace,
+            "selector": check.selector,
+            "matched_pods": str(len(values)),
+        }
+        return _to_symptom(check, detail, evidence, self._context or "")
+
+    def _eval_log(self, check: CustomCheck) -> Symptom | None:
+        logs = self._pod_logs(check.namespace, check.selector, check.tail)
+        if logs is None:
+            return None  # couldn't read logs -> no finding
+        found = re.search(check.pattern, logs) is not None
+        # expect=present -> fire when the success signal is MISSING; expect=absent -> when found
+        if found != (check.expect == "absent"):
+            return None
+        state = "present" if found else "absent"
+        detail = (
+            f"logs of {check.selector} in {check.namespace}: /{check.pattern}/ {state} "
+            f"(expected {check.expect})"
+        )
+        evidence = {
+            "pattern": check.pattern,
+            "expect": check.expect,
+            "found": str(found),
+            "namespace": check.namespace,
+            "selector": check.selector,
+        }
+        return _to_symptom(check, detail, evidence, self._context or "")
 
 
 def _fires(op: str, actual: float, threshold: float) -> bool:
@@ -248,16 +338,12 @@ def _fires(op: str, actual: float, threshold: float) -> bool:
     }[op]
 
 
-def _to_symptom(check: CustomCheck, actual: float, pods: int, context: str) -> Symptom:
+def _to_symptom(check: CustomCheck, detail: str, evidence: dict[str, str], context: str) -> Symptom:
     """Turn a fired check into a Symptom -- same shape every prober emits, so it rides the pipeline
     (tracked new/recurring/resolved, muteable, feeds resolve/learn). ``category`` is the check name,
     so its fingerprint is stable across scans. No ``recommended_action``: a check observes, it
     doesn't fix (acting on it still goes through the catalog + bound)."""
     ctx = f"{context}/" if context else ""
-    detail = (
-        f"{check.kind.removeprefix('kubectl-')} {actual:.0f}{check.unit[:1]} {check.op} "
-        f"{check.value:.0f} ({check.agg} over {pods} pod(s) matching {check.selector})"
-    )
     return Symptom(
         identity=f"{ctx}custom/{check.namespace}/{check.name}",
         kind="CustomCheck",
@@ -266,13 +352,7 @@ def _to_symptom(check: CustomCheck, actual: float, pods: int, context: str) -> S
         title=check.title,
         detail=detail,
         provenance=Provenance(source="custom-check", address=check.name),
-        evidence={
-            "value": f"{actual:.1f} {check.unit}",
-            "threshold": f"{check.op} {check.value:.0f}",
-            "namespace": check.namespace,
-            "selector": check.selector,
-            "matched_pods": str(pods),
-        },
+        evidence=evidence,
     )
 
 
