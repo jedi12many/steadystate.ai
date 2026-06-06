@@ -20,6 +20,7 @@ from steadystate.probe.custom import (
     evaluate_custom_checks,
     load_checks,
     parse_check,
+    resolve_checks_path,
 )
 
 _GOOD = {
@@ -338,7 +339,24 @@ def test_define_check_translates_via_the_llm_and_degrades_cleanly():
     assert define_check("x", lambda *_a: "not json at all") is None  # unparseable -> None
 
 
+def test_checks_path_resolves_explicit_then_env_then_default(tmp_path, monkeypatch):
+    # checks are intent, not runtime state -> they can live in a version-controlled file, separate
+    # from the gitignored .steadystate/. explicit (--checks) > STEADYSTATE_CHECKS > the default.
+    monkeypatch.delenv("STEADYSTATE_CHECKS", raising=False)
+    assert resolve_checks_path() == ".steadystate/checks.json"
+    monkeypatch.setenv("STEADYSTATE_CHECKS", "/team/checks.json")
+    assert resolve_checks_path() == "/team/checks.json"
+    assert resolve_checks_path("/cli/override.json") == "/cli/override.json"  # explicit wins
+    # add_check + load_checks honor the env-pointed file with no explicit path
+    versioned = str(tmp_path / "team-checks.json")
+    monkeypatch.setenv("STEADYSTATE_CHECKS", versioned)
+    add_check(_SQUID)
+    assert (tmp_path / "team-checks.json").exists()
+    assert [c.name for c in load_checks()] == ["squid-up"]
+
+
 def test_add_check_and_checks_dispatch_through_run_command(tmp_path, monkeypatch):
+    monkeypatch.delenv("STEADYSTATE_CHECKS", raising=False)
     # the agent path: an MCP/chat caller fills the schema and dispatches add-check/checks like any
     # other verb. The wall is the cwd (.steadystate/checks.json).
     monkeypatch.chdir(tmp_path)

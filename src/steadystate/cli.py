@@ -1415,33 +1415,44 @@ def summary_status(state: Path = _STATE_OPTION) -> None:
     typer.echo(_render_summary(str(state)))
 
 
+_CHECKS_OPTION = typer.Option(
+    "",
+    "--checks",
+    help="Path to the checks file (else STEADYSTATE_CHECKS, else .steadystate/checks.json). Point "
+    "it at a VERSION-CONTROLLED file so checks are reviewed/shared, not lost like local state.",
+)
+
+
 @app.command()
-def checks() -> None:
-    """List this wall's custom health checks (.steadystate/checks.json)."""
+def checks(checks: str = _CHECKS_OPTION) -> None:
+    """List the custom health checks (--checks / STEADYSTATE_CHECKS / .steadystate/checks.json)."""
     from .inbound.server import _render_checks
 
-    typer.echo(_render_checks())
+    typer.echo(_render_checks(checks))
 
 
 @app.command("add-check")
 def add_check_cmd(
     check: str = typer.Argument(..., help="The check as a JSON object."),
+    checks: str = _CHECKS_OPTION,
 ) -> None:
     """Store a custom health check from a JSON object -- validated against the vetted schema, then
-    written to this wall's .steadystate/checks.json (re-defining a name updates it). To author one
-    in plain English instead, use `define-check`."""
+    written to the checks file (re-defining a name updates it). Keep that file in version control
+    (--checks / STEADYSTATE_CHECKS) so checks are intent, not local state. To author one in plain
+    English instead, use `define-check`."""
     from .inbound.server import _add_check
 
-    typer.echo(_add_check(check))
+    typer.echo(_add_check(check, checks))
 
 
 @app.command("define-check")
 def define_check_cmd(
     request: str = typer.Argument(..., help="What to watch, in plain English."),
+    checks: str = _CHECKS_OPTION,
 ) -> None:
     """Author a custom health check by describing it -- the LLM fills the vetted schema, steadystate
-    validates it (only a schema-valid, observe-only check is stored), and writes it to this wall.
-    Needs an LLM configured (see `doctor`). e.g. "alert if squid stops running on a proxy host"."""
+    validates it (only a schema-valid, observe-only check is stored), and writes it to the checks
+    file. Needs an LLM configured (see `doctor`). e.g. "alert if squid stops on a proxy host"."""
     from .probe.custom import add_check, define_check
 
     analyst = LLMAnalyst()
@@ -1458,7 +1469,7 @@ def define_check_cmd(
             "the model didn't return a check -- try rephrasing, or `add-check` with JSON.", err=True
         )
         raise typer.Exit(1)
-    check, message = add_check(raw)
+    check, message = add_check(raw, checks)
     typer.echo(message)
     if check is None:
         typer.echo(f"\n(the model proposed: {raw})", err=True)
@@ -1885,6 +1896,7 @@ _DIALS: tuple[tuple[str, str, str], ...] = (
     ("STEADYSTATE_REACHABLE_TIMEOUT", "8s", "cluster reachability probe timeout (0 = no cap)"),
     ("STEADYSTATE_RESOLVE_AFTER", "30m", "grace before a gone finding resolves (0 = immediate)"),
     ("STEADYSTATE_PATCH_DIR", ".steadystate/patches", "where remediation patch files are written"),
+    ("STEADYSTATE_CHECKS", ".steadystate/checks.json", "custom-checks file (version-control this)"),
     ("STEADYSTATE_ENRICH_QUERY", "(none)", "PromQL bar for --enrich prometheus"),
 )
 

@@ -39,6 +39,16 @@ from .ansible_health import (
 from .base import Symptom
 
 DEFAULT_CHECKS_FILE = ".steadystate/checks.json"
+CHECKS_ENV = "STEADYSTATE_CHECKS"
+
+
+def resolve_checks_path(explicit: str = "") -> str:
+    """Where the checks live: an ``explicit`` path wins, else ``STEADYSTATE_CHECKS``, else the
+    default in ``.steadystate/``. Checks are *intent* (IaC-grade), unlike the ephemeral ``state.db``
+    -- point this at a **version-controlled** file (separate from the gitignored ``.steadystate/``)
+    so authored/agent-written checks are reviewed in PRs and shared, not lost as local state."""
+    return explicit or os.environ.get(CHECKS_ENV, "").strip() or DEFAULT_CHECKS_FILE
+
 
 _NUMERIC_KINDS = frozenset({"kubectl-cpu", "kubectl-mem"})  # a threshold over an aggregated value
 # functional health: a pattern that should/shouldn't be in the workload's recent logs. kubectl-log
@@ -144,10 +154,11 @@ def _parse_log_fields(when: dict, read: dict) -> dict | None:
     return {"pattern": pattern, "expect": expect, "tail": tail}
 
 
-def load_checks(path: str = DEFAULT_CHECKS_FILE) -> list[CustomCheck]:
-    """The wall's valid checks (``.steadystate/checks.json``: a JSON list of check objects). '' /
-    missing / malformed file -> [] (the un-checked path is unchanged). Invalid entries are skipped,
-    valid ones kept -- one bad rule never disables the others."""
+def load_checks(path: str = "") -> list[CustomCheck]:
+    """The valid checks (a JSON list of check objects, from ``resolve_checks_path``). Missing /
+    malformed file -> [] (the un-checked path is unchanged). Invalid entries are skipped, valid ones
+    kept -- one bad rule never disables the others."""
+    path = resolve_checks_path(path)
     if not path or not Path(path).exists():
         return []
     try:
@@ -177,7 +188,7 @@ CHECK_SCHEMA_HINT = (
 )
 
 
-def add_check(raw: dict, checks_path: str = DEFAULT_CHECKS_FILE) -> tuple[CustomCheck | None, str]:
+def add_check(raw: dict, checks_path: str = "") -> tuple[CustomCheck | None, str]:
     """Validate ``raw`` against the vetted schema and, if valid, store it in the wall's checks.json
     (replacing any check of the same name -- so re-defining one updates it). Returns (check, msg) on
     success or (None, why) when it doesn't validate. **The validation is the gate**: only a
@@ -186,7 +197,7 @@ def add_check(raw: dict, checks_path: str = DEFAULT_CHECKS_FILE) -> tuple[Custom
     check = parse_check(raw)
     if check is None:
         return None, f"that didn't validate -- a check must match the schema.\n{CHECK_SCHEMA_HINT}"
-    path = Path(checks_path)
+    path = Path(resolve_checks_path(checks_path))
     items: list = []
     if path.exists():
         try:
@@ -628,13 +639,14 @@ def evaluate_custom_checks(
     kubeconfig: str = "",
     inventory: str = "",
     *,
-    checks_path: str = DEFAULT_CHECKS_FILE,
+    checks_path: str = "",
 ) -> list[Symptom]:
-    """The engine entry point: evaluate the wall's checks, returning the Symptoms that fired. Each
-    check is dispatched to the reader for its backend (``kubectl-*`` -> the cluster; ``docker-*`` ->
-    the local docker engine; ``ansible-*`` -> the inventory), so one wall's checks.json can mix them
-    and each runs where it makes sense. [] when there's no checks file (the common case) -- a no-op.
-    Read-only throughout."""
+    """The engine entry point: evaluate the checks (from ``resolve_checks_path`` --
+    ``STEADYSTATE_CHECKS`` or the default), returning the Symptoms that fired. Each check is
+    dispatched to the reader for its backend (``kubectl-*`` -> the cluster; ``docker-*`` -> the
+    local docker engine; ``ansible-*`` -> the inventory), so one file can mix them and each runs
+    where it makes sense. [] when there's no checks file (the common case). Read-only throughout."""
+    checks_path = resolve_checks_path(checks_path)
     checks = load_checks(checks_path)
     if not checks:
         return []
