@@ -1,6 +1,6 @@
 # LLM Safety — keeping the agent in bounds
 
-steadystate.ai uses an LLM in three places: to **explain** a finding ("why this matters"), to **correlate** events by root cause, and — the part that needs real discipline — to **propose** a remediation (the decider) and to be **driven by an agent** (the MCP server). This document is the single place that states, end to end, *how a language model can never move your infrastructure outside the envelope you set.*
+steadystate.ai uses an LLM to **explain** a finding ("why this matters"), to **correlate** events by root cause, to **author a custom health check** from your words (`define-check` / `add-check`), and — the parts that need real discipline — to **propose** a remediation (the decider) and to be **driven by an agent** (the MCP server). This document is the single place that states, end to end, *how a language model can never move your infrastructure outside the envelope you set.*
 
 The one sentence to remember:
 
@@ -27,7 +27,9 @@ Everything below is how that sentence is enforced — as **defense in depth**, s
           dropped before the gate
 ```
 
-The LLM's entire authority is to **name one item from a fixed menu** and suggest its arguments. It cannot invent an action, widen an envelope, author a config change, or reach the executor directly.
+The LLM's entire authority is to **name one item from a fixed menu** and suggest its arguments. It cannot invent an action, widen an envelope, or reach the executor directly.
+
+One adjacent capability follows the *same* discipline: the LLM (or an agent) can **author a custom health check**, but only one that passes `parse_check` — a fixed schema of **vetted, read-only reads** (a metric threshold, a log pattern, a service state). A check can only ever **observe** (emit a finding); it never runs operator-supplied code and never acts. So check-authoring is *propose WHAT to watch / the schema decides WHETHER it's valid* — the same split, applied to config: the model writes the rule, the deterministic gate admits it, and acting on what it finds still passes the action bound + catalog above.
 
 ---
 
