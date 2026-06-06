@@ -58,6 +58,7 @@ See **[LLM_SAFETY.md](./LLM_SAFETY.md)** for how these compose into the control 
 |---|---|---|
 | `STEADYSTATE_REACHABLE_TIMEOUT` | `8s` | Per-context cluster reachability probe timeout (`0` = no cap). Raise it for tunneled/slow clusters. |
 | `STEADYSTATE_RESOLVE_AFTER` | `30m` | Grace before a no-longer-seen finding is marked resolved (`0` = resolve on first absence). Absorbs flaps. |
+| `STEADYSTATE_PLATFORM_NAMESPACES` | *(built-in set)* | **Additive** comma list of *your* cluster's system namespaces, added to the built-in k8s/Rancher set the platform/app classifier uses (so `summary` leads with your apps, sets the plumbing aside). You name only what's unusual; built-ins always covered. |
 | `STEADYSTATE_ENRICH_QUERY` | — | The PromQL bar for `--enrich prometheus` (escalate a drift whose resource is breaching it). |
 
 ## Surfaces — outbound, where alerts go (`--to`)
