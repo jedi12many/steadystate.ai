@@ -19,6 +19,7 @@ from typing import Protocol, runtime_checkable
 from .act import build_executor
 from .model import Resource
 from .probe import Prober, auto_prober_for, build_prober
+from .probe.custom import evaluate_custom_checks
 from .reason.enrich import build_enricher
 from .reason.llm import LLMAnalyst, PromptGate
 from .reason.pipeline import Pipeline, build_correlator
@@ -167,6 +168,10 @@ def build_report(
     # The prober reads the live health of those declared resources into Symptoms (the second
     # departure type). None (probe "none") -> no symptoms, the path is unchanged.
     symptoms = prober.probe(resources) if prober is not None else []
+    # Per-wall custom checks: declarative, read-only health rules the operator (or an agent) defined
+    # in this wall's .steadystate/checks.json -> Symptoms, evaluated against this target's cluster.
+    # Augments the generic probe above; a cheap no-op on a wall that hasn't defined any.
+    symptoms = symptoms + evaluate_custom_checks(context, kubeconfig)
 
     report = Pipeline(analyst=analyst, tuning=level, correlator=grouping).run(
         drifts, resources, symptoms
