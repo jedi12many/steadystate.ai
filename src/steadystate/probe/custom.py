@@ -21,7 +21,9 @@ custom finding is tracked new/recurring/resolved, muteable, and feeds ``resolve`
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
 import subprocess  # noqa: S404 -- argv only, no shell; reads only
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,6 +31,10 @@ from urllib.parse import quote
 
 from ..model import Provenance
 from ..reason.alert import Severity
+from .ansible_health import (
+    _RUNNING_STATES,
+    _services_by_host,
+)  # reuse the vetted service_facts read
 from .base import Symptom
 
 DEFAULT_CHECKS_FILE = ".steadystate/checks.json"
@@ -38,10 +44,12 @@ _NUMERIC_KINDS = frozenset({"kubectl-cpu", "kubectl-mem"})  # a threshold over a
 # reads pods (a label selector + namespace); docker-log reads containers (a `docker ps` filter).
 _LOG_KINDS = frozenset({"kubectl-log", "docker-log"})
 _KUBECTL_KINDS = _NUMERIC_KINDS | {"kubectl-log"}
-_ALL_KINDS = _NUMERIC_KINDS | _LOG_KINDS
+_ANSIBLE_KINDS = frozenset({"ansible-service"})  # is a host/VM service in the expected state?
+_ALL_KINDS = _NUMERIC_KINDS | _LOG_KINDS | _ANSIBLE_KINDS
 _OPS = frozenset({"<", ">", "<=", ">=", "==", "!="})
 _AGGS = frozenset({"sum", "max", "avg"})
-_EXPECT = frozenset({"present", "absent"})
+_EXPECT = frozenset({"present", "absent"})  # for the log kinds
+_EXPECT_SERVICE = frozenset({"active", "inactive"})  # for ansible-service
 _SEVERITIES = {s.value: s for s in Severity}
 
 
@@ -49,13 +57,13 @@ _SEVERITIES = {s.value: s for s in Severity}
 class CustomCheck:
     """One declarative check: a vetted read, a condition, and the finding to emit when it holds.
     Parsed + validated from a JSON object; an invalid one is dropped (so a single typo never sinks
-    the rest). Pure data -- no code, no command, nothing to execute. The numeric fields (op/value/
-    agg) apply to ``kubectl-cpu``/``kubectl-mem``; the log fields (pattern/expect/tail) apply to
-    ``kubectl-log`` -- ``parse_check`` fills whichever the kind uses."""
+    the rest). Pure data -- no code, no command, nothing to execute. ``parse_check`` fills only the
+    fields the ``kind`` uses (numeric: op/value/agg; log: pattern/expect/tail; service: service/
+    expect)."""
 
     name: str
-    kind: str  # read kind: kubectl-cpu | kubectl-mem | kubectl-log
-    selector: str  # a label selector, e.g. "app=postfix"
+    kind: str  # kubectl-cpu | kubectl-mem | kubectl-log | docker-log | ansible-service
+    selector: str  # k8s label selector | docker ps filter | ansible host pattern
     namespace: str
     severity: Severity
     title: str
@@ -63,10 +71,12 @@ class CustomCheck:
     op: str = ""  # < > <= >= == !=
     value: float = 0.0  # CPU in millicores; memory in MiB
     agg: str = "sum"  # combine the matching pods' values: sum | max | avg
-    # log (kubectl-log): a pattern that should be present (a success signal) or absent (an error)
-    pattern: str = ""  # a regex searched across the pods' recent logs
-    expect: str = ""  # present -> fire when MISSING; absent -> fire when FOUND
-    tail: int = 200  # lines of recent log per pod to read
+    # log (kubectl-log / docker-log): a pattern present (a success signal) or absent (an error)
+    pattern: str = ""  # a regex searched across the recent logs
+    expect: str = ""  # present/absent (log) | active/inactive (service)
+    tail: int = 200  # lines of recent log per pod/container to read
+    # service (ansible-service): the unit name, in its expected state across the host pattern
+    service: str = ""  # e.g. "postfix" (".service" suffix optional)
 
     @property
     def unit(self) -> str:
@@ -108,6 +118,11 @@ def parse_check(raw: dict) -> CustomCheck | None:
         if not isinstance(value, int | float) or isinstance(value, bool):
             return None
         return CustomCheck(**common, op=op, value=float(value), agg=agg)
+    if kind in _ANSIBLE_KINDS:
+        service, expect = read.get("service"), when.get("expect")
+        if not isinstance(service, str) or not service or expect not in _EXPECT_SERVICE:
+            return None
+        return CustomCheck(**common, service=service, expect=expect)
     log = _parse_log_fields(when, read)  # the log kinds (kubectl-log / docker-log)
     return None if log is None else CustomCheck(**common, **log)
 
@@ -398,6 +413,85 @@ class DockerCheckEvaluator:
         return done.stdout if done.returncode == 0 else None
 
 
+# -- ansible: is a host/VM service in the expected state across a host pattern? ------------------
+
+
+class AnsibleCheckEvaluator:
+    """Runs the wall's ``ansible-service`` checks: is a unit ``active`` (or ``inactive``) across the
+    hosts matching a pattern? It runs ONLY the vetted, read-only ``service_facts`` gather (no
+    operator-supplied command -- that would be code execution, which the schema forbids). The
+    check's ``selector`` is an ansible host pattern, ``service`` the unit name. Same Symptom shape
+    as every other kind, so it rides the pipeline."""
+
+    def __init__(
+        self, *, checks_path: str = DEFAULT_CHECKS_FILE, inventory: str = "", timeout: float = 30.0
+    ) -> None:
+        self._checks_path = checks_path
+        self._inventory = inventory
+        self._timeout = timeout
+
+    def evaluate(self) -> list[Symptom]:
+        symptoms: list[Symptom] = []
+        for check in load_checks(self._checks_path):
+            if check.kind != "ansible-service":
+                continue
+            by_host = self._service_states(check.selector)
+            if not by_host:  # ansible unavailable / no hosts matched -> no finding
+                continue
+            want_running = check.expect == "active"
+            bad = [
+                host
+                for host in sorted(by_host)
+                if (_service_running(by_host[host], check.service)) != want_running
+            ]
+            if bad:
+                detail = (
+                    f"{check.service} not {check.expect} on {len(bad)}/{len(by_host)} host(s): "
+                    f"{', '.join(bad[:8])}"
+                )
+                evidence = {
+                    "service": check.service,
+                    "expect": check.expect,
+                    "host_pattern": check.selector,
+                    "affected": str(len(bad)),
+                }
+                symptoms.append(_to_symptom(check, detail, evidence, ""))
+        return symptoms
+
+    def _service_states(self, pattern: str) -> dict[str, dict] | None:
+        """``{host: {service: {state, status}}}`` from a read-only ``service_facts`` gather over the
+        host pattern, or None when ansible can't run / parse (-> no finding)."""
+        if shutil.which("ansible") is None:
+            return None
+        argv = ["ansible", pattern, "-m", "service_facts"]
+        if self._inventory:
+            argv += ["-i", self._inventory]
+        env = {
+            **os.environ,
+            "ANSIBLE_STDOUT_CALLBACK": "json",
+            "ANSIBLE_LOAD_CALLBACK_PLUGINS": "true",
+        }
+        try:
+            done = subprocess.run(  # noqa: S603 -- argv list, no shell; read-only service_facts
+                argv, capture_output=True, text=True, timeout=self._timeout, env=env, check=False
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        try:
+            return _services_by_host(json.loads(done.stdout))
+        except ValueError:
+            return None
+
+
+def _service_running(services: dict, name: str) -> bool:
+    """Whether unit ``name`` is in a running state on a host. Tries the bare name and the common
+    ``<name>.service`` form; a unit not present at all is 'not running'."""
+    info = services.get(name) or services.get(f"{name}.service")
+    if not isinstance(info, dict):
+        return False
+    return str(info.get("state") or "").lower() in _RUNNING_STATES
+
+
 def _log_symptom(check: CustomCheck, logs: str | None, context: str) -> Symptom | None:
     """The condition shared by every log kind: ``expect=present`` fires when the pattern is MISSING
     (a success signal that's gone), ``expect=absent`` fires when it's FOUND (an error appeared). A
@@ -451,12 +545,17 @@ def _to_symptom(check: CustomCheck, detail: str, evidence: dict[str, str], conte
 
 
 def evaluate_custom_checks(
-    context: str = "", kubeconfig: str = "", *, checks_path: str = DEFAULT_CHECKS_FILE
+    context: str = "",
+    kubeconfig: str = "",
+    inventory: str = "",
+    *,
+    checks_path: str = DEFAULT_CHECKS_FILE,
 ) -> list[Symptom]:
     """The engine entry point: evaluate the wall's checks, returning the Symptoms that fired. Each
     check is dispatched to the reader for its backend (``kubectl-*`` -> the cluster; ``docker-*`` ->
-    the local docker engine), so one wall's checks.json can mix them and each runs where it makes
-    sense. [] when there's no checks file (the common case) -- a no-op. Read-only throughout."""
+    the local docker engine; ``ansible-*`` -> the inventory), so one wall's checks.json can mix them
+    and each runs where it makes sense. [] when there's no checks file (the common case) -- a no-op.
+    Read-only throughout."""
     checks = load_checks(checks_path)
     if not checks:
         return []
@@ -468,4 +567,6 @@ def evaluate_custom_checks(
         symptoms += kube.evaluate()
     if any(c.kind == "docker-log" for c in checks):
         symptoms += DockerCheckEvaluator(checks_path=checks_path).evaluate()
+    if any(c.kind in _ANSIBLE_KINDS for c in checks):
+        symptoms += AnsibleCheckEvaluator(checks_path=checks_path, inventory=inventory).evaluate()
     return symptoms

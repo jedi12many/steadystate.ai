@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 
 from steadystate.probe.custom import (
+    AnsibleCheckEvaluator,
     CustomCheckEvaluator,
     DockerCheckEvaluator,
     _aggregate,
@@ -243,3 +244,53 @@ def test_docker_log_fires_when_the_signal_is_missing_and_stays_quiet_when_presen
 
 def test_docker_unavailable_is_no_finding(monkeypatch):
     assert _docker_evaluator(_NGINX, None, monkeypatch).evaluate() == []
+
+
+# -- ansible-service: is a host/VM service in the expected state? (vetted read, no command) -------
+
+_SQUID = {
+    "name": "squid-up",
+    "read": {"kind": "ansible-service", "selector": "proxies", "service": "squid"},
+    "when": {"expect": "active"},
+    "emit": {"severity": "high", "title": "squid is not running on a proxy host"},
+}
+
+
+def test_ansible_service_parses_and_rejects_a_command_or_wrong_expect():
+    check = parse_check(_SQUID)
+    assert check is not None and check.service == "squid" and check.expect == "active"
+    assert check.selector == "proxies" and check.namespace == ""  # host pattern, no namespace
+    assert parse_check({**_SQUID, "when": {"expect": "present"}}) is None  # log expect, not service
+    # no `command` kind exists -- arbitrary command execution is deliberately not in the schema
+    cmd = {**_SQUID, "read": {"kind": "ansible-command", "selector": "all", "service": "x"}}
+    assert parse_check(cmd) is None
+
+
+def _ansible_evaluator(check: dict, states, monkeypatch) -> AnsibleCheckEvaluator:
+    import steadystate.probe.custom as mod
+
+    monkeypatch.setattr(mod, "load_checks", lambda _p: [c for c in [parse_check(check)] if c])
+    ev = AnsibleCheckEvaluator()
+    monkeypatch.setattr(ev, "_service_states", lambda pattern: states)
+    return ev
+
+
+def test_ansible_service_fires_when_a_host_is_not_in_the_expected_state(monkeypatch):
+    states = {
+        "p1": {"squid.service": {"state": "running"}},
+        "p2": {"squid.service": {"state": "stopped"}},  # the offender
+    }
+    syms = _ansible_evaluator(_SQUID, states, monkeypatch).evaluate()
+    assert len(syms) == 1 and "1/2 host(s)" in syms[0].detail and "p2" in syms[0].detail
+    assert syms[0].evidence["service"] == "squid" and syms[0].provenance.source == "custom-check"
+    # all hosts running (incl. the `active` synonym) -> clean
+    ok = {
+        "p1": {"squid.service": {"state": "running"}},
+        "p2": {"squid.service": {"state": "active"}},
+    }
+    assert _ansible_evaluator(_SQUID, ok, monkeypatch).evaluate() == []
+
+
+def test_ansible_unavailable_or_no_hosts_is_no_finding(monkeypatch):
+    assert _ansible_evaluator(_SQUID, None, monkeypatch).evaluate() == []  # ansible couldn't run
+    assert _ansible_evaluator(_SQUID, {}, monkeypatch).evaluate() == []  # no hosts matched
