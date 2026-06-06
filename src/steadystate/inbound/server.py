@@ -30,6 +30,7 @@ from ..act.execute import CATALOG_SOURCE
 from ..act.learn import ADOPT
 from ..act.learn import learn as derive_lessons
 from ..act.reflex import reflex_recurrence, reflexes
+from ..classify import APPLICATION, finding_layer
 from ..engine import build_report
 from ..notify import SURFACES
 from ..onboarding import Status, capabilities
@@ -740,20 +741,28 @@ def _render_summary(state_path: str) -> str:
             # Learning: responses you keep applying by hand that have earned an autonomy review.
             lessons = derive_lessons(every, store.acted_fingerprints())
             promotable = sum(1 for le in lessons if le.ready_to_promote)
-    # Findings line: count + per-severity breakdown (worst first), and what's awaiting you.
-    counts: dict[str, int] = {}
+    # Split YOUR apps from the platform plumbing (coredns / cattle-* / svclb / ...), so the glance
+    # leads with what you own. The count, breakdown, and worst are over APP findings; platform is an
+    # aside (never hidden -- a coredns crashloop is real, just not your app's problem).
+    app: list[Finding] = []
+    platform: list[Finding] = []
     for f in findings:
+        (app if finding_layer(f.details, f.last_title) == APPLICATION else platform).append(f)
+    counts: dict[str, int] = {}
+    for f in app:
         counts[f.last_severity] = counts.get(f.last_severity, 0) + 1
     breakdown = ", ".join(
         f"{counts[s]} {s}" for s in sorted(counts, key=lambda s: -_SEVERITY_RANK.get(s, 0))
     )
     pend = f" -- {len(pendings)} pending your approval" if pendings else ""
-    if not findings and not pendings:
+    if not app and not pendings:
         head = "all clear -- 0 open findings, nothing pending"
     else:
-        n = len(findings)
+        n = len(app)
         head = f"{n} open finding{'s' if n != 1 else ''}" + (f" ({breakdown})" if breakdown else "")
         head += pend
+    if platform:
+        head += f"  |  {len(platform)} platform"
     if as_of:
         head += f"  (as of {as_of})"
     lines = [head]
@@ -774,9 +783,9 @@ def _render_summary(state_path: str) -> str:
         lines.append(
             f"homeostat: {len(active)} reflex(es), {auto} auto{not_holding} | decider: {grant}"
         )
-    # Worst line: the highest-severity finding, oldest-first on a tie -- what to look at first.
-    if findings:
-        worst = min(findings, key=lambda f: (-_SEVERITY_RANK.get(f.last_severity, 0), f.first_seen))
+    # Worst line: the highest-severity APP finding, oldest-first on a tie -- what to look at first.
+    if app:
+        worst = min(app, key=lambda f: (-_SEVERITY_RANK.get(f.last_severity, 0), f.first_seen))
         lines.append(f"worst: {worst.last_title}  [{worst.last_severity}]")
     # Learning line: a response you keep applying by hand has earned an autonomy review (`learn`).
     if promotable:
