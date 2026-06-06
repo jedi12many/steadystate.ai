@@ -817,18 +817,18 @@ def _render_learn(state_path: str) -> str:
     return "\n".join(lines)
 
 
-def _render_checks() -> str:
-    """The chat/CLI/MCP view of this wall's custom health checks (`.steadystate/checks.json`)."""
-    checks = load_checks()
+def _render_checks(checks_path: str = "") -> str:
+    """The chat/CLI/MCP view of the custom health checks (STEADYSTATE_CHECKS / the default)."""
+    checks = load_checks(checks_path)
     if not checks:
-        return "no custom checks in this wall -- add one with `add-check` (or `define-check`)."
+        return "no custom checks here -- add one with `add-check` (or `define-check`)."
     return f"{len(checks)} custom check(s):\n" + "\n".join(f"  {describe_check(c)}" for c in checks)
 
 
-def _add_check(payload: str) -> str:
-    """Validate a check (a JSON object, or a JSON string) against the vetted schema and store it in
-    the wall. The schema is the gate -- only a valid, observe-only check is written. Used by the
-    `add-check` verb an agent calls after filling the schema from a conversation."""
+def _add_check(payload: str, checks_path: str = "") -> str:
+    """Validate a check (a JSON object, or a JSON string) against the vetted schema and store it.
+    The schema is the gate -- only a valid, observe-only check is written. Used by the `add-check`
+    verb an agent calls after filling the schema from a conversation."""
     if not payload.strip():
         return "add-check needs a check (a JSON object). See `checks` / the schema."
     try:
@@ -837,7 +837,7 @@ def _add_check(payload: str) -> str:
         return "couldn't parse the check -- it must be a JSON object matching the schema."
     if not isinstance(raw, dict):
         return "a check must be a single JSON object."
-    _check, message = add_check(raw)
+    _check, message = add_check(raw, checks_path)
     return message
 
 

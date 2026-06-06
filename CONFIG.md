@@ -18,6 +18,7 @@ never printing a secret value) and lists the **runtime dials** with their live v
 | Variable | Default | Effect |
 |---|---|---|
 | `STEADYSTATE_TARGETS` | `.steadystate/targets.json` | The named-targets registry a scan / chat / MCP server resolves. Splitting this per folder is how you **wall** environments. |
+| `STEADYSTATE_CHECKS` | `.steadystate/checks.json` | The custom-health-checks file (also `--checks`). Checks are **intent, not runtime state** — point this at a *version-controlled* file (outside the gitignored `.steadystate/`) so authored/agent-written checks are reviewed in PRs and shared, not lost as local state. |
 | `KUBECONFIG` | kube default | Cluster access for `kubernetes`/`k8s-live` sources, live probes, and `verify` (standard kubectl variable). |
 | *(`--state`, not an env var)* | `.steadystate/state.db` | The SQLite memory db (findings / pendings / history / spend). One per wall; pass it explicitly to isolate. |
 
