@@ -63,6 +63,21 @@ def test_summary_shows_data_freshness(tmp_path):
     assert "as of" not in _render_summary(empty)  # nothing recorded -> no staleness line
 
 
+def test_summary_surfaces_a_promotion_ready_response(tmp_path, monkeypatch):
+    monkeypatch.delenv("STEADYSTATE_REFLEX_AUTO", raising=False)
+    db = str(tmp_path / "s.db")
+    with StateStore(db) as store:
+        store.record(
+            {"a" * 64: ("medium", "hog Evicted"), "b" * 64: ("medium", "hog2 Evicted")},
+            _NOW,
+            evidence={"a" * 64: {"category": "Evicted"}, "b" * 64: {"category": "Evicted"}},
+        )
+        # resolved by hand, same fix both times -> a response that's earned a promotion review
+        store.resolve("a" * 64, "raise the ephemeral-storage limit", "jeff", _NOW)
+        store.resolve("b" * 64, "raise the ephemeral-storage limit", "jeff", _NOW)
+    assert "earned a promotion review" in _render_summary(db)  # glanceable, not buried in `learn`
+
+
 def test_summary_dispatches_as_a_read_only_chat_command(tmp_path):
     db = str(tmp_path / "s.db")
     with StateStore(db) as store:

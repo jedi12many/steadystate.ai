@@ -70,6 +70,9 @@ class Lesson:
     median_open: float  # median time-to-resolve across the demonstrations, seconds
     recommendation: str
     reflex_name: str | None  # the reflex to promote, for an ADOPT lesson; None for SELF_HEAL
+    # A dormant reflex with ONE consistent recorded fix -- the human has a clear case to grant
+    # autonomy (STEADYSTATE_REFLEX_AUTO). Surfaces glance-ably in `summary`; never auto-promotes.
+    ready_to_promote: bool = False
 
 
 def gather_demonstrations(findings: list[Finding], acted: set[str]) -> list[Demonstration]:
@@ -121,6 +124,7 @@ def _lesson_for(category: str, group: list[Demonstration], recurred: dict[str, i
     scope = _scope(group)
     count = len(group)
     if reflex is not None:
+        ready = False
         if reflex.autonomy == AUTO:
             rec = (
                 f"'{reflex.name}' is auto but {count} {category} resolved out-of-band -- "
@@ -128,7 +132,8 @@ def _lesson_for(category: str, group: list[Demonstration], recurred: dict[str, i
             ) + _fix_hint(group)
         else:  # a dormant reflex you keep re-supplying by hand: is it ready to promote?
             rec = _promotion_recommendation(category, group, reflex, recurred.get(reflex.name, 0))
-        return Lesson(category, ADOPT, count, scope, med, rec, reflex.name)
+            ready = len(_distinct_fixes(group)) == 1  # one consistent fix -> earned a review
+        return Lesson(category, ADOPT, count, scope, med, rec, reflex.name, ready_to_promote=ready)
     rec = (
         f"{count} {category} cleared without intervention (median {_humanize(med)}) -- "
         "a candidate to mute (stop paging), or a future reflex"
