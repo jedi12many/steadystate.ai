@@ -142,3 +142,59 @@ def test_load_checks_skips_invalid_keeps_valid_and_tolerates_a_missing_file(tmp_
 def test_evaluate_custom_checks_is_a_no_op_without_a_checks_file(tmp_path):
     # the common case: a wall with no checks file -> [] (cheap, no kubectl call attempted).
     assert evaluate_custom_checks("ctx", "kube", checks_path=str(tmp_path / "none.json")) == []
+
+
+# -- the kubectl-log kind: functional health ('running, but doing its job?') ----
+
+_POSTFIX = {
+    "name": "postfix-routing",
+    "read": {"kind": "kubectl-log", "selector": "app=postfix", "namespace": "mail"},
+    "when": {"pattern": "status=sent", "expect": "present"},
+    "emit": {"severity": "high", "title": "postfix is not routing mail"},
+}
+
+
+def test_a_log_check_parses_with_its_pattern_and_a_valid_regex_is_required():
+    check = parse_check(_POSTFIX)
+    assert check is not None and check.pattern == "status=sent" and check.expect == "present"
+    assert check.tail == 200  # default tail
+    assert (
+        parse_check({**_POSTFIX, "when": {"pattern": "x", "expect": "maybe"}}) is None
+    )  # bad expect
+    assert parse_check({**_POSTFIX, "when": {"pattern": "[unclosed", "expect": "present"}}) is None
+    assert parse_check({**_POSTFIX, "when": {"expect": "present"}}) is None  # no pattern
+
+
+def _log_evaluator(check: dict, logs: str | None, monkeypatch) -> CustomCheckEvaluator:
+    import steadystate.probe.custom as mod
+
+    monkeypatch.setattr(mod, "load_checks", lambda _p: [c for c in [parse_check(check)] if c])
+    ev = CustomCheckEvaluator()
+    monkeypatch.setattr(ev, "_pod_logs", lambda ns, sel, tail: logs)
+    return ev
+
+
+def test_present_check_fires_when_the_success_signal_is_missing(monkeypatch):
+    # 'is postfix routing?' -> expect status=sent PRESENT; if it's not in the logs, fire.
+    quiet = _log_evaluator(
+        _POSTFIX, "postfix/postfix: connect from relay\npostfix: waiting", monkeypatch
+    )
+    syms = quiet.evaluate()
+    assert len(syms) == 1 and syms[0].title == "postfix is not routing mail"
+    assert syms[0].evidence["found"] == "False" and syms[0].category == "postfix-routing"
+    # ...and when it IS routing (the signal is present), no finding.
+    routing = _log_evaluator(_POSTFIX, "postfix/qmgr: status=sent (250 ok)", monkeypatch)
+    assert routing.evaluate() == []
+
+
+def test_absent_check_fires_when_an_error_pattern_appears(monkeypatch):
+    err = {**_POSTFIX, "when": {"pattern": "fatal|panic", "expect": "absent"}}
+    seen = _log_evaluator(err, "postfix/master: fatal: cannot bind to port 25", monkeypatch)
+    assert len(seen.evaluate()) == 1  # the error is present -> fire
+    clean = _log_evaluator(err, "postfix/qmgr: all good", monkeypatch)
+    assert clean.evaluate() == []  # no error -> no finding
+
+
+def test_logs_unavailable_is_no_finding_not_a_false_alarm(monkeypatch):
+    # a *down* app is the generic prober's job; a log read we couldn't take must not fire.
+    assert _log_evaluator(_POSTFIX, None, monkeypatch).evaluate() == []
