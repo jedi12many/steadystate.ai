@@ -1501,6 +1501,13 @@ def mcp(
         "of the last stored scan. Trades a few seconds of connect latency for freshness; off by "
         "default (a slow cluster could trip a client's handshake timeout).",
     ),
+    author: bool = typer.Option(
+        False,
+        "--author",
+        help="Expose the check-AUTHORING verbs (`add-check`) WITHOUT full --write -- an agent can "
+        "write custom checks (observe-only, schema-gated) but NOT approve/fix/run infra. The "
+        "middle tier between read-only and --write. Also enabled by STEADYSTATE_MCP_AUTHOR=1.",
+    ),
     write: bool = typer.Option(
         False,
         "--write",
@@ -1510,10 +1517,11 @@ def mcp(
     ),
 ) -> None:
     """Run steadystate as an MCP (Model Context Protocol) server over stdio, so Claude Code/Desktop
-    or any agent can drive the vetted command grammar -- `summary`/`findings`/`show`/`probe` to
-    observe, and (with --write) `approve`/`fix`/`run` to act within the SAME guardrails a human.
-    The agent picks WHAT; steadystate's gate still decides WHETHER. Speaks JSON-RPC over stdio (the
-    standard local MCP transport); point your MCP client's command at `steadystate mcp`.
+    or any agent can drive the vetted command grammar. Three grant tiers: **read-only** (default --
+    `summary`/`findings`/`show`/`probe`); **--author** adds `add-check` so an agent can write custom
+    checks (observe-only, schema-gated) without touching infra; **--write** adds the effectful verbs
+    (`approve`/`fix`/`run`/...) within the SAME guardrails a human hits. The agent picks WHAT;
+    the gate decides WHETHER. Speaks JSON-RPC over stdio; point your client at `steadystate mcp`.
 
     A client launches this server from *its* working directory, not your wall folder -- so the
     cwd-relative defaults (.steadystate/state.db, targets, kubeconfigs) miss. Pass `--dir <folder>`
@@ -1533,8 +1541,10 @@ def mcp(
     if refresh:  # freshen the store before serving, so a connecting agent sees current state
         run_command(Command(PROBE, _local_actor(), refresh), str(state))
     wall = label or (Path(directory).name if directory else "")
-    env = os.environ.get("STEADYSTATE_MCP_WRITE", "").strip().lower()
-    serve_stdio(str(state), write=write or env in ("1", "true", "yes", "on"), label=wall)
+    truthy = ("1", "true", "yes", "on")
+    granted = write or os.environ.get("STEADYSTATE_MCP_WRITE", "").strip().lower() in truthy
+    can_author = author or os.environ.get("STEADYSTATE_MCP_AUTHOR", "").strip().lower() in truthy
+    serve_stdio(str(state), write=granted, author=can_author, label=wall)
 
 
 @app.command()
@@ -1886,6 +1896,11 @@ _DIALS: tuple[tuple[str, str, str], ...] = (
     ("STEADYSTATE_DECIDER_AUTO", "off", "let the LLM decider act autonomously (within the bound)"),
     ("STEADYSTATE_REFLEX_AUTO", "off", "let reflexes act autonomously"),
     ("STEADYSTATE_MCP_WRITE", "off", "expose effectful verbs over MCP (= mcp --write)"),
+    (
+        "STEADYSTATE_MCP_AUTHOR",
+        "off",
+        "expose check-authoring over MCP, not infra (= mcp --author)",
+    ),
     ("STEADYSTATE_BOUND", "built-in", "override the impact x reversibility bound"),
     ("STEADYSTATE_BREAKGLASS_USERS", "(nobody)", "who may confirm an out-of-bound action"),
     ("STEADYSTATE_LLM_ENABLED", "on", "LLM kill switch (false/0/no/off disables all calls)"),

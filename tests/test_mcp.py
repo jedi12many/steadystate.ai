@@ -72,6 +72,25 @@ def test_tools_list_is_read_only_by_default_and_widens_with_the_write_grant():
     }
 
 
+def test_author_tier_exposes_check_authoring_without_infra_write():
+    # the middle tier: an agent can write checks (observe-only, schema-gated) but NOT touch infra
+    read_only = {t["name"] for t in mcp_tools(write=False)}
+    author = {t["name"] for t in mcp_tools(write=False, author=True)}
+    full = {t["name"] for t in mcp_tools(write=True)}
+    assert "add-check" not in read_only  # not without a grant
+    assert "add-check" in author and "add-check" in full  # author (and write) expose it
+    assert APPROVE not in author and "run" not in author  # but author can't reach infra remediation
+    assert "checks" in read_only  # listing checks is read-only, always available
+    # tools/call honors the tier: approve is refused in the author tier
+    out = handle_request(
+        _req("tools/call", {"name": "approve", "arguments": {"fingerprint": "x"}}),
+        ":memory:",
+        write=False,
+        author=True,
+    )
+    assert out["error"]["code"] == -32602  # approve is unavailable to an author-only agent
+
+
 def test_tool_input_schema_declares_args_and_probe_flags():
     tools = {t["name"]: t for t in mcp_tools(write=True)}
     probe = tools[PROBE]["inputSchema"]
@@ -267,12 +286,12 @@ def test_mcp_dir_chdirs_into_the_wall_then_serves(tmp_path, monkeypatch):
     monkeypatch.setattr(os, "chdir", lambda p: seen.__setitem__("chdir", str(p)))
     monkeypatch.setattr(
         "steadystate.inbound.mcp.serve_stdio",
-        lambda state_path, write, label: seen.__setitem__("serve", (state_path, write, label)),
+        lambda *a, **k: seen.__setitem__("serve", k),
     )
     result = CliRunner().invoke(app, ["mcp", "--dir", str(tmp_path)])
     assert result.exit_code == 0
     assert seen["chdir"] == str(tmp_path)  # chdir'd into the wall before serving
-    assert seen["serve"][1] is False  # still read-only by default
+    assert seen["serve"]["write"] is False and seen["serve"]["author"] is False  # read-only default
 
 
 def test_mcp_dir_rejects_a_missing_directory(monkeypatch):
@@ -299,7 +318,7 @@ def test_mcp_label_defaults_to_the_dir_basename_and_explicit_wins(tmp_path, monk
     monkeypatch.setattr(os, "chdir", lambda p: None)
     monkeypatch.setattr(
         "steadystate.inbound.mcp.serve_stdio",
-        lambda state_path, write, label: seen.__setitem__("label", label),
+        lambda *a, **k: seen.update(k),
     )
     wall = tmp_path / "akeyless-use1"
     wall.mkdir()
@@ -307,6 +326,9 @@ def test_mcp_label_defaults_to_the_dir_basename_and_explicit_wins(tmp_path, monk
     assert seen["label"] == "akeyless-use1"  # defaults to the wall folder name
     CliRunner().invoke(app, ["mcp", "--dir", str(wall), "--label", "custom"])
     assert seen["label"] == "custom"  # an explicit --label wins
+    # --author grants the authoring tier without full --write
+    CliRunner().invoke(app, ["mcp", "--dir", str(wall), "--author"])
+    assert seen["author"] is True and seen["write"] is False
 
 
 def test_mcp_refresh_probes_before_serving(monkeypatch):
