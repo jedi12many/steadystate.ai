@@ -171,7 +171,7 @@ def build_report(
     # Per-wall custom checks: declarative, read-only health rules the operator (or an agent) defined
     # in this wall's .steadystate/checks.json -> Symptoms, evaluated against this target's cluster.
     # Augments the generic probe above; a cheap no-op on a wall that hasn't defined any.
-    symptoms = symptoms + evaluate_custom_checks(context, kubeconfig)
+    symptoms = symptoms + evaluate_custom_checks(context, kubeconfig, inventory)
 
     report = Pipeline(analyst=analyst, tuning=level, correlator=grouping).run(
         drifts, resources, symptoms
