@@ -153,6 +153,29 @@ def test_stdio_messages_serialize_as_one_json_line_each():
     assert "\n" not in line and json.loads(line)["id"] == 1
 
 
+def test_add_check_tool_carries_the_schema_and_accepts_a_structured_object():
+    # the agent can't author a check it can't see the shape of -> the tool must expose the schema
+    tool = next(t for t in mcp_tools(write=True) if t["name"] == "add-check")
+    check_arg = tool["inputSchema"]["properties"]["check"]
+    assert check_arg["type"] == "object"  # a structured object, not an opaque string
+    assert (
+        "kubectl-log" in check_arg["description"] and "ansible-service" in check_arg["description"]
+    )
+    assert "postfix-routing" in check_arg["description"]  # a worked example, inline
+    # the agent fills `check` as an object -> serialized to a JSON arg for the handler
+    obj = {
+        "name": "squid-up",
+        "read": {"kind": "ansible-service", "selector": "proxies", "service": "squid"},
+        "when": {"expect": "active"},
+        "emit": {"severity": "high", "title": "squid down"},
+    }
+    cmd = command_from_tool_call("add-check", {"check": obj})
+    assert cmd is not None and json.loads(cmd.argument)["name"] == "squid-up"
+    # a JSON string still works (backward compatible)
+    cmd2 = command_from_tool_call("add-check", {"check": json.dumps(obj)})
+    assert cmd2 is not None and json.loads(cmd2.argument)["name"] == "squid-up"
+
+
 # -- resources: state an agent can pull into context ----------------------------
 
 

@@ -24,14 +24,22 @@ import sys
 from typing import Any
 
 from .. import __version__
+from ..probe.custom import CHECK_SCHEMA_HINT
 from ..state import StateStore, filter_findings
-from .base import COMMANDS, FINDINGS, PROBE, SHOW, SUMMARY, Command, tool_schema
+from .base import ADD_CHECK, COMMANDS, FINDINGS, PROBE, SHOW, SUMMARY, Command, tool_schema
 from .server import run_command
 
 # The MCP protocol revision we implement. We echo the client's requested version when it sends one
 # (best-effort forward-compatibility), falling back to this.
 _PROTOCOL_VERSION = "2025-06-18"
 _MCP_ACTOR = "mcp"  # who the audit log credits an MCP-driven action to
+
+# A worked example for the add-check tool -- an agent fills `check` from this + the schema hint.
+_ADD_CHECK_EXAMPLE = (
+    '{"name": "postfix-routing", "read": {"kind": "kubectl-log", "selector": "app=postfix", '
+    '"namespace": "mail"}, "when": {"pattern": "status=sent", "expect": "present"}, '
+    '"emit": {"severity": "high", "title": "postfix is not routing mail"}}'
+)
 
 # An effect tag (from tool_schema) -> MCP tool annotations: the hints a client uses to decide
 # whether to auto-run a call or confirm it with the human. read-only is safe; the rest change
@@ -46,11 +54,21 @@ _ANNOTATIONS: dict[str, dict[str, bool]] = {
 
 def _input_schema(tool: dict[str, Any]) -> dict[str, Any]:
     """A JSON Schema for one tool's arguments, derived from its ``tool_schema`` entry: each declared
-    arg is a string property (required ones marked), plus ``flags`` (an enum array) for probe."""
+    arg is a string property (required ones marked), plus ``flags`` (an enum array) for probe. The
+    ``add-check`` ``check`` arg gets the full check schema inline -- an agent can't author a check
+    whose shape it can't see (the cause of 'the agent can't figure out add-check')."""
     properties: dict[str, Any] = {arg["name"]: {"type": "string"} for arg in tool["args"]}
     required = [arg["name"] for arg in tool["args"] if arg["required"]]
     if "flags" in tool:  # probe's modifier flags
         properties["flags"] = {"type": "array", "items": {"type": "string", "enum": tool["flags"]}}
+    if tool["name"] == ADD_CHECK and "check" in properties:
+        properties["check"] = {
+            "type": "object",
+            "description": (
+                f"A custom health check as a JSON object. {CHECK_SCHEMA_HINT}\n\n"
+                f"Example: {_ADD_CHECK_EXAMPLE}"
+            ),
+        }
     schema: dict[str, Any] = {"type": "object", "properties": properties}
     if required:
         schema["required"] = required
@@ -85,7 +103,13 @@ def command_from_tool_call(name: str, arguments: dict[str, Any]) -> Command | No
 
     if name not in COMMANDS:
         return None
-    values = [str(arguments.get(arg_name, "")).strip() for arg_name, _ in _TOOL_ARGS[name]]
+
+    # An arg the agent fills as a structured object/array (e.g. add-check's `check`) is serialized
+    # to JSON for the string-based handler; a plain value is stringified as before.
+    def _as_text(value: Any) -> str:
+        return json.dumps(value) if isinstance(value, dict | list) else str(value).strip()
+
+    values = [_as_text(arguments.get(arg_name, "")) for arg_name, _ in _TOOL_ARGS[name]]
     argument = values[0] if values else ""
     argument2 = values[1] if len(values) >= 2 else ""
     flags: frozenset[str] = frozenset()
