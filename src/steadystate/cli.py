@@ -1416,6 +1416,56 @@ def summary_status(state: Path = _STATE_OPTION) -> None:
 
 
 @app.command()
+def checks() -> None:
+    """List this wall's custom health checks (.steadystate/checks.json)."""
+    from .inbound.server import _render_checks
+
+    typer.echo(_render_checks())
+
+
+@app.command("add-check")
+def add_check_cmd(
+    check: str = typer.Argument(..., help="The check as a JSON object."),
+) -> None:
+    """Store a custom health check from a JSON object -- validated against the vetted schema, then
+    written to this wall's .steadystate/checks.json (re-defining a name updates it). To author one
+    in plain English instead, use `define-check`."""
+    from .inbound.server import _add_check
+
+    typer.echo(_add_check(check))
+
+
+@app.command("define-check")
+def define_check_cmd(
+    request: str = typer.Argument(..., help="What to watch, in plain English."),
+) -> None:
+    """Author a custom health check by describing it -- the LLM fills the vetted schema, steadystate
+    validates it (only a schema-valid, observe-only check is stored), and writes it to this wall.
+    Needs an LLM configured (see `doctor`). e.g. "alert if squid stops running on a proxy host"."""
+    from .probe.custom import add_check, define_check
+
+    analyst = LLMAnalyst()
+    if analyst._provider() == "none":
+        typer.echo(
+            "define-check needs an LLM (ANTHROPIC_API_KEY or a custom endpoint). Use `add-check` "
+            "with JSON, or see `doctor`.",
+            err=True,
+        )
+        raise typer.Exit(1)
+    raw = define_check(request, analyst._complete)
+    if raw is None:
+        typer.echo(
+            "the model didn't return a check -- try rephrasing, or `add-check` with JSON.", err=True
+        )
+        raise typer.Exit(1)
+    check, message = add_check(raw)
+    typer.echo(message)
+    if check is None:
+        typer.echo(f"\n(the model proposed: {raw})", err=True)
+        raise typer.Exit(1)
+
+
+@app.command()
 def mcp(
     state: Path = _STATE_OPTION,
     directory: str = typer.Option(

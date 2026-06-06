@@ -40,6 +40,8 @@ TARGETS = "targets"
 HISTORY = "history"
 HOLD = "hold"
 LEARN = "learn"
+CHECKS = "checks"
+ADD_CHECK = "add-check"
 FINDINGS = "findings"
 SHOW = "show"
 SURFACES_LIST = "surfaces"
@@ -88,6 +90,13 @@ COMMANDS: dict[str, tuple[str, str]] = {
         "learn",
         "what steadystate has learned from findings that resolved on their own (out-of-band) -- "
         "categories to adopt a reflex for, or that self-heal",
+    ),
+    CHECKS: ("checks", "list this wall's custom health checks (.steadystate/checks.json)"),
+    ADD_CHECK: (
+        "add-check",
+        "define a custom health check from a JSON object -- validated against the vetted schema "
+        "(read kind + condition + emit), then stored in this wall. Authors observe-only checks; "
+        "never code. e.g. is postfix routing mail, is squid running, is a pod's CPU too low",
     ),
     SURFACES_LIST: (
         "surfaces",
@@ -201,6 +210,8 @@ _TOOL_ARGS: dict[str, tuple[tuple[str, bool], ...]] = {
     SUMMARY: (),
     TARGETS: (),
     PENDING: (),
+    CHECKS: (),
+    ADD_CHECK: (("check", True),),  # one arg: the check as a JSON object/string
     PROBE: (("target", True),),  # a target name, or "all" for the fleet
     COST: (("period", False),),  # day | week, optional
     FINDINGS: (("filter", False),),  # an optional status word and/or keyword to grep
@@ -225,6 +236,8 @@ _TOOL_ARGS: dict[str, tuple[tuple[str, bool], ...]] = {
 _TOOL_EFFECT: dict[str, str] = {
     HELP: "read-only",
     SUMMARY: "read-only",
+    CHECKS: "read-only",
+    ADD_CHECK: "state-write",  # writes the wall's checks.json -- reversible config, no infra
     TARGETS: "read-only",
     PENDING: "read-only",
     PROBE: "read-only",  # scans + records findings, never acts on infra

@@ -34,6 +34,7 @@ from ..classify import APPLICATION, finding_layer
 from ..engine import build_report
 from ..notify import SURFACES
 from ..onboarding import Status, capabilities
+from ..probe.custom import add_check, describe_check, load_checks
 from ..reason.alert import Alert, Layer, Severity
 from ..reason.cost import roll_up, roll_up_by_period, scan_cost_line
 from ..reason.llm import LLMAnalyst
@@ -45,7 +46,9 @@ from ..sweep import render_sweep, sweep_targets
 from ..targets import load_targets_from_env
 from .base import (
     ACTIONS_LIST,
+    ADD_CHECK,
     APPROVE,
+    CHECKS,
     COST,
     DECLINE,
     FINDINGS,
@@ -814,6 +817,30 @@ def _render_learn(state_path: str) -> str:
     return "\n".join(lines)
 
 
+def _render_checks() -> str:
+    """The chat/CLI/MCP view of this wall's custom health checks (`.steadystate/checks.json`)."""
+    checks = load_checks()
+    if not checks:
+        return "no custom checks in this wall -- add one with `add-check` (or `define-check`)."
+    return f"{len(checks)} custom check(s):\n" + "\n".join(f"  {describe_check(c)}" for c in checks)
+
+
+def _add_check(payload: str) -> str:
+    """Validate a check (a JSON object, or a JSON string) against the vetted schema and store it in
+    the wall. The schema is the gate -- only a valid, observe-only check is written. Used by the
+    `add-check` verb an agent calls after filling the schema from a conversation."""
+    if not payload.strip():
+        return "add-check needs a check (a JSON object). See `checks` / the schema."
+    try:
+        raw = json.loads(payload)
+    except ValueError:
+        return "couldn't parse the check -- it must be a JSON object matching the schema."
+    if not isinstance(raw, dict):
+        return "a check must be a single JSON object."
+    _check, message = add_check(raw)
+    return message
+
+
 def _record_probe_findings(report: Report, state_path: str) -> None:
     """Persist a summoned probe's findings to the store (new/recurring memory, and the db file
     itself) so they show in `findings` and can be muted. **Record-only**: no `resolve_absent` -- a
@@ -961,6 +988,10 @@ def run_command(command: Command, state_path: str) -> str:
         return _render_hold(state_path)
     if command.verb == LEARN:
         return _render_learn(state_path)
+    if command.verb == CHECKS:
+        return _render_checks()
+    if command.verb == ADD_CHECK:
+        return _add_check(command.argument)
     with StateStore(state_path) as store:
         if command.verb == APPROVE:
             fp, error = _resolve_pending(store, command.argument)
