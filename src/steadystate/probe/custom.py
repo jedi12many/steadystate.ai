@@ -10,11 +10,13 @@ reads); the reading and comparing are steadystate's. A check can only ever OBSER
 ``.steadystate/``, so different cluster-sets carry different rules for free, no cross-wall reach.
 
 Read kinds: ``kubectl-cpu`` / ``kubectl-mem`` -- the live CPU/memory of the pods matching a label
-selector (metrics API), aggregated and compared to a threshold; and ``kubectl-log`` -- a regex that
+selector (metrics API), aggregated and compared to a threshold; ``kubectl-log`` -- a regex that
 should be *present* (a success signal, e.g. postfix's ``status=sent``) or *absent* (an error) in the
-pods' recent logs, i.e. "running, but doing its job?". A read we couldn't take -> no finding (never
-a false alarm; a *down* app is the generic prober's call). The Symptoms ride the normal pipeline, so
-a custom finding is tracked new/recurring/resolved, muteable, and feeds ``resolve``/``learn``."""
+pods' recent logs, i.e. "running, but doing its job?"; and ``docker-log`` -- the same, over the logs
+of the containers matching a ``docker ps`` filter (functional health for compose). A read we
+couldn't take -> no finding (never a false alarm; a *down* app is the generic prober's call). Each
+check is dispatched to the reader for its backend. The Symptoms ride the normal pipeline, so a
+custom finding is tracked new/recurring/resolved, muteable, and feeds ``resolve``/``learn``."""
 
 from __future__ import annotations
 
@@ -32,10 +34,11 @@ from .base import Symptom
 DEFAULT_CHECKS_FILE = ".steadystate/checks.json"
 
 _NUMERIC_KINDS = frozenset({"kubectl-cpu", "kubectl-mem"})  # a threshold over an aggregated value
-_LOG_KIND = (
-    "kubectl-log"  # a pattern that should/shouldn't be in the pods' logs (functional health)
-)
-_ALL_KINDS = _NUMERIC_KINDS | {_LOG_KIND}
+# functional health: a pattern that should/shouldn't be in the workload's recent logs. kubectl-log
+# reads pods (a label selector + namespace); docker-log reads containers (a `docker ps` filter).
+_LOG_KINDS = frozenset({"kubectl-log", "docker-log"})
+_KUBECTL_KINDS = _NUMERIC_KINDS | {"kubectl-log"}
+_ALL_KINDS = _NUMERIC_KINDS | _LOG_KINDS
 _OPS = frozenset({"<", ">", "<=", ">=", "==", "!="})
 _AGGS = frozenset({"sum", "max", "avg"})
 _EXPECT = frozenset({"present", "absent"})
@@ -77,14 +80,17 @@ def parse_check(raw: dict) -> CustomCheck | None:
         return None
     read, when, emit = raw.get("read") or {}, raw.get("when") or {}, raw.get("emit") or {}
     name = raw.get("name")
-    kind, selector, namespace = read.get("kind"), read.get("selector"), read.get("namespace")
+    kind, selector = read.get("kind"), read.get("selector")
+    namespace = read.get("namespace", "")  # k8s only; a docker filter carries its own scope
     severity, title = emit.get("severity"), emit.get("title")
     if not (isinstance(name, str) and name):
         return None
     if kind not in _ALL_KINDS or not isinstance(selector, str) or not selector:
         return None
-    if not isinstance(namespace, str) or not namespace:
+    if not isinstance(namespace, str):
         return None
+    if kind in _KUBECTL_KINDS and not namespace:
+        return None  # a kubectl read is scoped to one namespace
     if severity not in _SEVERITIES or not isinstance(title, str) or not title:
         return None
     common = {
@@ -102,17 +108,24 @@ def parse_check(raw: dict) -> CustomCheck | None:
         if not isinstance(value, int | float) or isinstance(value, bool):
             return None
         return CustomCheck(**common, op=op, value=float(value), agg=agg)
-    # kubectl-log: a pattern (regex) that should be present or absent in the pods' recent logs.
+    log = _parse_log_fields(when, read)  # the log kinds (kubectl-log / docker-log)
+    return None if log is None else CustomCheck(**common, **log)
+
+
+def _parse_log_fields(when: dict, read: dict) -> dict | None:
+    """The condition shared by every log kind: a regex that should be ``present`` (a success signal)
+    or ``absent`` (an error) in the recent logs, + how many lines to read. None if malformed -- the
+    pattern must compile (a broken regex is dropped, not stored), so the check can never throw."""
     pattern, expect, tail = when.get("pattern"), when.get("expect"), read.get("tail", 200)
     if not isinstance(pattern, str) or not pattern or expect not in _EXPECT:
         return None
     if not isinstance(tail, int) or isinstance(tail, bool) or tail <= 0:
         return None
     try:
-        re.compile(pattern)  # a check with a broken regex is dropped, not stored
+        re.compile(pattern)
     except re.error:
         return None
-    return CustomCheck(**common, pattern=pattern, expect=expect, tail=tail)
+    return {"pattern": pattern, "expect": expect, "tail": tail}
 
 
 def load_checks(path: str = DEFAULT_CHECKS_FILE) -> list[CustomCheck]:
@@ -273,10 +286,15 @@ class CustomCheckEvaluator:
         return done.stdout if done.returncode == 0 else None
 
     def evaluate(self) -> list[Symptom]:
-        """Read + check every loaded check; emit a Symptom for each that fires. Read-only."""
+        """Read + check the kubectl-kind checks; emit a Symptom for each that fires. Read-only.
+        (A docker/other-backend check in the same file is another reader's job -- skipped here.)"""
         symptoms: list[Symptom] = []
         for check in load_checks(self._checks_path):
-            fired = self._eval_log(check) if check.kind == _LOG_KIND else self._eval_numeric(check)
+            if check.kind not in _KUBECTL_KINDS:
+                continue
+            fired = (
+                self._eval_log(check) if check.kind == "kubectl-log" else self._eval_numeric(check)
+            )
             if fired is not None:
                 symptoms.append(fired)
         return symptoms
@@ -306,25 +324,101 @@ class CustomCheckEvaluator:
 
     def _eval_log(self, check: CustomCheck) -> Symptom | None:
         logs = self._pod_logs(check.namespace, check.selector, check.tail)
-        if logs is None:
-            return None  # couldn't read logs -> no finding
-        found = re.search(check.pattern, logs) is not None
-        # expect=present -> fire when the success signal is MISSING; expect=absent -> when found
-        if found != (check.expect == "absent"):
+        return _log_symptom(check, logs, self._context or "")
+
+
+# -- docker: the same log condition over a container's logs (functional health for compose) -----
+
+
+class DockerCheckEvaluator:
+    """Runs the wall's ``docker-log`` checks against the local docker engine -- a thin, read-only
+    ``docker`` caller. No context/kubeconfig (docker is the host's engine); the check's ``selector``
+    is a ``docker ps --filter`` expression (e.g. ``name=postfix`` or
+    ``label=com.docker.compose.service=postfix``). Same condition + Symptom shape as kubectl-log."""
+
+    def __init__(self, *, checks_path: str = DEFAULT_CHECKS_FILE, timeout: float = 10.0) -> None:
+        self._checks_path = checks_path
+        self._timeout = timeout
+
+    def evaluate(self) -> list[Symptom]:
+        symptoms: list[Symptom] = []
+        for check in load_checks(self._checks_path):
+            if check.kind != "docker-log":
+                continue
+            logs = self._container_logs(check.selector, check.tail)
+            fired = _log_symptom(check, logs, "")
+            if fired is not None:
+                symptoms.append(fired)
+        return symptoms
+
+    def _container_logs(self, selector: str, tail: int) -> str | None:
+        """The recent logs of the containers matching the ``docker ps --filter`` ``selector``, or
+        None when docker can't be reached. No matching containers -> '' (a present-check then fires
+        'not working', the right read of a service that isn't there)."""
+        ids = self._containers(selector)
+        if ids is None:
             return None
-        state = "present" if found else "absent"
-        detail = (
-            f"logs of {check.selector} in {check.namespace}: /{check.pattern}/ {state} "
-            f"(expected {check.expect})"
-        )
-        evidence = {
-            "pattern": check.pattern,
-            "expect": check.expect,
-            "found": str(found),
-            "namespace": check.namespace,
-            "selector": check.selector,
-        }
-        return _to_symptom(check, detail, evidence, self._context or "")
+        chunks: list[str] = []
+        for cid in ids:
+            out = self._run("logs", "--tail", str(tail), cid)
+            if out is None:
+                return None
+            chunks.append(out)
+        return "\n".join(chunks)
+
+    def _containers(self, selector: str) -> list[str] | None:
+        out = self._run("ps", "--filter", selector, "--format", "json")
+        if out is None:
+            return None
+        ids: list[str] = []
+        for line in out.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                continue
+            cid = entry.get("ID") or entry.get("Names") if isinstance(entry, dict) else None
+            if cid:
+                ids.append(str(cid))
+        return ids
+
+    def _run(self, *args: str) -> str | None:
+        try:
+            done = subprocess.run(  # noqa: S603 -- argv list, no shell; read-only docker ps/logs
+                ["docker", *args],
+                capture_output=True,
+                text=True,
+                timeout=self._timeout,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return done.stdout if done.returncode == 0 else None
+
+
+def _log_symptom(check: CustomCheck, logs: str | None, context: str) -> Symptom | None:
+    """The condition shared by every log kind: ``expect=present`` fires when the pattern is MISSING
+    (a success signal that's gone), ``expect=absent`` fires when it's FOUND (an error appeared). A
+    read we couldn't take (``logs is None``) -> no finding. Backend-neutral -- the caller fetched
+    the logs (kubectl or docker); this just decides + builds the Symptom."""
+    if logs is None:
+        return None
+    found = re.search(check.pattern, logs) is not None
+    if found != (check.expect == "absent"):
+        return None
+    state = "present" if found else "absent"
+    detail = f"logs of {check.selector}: /{check.pattern}/ {state} (expected {check.expect})"
+    evidence = {
+        "pattern": check.pattern,
+        "expect": check.expect,
+        "found": str(found),
+        "selector": check.selector,
+    }
+    if check.namespace:
+        evidence["namespace"] = check.namespace
+    return _to_symptom(check, detail, evidence, context)
 
 
 def _fires(op: str, actual: float, threshold: float) -> bool:
@@ -343,9 +437,9 @@ def _to_symptom(check: CustomCheck, detail: str, evidence: dict[str, str], conte
     (tracked new/recurring/resolved, muteable, feeds resolve/learn). ``category`` is the check name,
     so its fingerprint is stable across scans. No ``recommended_action``: a check observes, it
     doesn't fix (acting on it still goes through the catalog + bound)."""
-    ctx = f"{context}/" if context else ""
+    scope = "/".join(part for part in (context, "custom", check.namespace, check.name) if part)
     return Symptom(
-        identity=f"{ctx}custom/{check.namespace}/{check.name}",
+        identity=scope,
         kind="CustomCheck",
         category=check.name,
         severity=check.severity,
@@ -359,12 +453,19 @@ def _to_symptom(check: CustomCheck, detail: str, evidence: dict[str, str], conte
 def evaluate_custom_checks(
     context: str = "", kubeconfig: str = "", *, checks_path: str = DEFAULT_CHECKS_FILE
 ) -> list[Symptom]:
-    """The engine entry point: evaluate the wall's checks against the target cluster, returning the
-    Symptoms that fired. [] when there's no checks file (the common case) -- so it's a cheap no-op
-    on a wall that hasn't defined any. Read-only throughout."""
-    if not load_checks(checks_path):
+    """The engine entry point: evaluate the wall's checks, returning the Symptoms that fired. Each
+    check is dispatched to the reader for its backend (``kubectl-*`` -> the cluster; ``docker-*`` ->
+    the local docker engine), so one wall's checks.json can mix them and each runs where it makes
+    sense. [] when there's no checks file (the common case) -- a no-op. Read-only throughout."""
+    checks = load_checks(checks_path)
+    if not checks:
         return []
-    evaluator = CustomCheckEvaluator(checks_path=checks_path)
-    evaluator.use_context(context)
-    evaluator.use_kubeconfig(kubeconfig)
-    return evaluator.evaluate()
+    symptoms: list[Symptom] = []
+    if any(c.kind in _KUBECTL_KINDS for c in checks):
+        kube = CustomCheckEvaluator(checks_path=checks_path)
+        kube.use_context(context)
+        kube.use_kubeconfig(kubeconfig)
+        symptoms += kube.evaluate()
+    if any(c.kind == "docker-log" for c in checks):
+        symptoms += DockerCheckEvaluator(checks_path=checks_path).evaluate()
+    return symptoms

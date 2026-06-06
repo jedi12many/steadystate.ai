@@ -8,6 +8,7 @@ import json
 
 from steadystate.probe.custom import (
     CustomCheckEvaluator,
+    DockerCheckEvaluator,
     _aggregate,
     _cpu_millicores,
     _fires,
@@ -198,3 +199,47 @@ def test_absent_check_fires_when_an_error_pattern_appears(monkeypatch):
 def test_logs_unavailable_is_no_finding_not_a_false_alarm(monkeypatch):
     # a *down* app is the generic prober's job; a log read we couldn't take must not fire.
     assert _log_evaluator(_POSTFIX, None, monkeypatch).evaluate() == []
+
+
+# -- docker-log: the same functional health over a container's logs -------------
+
+_NGINX = {
+    "name": "web-serving",
+    "read": {"kind": "docker-log", "selector": "name=web"},  # a `docker ps --filter`, no namespace
+    "when": {"pattern": "GET /", "expect": "present"},
+    "emit": {"severity": "high", "title": "web is not serving requests"},
+}
+
+
+def test_docker_log_parses_without_a_namespace_but_kubectl_still_requires_one():
+    check = parse_check(_NGINX)
+    assert check is not None and check.kind == "docker-log" and check.namespace == ""
+    # a kubectl read is namespace-scoped, so it's still required there
+    k8s_no_ns = {
+        "name": "x",
+        "read": {"kind": "kubectl-log", "selector": "app=x"},
+        "when": {"pattern": "y", "expect": "present"},
+        "emit": {"severity": "low", "title": "t"},
+    }
+    assert parse_check(k8s_no_ns) is None
+
+
+def _docker_evaluator(check: dict, logs: str | None, monkeypatch) -> DockerCheckEvaluator:
+    import steadystate.probe.custom as mod
+
+    monkeypatch.setattr(mod, "load_checks", lambda _p: [c for c in [parse_check(check)] if c])
+    ev = DockerCheckEvaluator()
+    monkeypatch.setattr(ev, "_container_logs", lambda sel, tail: logs)
+    return ev
+
+
+def test_docker_log_fires_when_the_signal_is_missing_and_stays_quiet_when_present(monkeypatch):
+    missing = _docker_evaluator(_NGINX, "connection from relay\nidle", monkeypatch).evaluate()
+    assert len(missing) == 1 and missing[0].title == "web is not serving requests"
+    assert missing[0].provenance.source == "custom-check"  # rides the pipeline like any Symptom
+    serving = _docker_evaluator(_NGINX, "172.0.0.1 - GET / 200", monkeypatch)
+    assert serving.evaluate() == []
+
+
+def test_docker_unavailable_is_no_finding(monkeypatch):
+    assert _docker_evaluator(_NGINX, None, monkeypatch).evaluate() == []
