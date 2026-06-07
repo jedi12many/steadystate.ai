@@ -33,6 +33,7 @@ from ..act.reflex import reflex_recurrence, reflexes
 from ..classify import APPLICATION, finding_layer
 from ..engine import build_report
 from ..health import IMPAIRED, NOTED, WORKING, finding_disposition, wall_verdict
+from ..metrics import fetch_metrics
 from ..notify import SURFACES
 from ..onboarding import Status, capabilities
 from ..probe.custom import add_check, describe_check, load_checks, run_smoke_checks
@@ -968,6 +969,11 @@ def _render_health(state_path: str, checks_path: str = "", workload: str = "") -
     # doesn't). A NOTED drift on a working app stays out of it (don't chase red herrings).
     if (smoke_fail or impaired) and drifted:
         lines.append(f"  likely cause: {drifted[0].last_title}  (config drift on this workload)")
+    # Enrichment -- the live metrics from your monitoring, as CONTEXT (not part of the verdict: a
+    # high latency is for the agent to weigh, not an automatic DOWN). steadystate rents monitoring.
+    shown = [m for m in fetch_metrics(workload=workload) if m.available]
+    if shown:
+        lines.append("  metrics: " + "  |  ".join(f"{m.name} {m.value:g}" for m in shown))
     if verdict == WORKING and not smoke:
         lines.append("  (no smoke test here -- add an `http` check to actively verify)")
     return "\n".join(lines)
