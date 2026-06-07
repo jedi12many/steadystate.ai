@@ -16,26 +16,6 @@ It's not a dashboard to babysit: steady state is silence — you hear from it on
 detect → probe → reason → surface → suggest → approve → act
 ```
 
-## Quickstart
-
-```bash
-pip install steadystate            # core (stdlib-only)
-pip install 'steadystate[llm]'     # + optional LLM reasoning
-
-steadystate discover    # what can I scan *here*? (per source/probe: ready, blocked, or how)
-steadystate scan ./infra --source terraform                # drift scan
-steadystate scan plan.json --source k8s --probe kubectl    # drift + live health
-steadystate verify ./k8s --release web                     # verify the *live* cluster vs your Git
-steadystate summary     # one-glance status: what's open, pending, and on fire right now
-steadystate chat        # a local REPL -- ask in plain English when an LLM is configured
-steadystate mcp         # run as an MCP server -- drive it from Claude Code/Desktop or any agent
-steadystate init        # interactive setup wizard -> writes a gitignored .env
-steadystate doctor      # what's configured, what's missing
-steadystate catalog     # every source, pack, surface + command this build offers
-```
-
-No dashboard to babysit — point it at your IaC and run it in CI or as a scheduled job; operate it from the terminal, chat (Slack/Teams/Discord), or an agent over **MCP**.
-
 Every environment variable — providers, surfaces, listeners, and the autonomy dials — is in **[CONFIG.md](./CONFIG.md)**; `steadystate doctor` shows what's set (and the live value of each dial).
 
 ## Getting started — point it at *your* setup

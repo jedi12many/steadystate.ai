@@ -1,12 +1,36 @@
 # LLM Safety — keeping the agent in bounds
 
-steadystate.ai uses an LLM to **explain** a finding ("why this matters"), to **correlate** events by root cause, to **author a custom health check** from your words (`define-check` / `add-check`), and — the parts that need real discipline — to **propose** a remediation (the decider) and to be **driven by an agent** (the MCP server). This document is the single place that states, end to end, *how a language model can never move your infrastructure outside the envelope you set.*
+steadystate.ai uses an LLM to **explain** a finding ("why this matters"), to **correlate** events by root cause, to **author a custom health check** from your words (`define-check` / `add-check`), and — the parts that need real discipline — to **propose** a remediation (the decider) and to be **driven by an agent** (the MCP server). This document states, end to end, *how a language model acting **through steadystate** can never move your infrastructure outside the envelope you set* — **and, just as important, where that guarantee ends.** If you're evaluating this with agents in mind, read the next section first; we would rather be clear about the boundary than have you over-trust it.
 
 The one sentence to remember:
 
-> **The model proposes _what_. A deterministic gate decides _whether_. The model is never the authority that changes your infrastructure.**
+> **The model proposes _what_. A deterministic gate decides _whether_. The model is never the authority that changes your infrastructure — on steadystate's path.**
 
 Everything below is how that sentence is enforced — as **defense in depth**, so no single check is load-bearing.
+
+---
+
+## What this does — and does not — keep safe
+
+Be precise about the boundary, because it's exactly what someone wary of agents needs to trust:
+
+**steadystate gates every action that flows _through_ steadystate.** When the decider proposes a fix, or an agent drives the MCP server, the action runs the bound + catalog + (optional) approval + audit described below. Make steadystate the *only* way the agent can touch your infrastructure — an agent with **no shell and no cluster credentials of its own**, where **steadystate holds the kubeconfig** — and these gates are a **real fence**: its entire authority is the vetted, bounded, audited catalog, and it cannot go around them.
+
+**steadystate is _not_ a sandbox around an agent that also has a shell.** If you run an agent (a Copilot CLI, say) that has its own shell *and* your cluster credentials, steadystate is one tool among many it can call. With its shell it can run `kubectl` directly, edit a kubeconfig, or hit any API — none of which passes our gates, because none of it goes *through* steadystate. **The gate's strength is a function of the agent's tool surface, not of the gate itself.**
+
+> **steadystate is guardrails on a road, not a fence around the car.** If the agent drives on steadystate's road, the guardrails hold. It can also drive off-road — and there, the boundary is the agent's own permissions, not us.
+
+**The real enforcement boundary for a shell-enabled agent is the credentials you give it.** If its kubeconfig has read-only RBAC on a cluster, it physically cannot delete a pod there, whatever tool it reaches for. Use steadystate as the *governed, audited path* to act (and for the bound + the record when it does go through us); enforce the *hard* limits at **RBAC / IAM**. The two are complementary: RBAC says what's _possible_; steadystate makes one path _safe and recorded_.
+
+So you can choose per environment, with eyes open:
+
+| Posture | The agent has | steadystate is | For |
+|---|---|---|---|
+| **Sole actuator + approval** | only the MCP, no creds of its own | a real fence; you approve each act | prod / not ready for autonomy |
+| **Sole actuator + auto** | only the MCP, no creds | a real fence; autonomous *within* the catalog + bound | trusted-but-contained |
+| **Broad access + resilience** | a shell + cluster creds | the eyes, the audit, the loop; **DR is the net** | recoverable / mature resilience |
+
+Everything below describes the gate on steadystate's own path. It is strong — and it is exactly as load-bearing as you make steadystate the only road.
 
 ---
 
