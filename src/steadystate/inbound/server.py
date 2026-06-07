@@ -32,6 +32,7 @@ from ..act.learn import learn as derive_lessons
 from ..act.reflex import reflex_recurrence, reflexes
 from ..classify import APPLICATION, finding_layer
 from ..engine import build_report
+from ..health import IMPAIRED, NOTED, finding_disposition
 from ..notify import SURFACES
 from ..onboarding import Status, capabilities
 from ..probe.custom import add_check, describe_check, load_checks
@@ -751,21 +752,31 @@ def _render_summary(state_path: str) -> str:
     platform: list[Finding] = []
     for f in findings:
         (app if finding_layer(f.details, f.last_title) == APPLICATION else platform).append(f)
+    # Function first: among YOUR apps, separate a live malfunction (IMPAIRED -- worth attention)
+    # from mere config drift / posture (NOTED -- diverged but working). The glance leads with what's
+    # actually failing, so neither you nor an agent chases a red herring. Platform stays an aside.
+    impaired = [f for f in app if finding_disposition(f.details) == IMPAIRED]
+    noted = [f for f in app if finding_disposition(f.details) == NOTED]
     counts: dict[str, int] = {}
-    for f in app:
+    for f in impaired:
         counts[f.last_severity] = counts.get(f.last_severity, 0) + 1
     breakdown = ", ".join(
         f"{counts[s]} {s}" for s in sorted(counts, key=lambda s: -_SEVERITY_RANK.get(s, 0))
     )
-    pend = f" -- {len(pendings)} pending your approval" if pendings else ""
-    if not app and not pendings:
-        head = "all clear -- 0 open findings, nothing pending"
+    parts: list[str] = []
+    if impaired:
+        parts.append(f"{len(impaired)} impaired" + (f" ({breakdown})" if breakdown else ""))
     else:
-        n = len(app)
-        head = f"{n} open finding{'s' if n != 1 else ''}" + (f" ({breakdown})" if breakdown else "")
-        head += pend
+        parts.append("working -- nothing impaired")
+    if pendings:
+        parts.append(f"{len(pendings)} pending your approval")
+    if noted:
+        parts.append(f"{len(noted)} noted (drift/posture)")
     if platform:
-        head += f"  |  {len(platform)} platform"
+        parts.append(f"{len(platform)} platform")
+    if not impaired and not pendings and not noted and not platform:
+        parts = ["all clear -- 0 open findings, nothing pending"]
+    head = "  |  ".join(parts)
     if as_of:
         head += f"  (as of {as_of})"
     lines = [head]
@@ -786,9 +797,10 @@ def _render_summary(state_path: str) -> str:
         lines.append(
             f"homeostat: {len(active)} reflex(es), {auto} auto{not_holding} | decider: {grant}"
         )
-    # Worst line: the highest-severity APP finding, oldest-first on a tie -- what to look at first.
-    if app:
-        worst = min(app, key=lambda f: (-_SEVERITY_RANK.get(f.last_severity, 0), f.first_seen))
+    # Worst line: the highest-severity IMPAIRED finding (a live failure), oldest-first on a tie --
+    # what to look at first. We never surface a NOTED drift as "worst" -- that'd be a red herring.
+    if impaired:
+        worst = min(impaired, key=lambda f: (-_SEVERITY_RANK.get(f.last_severity, 0), f.first_seen))
         lines.append(f"worst: {worst.last_title}  [{worst.last_severity}]")
     # Learning line: a response you keep applying by hand has earned an autonomy review (`learn`).
     if promotable:

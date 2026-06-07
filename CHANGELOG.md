@@ -8,7 +8,9 @@ change between releases until 1.0.0. Releases are published as GitHub Releases.
 
 ## [Unreleased]
 
-### Added
+### Changed
+
+- **`summary` now leads with function, not a finding pile -- "is it working?" before "what drifted?"** The admin rule "don't make changes unless you NEED to" is now in the tool: among your apps, a finding is split into **impaired** (a live malfunction -- a symptom or failed custom check, carrying failure evidence) vs **noted** (config drift / posture -- diverged but working). The glance leads with the impaired count + the worst *impaired* finding, and a config drift is **never** surfaced as "worst" -- so neither you nor an agent chases a red herring. A wall with drift but working apps reads `working -- nothing impaired  |  N noted (drift/posture)` instead of "N open findings." Deterministic, read from each finding's stored shape (a drift records a `change`; a live symptom records evidence; posture records none). First slice of the workload-health verdict; the active **smoke-test** check and the per-workload rollup build on it.
 
 - **MCP gets a middle grant tier: `--author` -- let an agent write checks without the power to remediate infra.** `add-check` is a *write* verb, so it was only exposed with `--write` -- which also enables `approve`/`fix`/`run`. That conflated *authoring a safe, observe-only, schema-gated check* with *remediating your infrastructure*. Now there are **three tiers**: **read-only** (default), **`--author`** (or `STEADYSTATE_MCP_AUTHOR=1`) which adds the check-authoring verbs (`add-check`) and nothing else, and **`--write`** which adds the effectful verbs. So an agent can help you write health checks on a wall without ever being able to touch infra there. (`checks` listing was already read-only.) Documented in CONFIG.md, `doctor`'s dials, and the mcp-copilot example. Tested: the author tier exposes `add-check` but refuses `approve`, both in the tool list and at `tools/call`.
 
