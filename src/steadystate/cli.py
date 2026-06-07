@@ -2066,8 +2066,8 @@ _DIALS: tuple[tuple[str, str, str], ...] = (
     ("STEADYSTATE_SILOS", "~/.steadystate/silos.json", "named-silo registry (`silo add` / --silo)"),
     ("STEADYSTATE_CHECKS", ".steadystate/checks.json", "custom-checks file (version-control this)"),
     ("STEADYSTATE_ENRICH_QUERY", "(none)", "PromQL bar for --enrich prometheus"),
-    ("STEADYSTATE_METRICS_SOURCE", "prometheus", "monitoring backend the `metrics` verb reads"),
-    ("STEADYSTATE_METRIC_QUERIES", ".steadystate/metrics.json", "the {name: query} map for `metrics`"),
+    ("STEADYSTATE_METRICS_SOURCE", "prometheus", "monitoring backend `metrics` reads"),
+    ("STEADYSTATE_METRIC_QUERIES", ".steadystate/metrics.json", "{name: query} map for `metrics`"),
 )
 
 
