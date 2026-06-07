@@ -15,3 +15,4 @@ htmlcov/
 
 # Leftover agent worktrees (never commit the embedded repos)
 .claude/worktrees/
+examples/demo/.demo.db

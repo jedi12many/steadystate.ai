@@ -22,6 +22,7 @@ the scenarios reference them and add the environment-specific glue.
 | [custom-checks](./custom-checks/) | declarative functional-health rules | "is it doing its job?" per app — k8s/docker/ansible, authored by talking |
 | [solutions](./solutions/) | the authored runbook | `problem → fix` (command/playbook/reboot), signed by an author, surfaced against a matching finding |
 | [repo-native](./repo-native/) | `steadystate ci` — a stateless CI gate | committed in the IaC repo; scan → gate (non-zero) → open a PR/issue; no db, no LLM, no creds |
+| [demo](./demo/) | the 60-second story (`./demo.sh`) | offline, deterministic: CI catches a critical S3 exposure, fails the gate, surfaces the signed runbook fix — record it (asciinema) |
 | [contained-agent](./contained-agent/) | an agent whose *only* tool is steadystate | the gates as a **real fence** — no shell, steadystate holds the creds (the sole-actuator setup) |
 | [brokered-creds](./brokered-creds/) | no static kubeconfig | a pre-launch wrapper brokers a **short-lived** kubeconfig from Akeyless/Vault → Rancher; the secret never lands |
 
