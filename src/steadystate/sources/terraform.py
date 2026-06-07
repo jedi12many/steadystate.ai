@@ -83,10 +83,16 @@ class TerraformSource:
         working_dir: str | Path | None = None,
         plan_json: dict | None = None,
         timeout: float = 300.0,  # a live `terraform plan` against real cloud can take minutes
+        refresh: bool = True,
     ) -> None:
         self.working_dir = Path(working_dir) if working_dir else None
         self._plan_json = plan_json
         self.timeout = timeout
+        # refresh=False -> `terraform plan -refresh=false`: diff config against the RECORDED state
+        # only, no per-resource cloud refresh. Cheap, fast, and needs no broad cloud read creds --
+        # just access to the backend state. Answers "is the code in sync with what's deployed?"
+        # (config-vs-state), not live drift (state-vs-reality, which needs the refresh).
+        self.refresh = refresh
 
     def collect_drift(self) -> list[Drift]:
         plan = self._plan_json if self._plan_json is not None else self._run_terraform()
@@ -96,8 +102,9 @@ class TerraformSource:
         if self.working_dir is None:
             raise ValueError("TerraformSource needs working_dir or plan_json")
         planfile = self.working_dir / ".steadystate.tfplan"
+        refresh_flag = f"-refresh={'true' if self.refresh else 'false'}"
         run_tool(
-            ["terraform", "plan", "-refresh=true", "-out", str(planfile)],
+            ["terraform", "plan", refresh_flag, "-out", str(planfile)],
             cwd=self.working_dir,
             timeout=self.timeout,
             tool="terraform plan",

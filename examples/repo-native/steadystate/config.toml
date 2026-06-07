@@ -2,7 +2,10 @@
 # `steadystate ci` reads the [ci] table; every key is optional (CLI flags override).
 
 [ci]
-source  = "terraform"   # the declared-state source (terraform | argocd | ...)
+# `terraform-state` = config-vs-state via `terraform plan -refresh=false`: no per-resource cloud
+# refresh, so it needs only backend-state read access (not broad cloud creds) -- ideal in CI.
+# Use `terraform` (with cloud read creds) when you want live drift (state-vs-reality).
+source  = "terraform-state"
 path    = "."           # the IaC to scan (the repo root, beside this file)
 fail_on = "high"        # gate threshold: any | low | medium | high | critical | none
 to      = "console"     # surfaces; add "github" to open an issue per problem (needs GITHUB_TOKEN)

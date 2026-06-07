@@ -1,7 +1,8 @@
 # Repo-native posture — steadystate as a stateless GitOps bot
 
-> Status: phase 1 (the `steadystate/` committed-intent convention) **shipped**; phase 2 (`steadystate
-> ci`, below) **shipped**. Phases 3–4 (a state-only source; the runbook-in-the-PR/issue) remain.
+> Status: phases 1–3 **shipped** — the `steadystate/` committed-intent convention, `steadystate ci`,
+> and the `terraform-state` (refresh-free, config-vs-state) source. Phase 4 (the runbook in the
+> PR/issue) remains.
 
 steadystate has two deployment postures, and they share one core:
 
@@ -43,7 +44,7 @@ A `steadystate/config.toml` makes explicit what's implicit today: `source = "ter
 "."`, where intent lives. The **repo is the wall** — no silo registry, no kubeconfig to juggle.
 `steadystate scan .` already works; this is the zero-config convention over it.
 
-## 3. Access to the backend state (phase 3)
+## 3. Access to the backend state — the `terraform-state` source (phase 3 — shipped)
 
 `terraform plan` already reads the configured backend, but it needs the terraform binary, **cloud
 read creds**, and a full **refresh** (live API calls). Direct **state access** (just the `.tfstate`
@@ -57,6 +58,12 @@ from S3 / GCS / TF Cloud) is a *lighter, lower-privilege* source:
 A **state-only source** is the right fit for a CI check that shouldn't hold broad cloud creds: it
 answers "is the code in sync with what's deployed?" with nothing but **read access to the state
 bucket**. The full plan stays the option when you want live drift.
+
+**Shipped as `--source terraform-state`** — it runs `terraform plan -refresh=false` (no per-resource
+cloud refresh), so it diffs config against the recorded state with just backend-state read access.
+`--source terraform` keeps the live refresh (state-vs-reality). Set `source = "terraform-state"` in
+`config.toml` for a low-privilege CI gate; use `terraform` (in the live posture, with cloud read
+creds) to catch reality drifting out of band.
 
 ## 4. The headline: `steadystate ci` (phase 2 — shipped)
 

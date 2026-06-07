@@ -38,6 +38,16 @@ def _terraform(path: Path) -> DriftSource:
     return TerraformSource(working_dir=path)
 
 
+def _terraform_state(path: Path) -> DriftSource:
+    """config-vs-state only: `terraform plan -refresh=false`, no per-resource cloud refresh -- so it
+    needs just backend-state read access, not broad cloud creds. The low-privilege CI source ("is
+    the code in sync with what's applied?"). A pre-computed plan file already has its diff, so read
+    as-is (the refresh choice only applies when we run the plan ourselves)."""
+    if path.is_file():
+        return TerraformSource(plan_json=json.loads(path.read_text()))
+    return TerraformSource(working_dir=path, refresh=False)
+
+
 def _argocd(path: Path) -> DriftSource:
     return ArgoCDSource(app=json.loads(path.read_text()))
 
@@ -111,6 +121,7 @@ def _helm_live(path: Path) -> DriftSource:
 # (`docker compose config`) against running containers (`docker compose ps`).
 _BUILTIN_SOURCES: dict[str, Callable[[Path], DriftSource]] = {
     "terraform": _terraform,
+    "terraform-state": _terraform_state,
     "argocd": _argocd,
     "ansible": _ansible,
     "ansible-live": _ansible_live,
@@ -132,6 +143,7 @@ PATHLESS_SOURCES: frozenset[str] = frozenset({"k8s-live", "k8s-baseline", "ansib
 # approval). Keyed like the source registry -- adding a source means declaring its commands too.
 _BUILTIN_CAPABILITIES: dict[str, Capabilities] = {
     "terraform": TerraformSource.commands,
+    "terraform-state": TerraformSource.commands,
     "argocd": ArgoCDSource.commands,
     "ansible": AnsibleSource.commands,
     "ansible-live": AnsibleLiveSource.commands,
