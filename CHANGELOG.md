@@ -34,6 +34,8 @@ change between releases until 1.0.0. Releases are published as GitHub Releases.
 
 ### Fixed
 
+- **`fix --apply`: a failed remediation is reported, not a crash -- and the rest still run (found by a real-GCP run).** Applying remediations to the live testbed, one drift (a VM `machine_type` resize) failed terraform's `allow_stopping_for_update` check -- and the raw `CalledProcessError` propagated, **aborting the whole run with a traceback** and leaving infra half-remediated (a second drift, an opened firewall, left partially reconciled = still exposed). Now each remediation's failure is caught and reported (`remediation FAILED for <resource>: <reason>`), the run **continues** to the others, and the command exits non-zero -- so one bad apply never aborts the batch or hides what did/didn't reconcile (it matters most when a finding was a security exposure). Regression-tested.
+
 - **A model's Unicode no longer crashes a scan on Windows (`UnicodeEncodeError`).** Found by a real-GCP run: the LLM explained an open firewall using a `→` arrow, and printing it blew up with `UnicodeEncodeError: 'charmap' codec can't encode character '→'` -- because a Windows console stdout defaults to a non-UTF-8 codec (cp1252), and **LLM output (or a resource name) can carry any Unicode** (arrows, em-dashes, smart quotes, emoji). The CLI now forces stdout/stderr to **UTF-8 with a replace fallback** at startup, so unpredictable model text never takes down a command. A no-op where a stream can't be reconfigured (a redirected pipe).
 
 ### Changed
