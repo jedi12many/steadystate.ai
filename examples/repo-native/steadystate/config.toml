@@ -1,12 +1,24 @@
-# steadystate -- the repo-native config (committed, next to your IaC).
-# `steadystate ci` reads the [ci] table; every key is optional (CLI flags override).
+# steadystate -- the repo-native config (committed, next to your IaC). One reviewed file instead of
+# scattered STEADYSTATE_* env vars. Precedence is 12-factor: flag > env var > config > default.
+
+[defaults]
+# Source + path for a bare `steadystate scan` (the repo IS the wall). The [ci] table can override.
+source = "terraform-state"
+path   = "."
+
+[bound]
+# The autonomy envelope -- the one decision that should be REVIEWED in a PR, not a loose env var.
+# Each `reversibility = "impact"` names the HIGHEST blast radius that may run UNATTENDED for that
+# reversibility ("none" forbids it). STEADYSTATE_BOUND overrides per run.
+#   reversibility: lossless | self_healing | recoverable | irreversible
+#   impact:        one | service | tenant | node | fleet | none
+self_healing = "service"   # e.g. a self-healing fix, up to one service, may auto-run
+recoverable  = "none"      # a recoverable change still waits for a human (until trust is earned)
 
 [ci]
-# `terraform-state` = config-vs-state via `terraform plan -refresh=false`: no per-resource cloud
-# refresh, so it needs only backend-state read access (not broad cloud creds) -- ideal in CI.
-# Use `terraform` (with cloud read creds) when you want live drift (state-vs-reality).
-source  = "terraform-state"
-path    = "."           # the IaC to scan (the repo root, beside this file)
+# `ci` inherits source/path from [defaults] above (here: terraform-state -- config-vs-state via
+# `terraform plan -refresh=false`, needing only backend-state read access, ideal in CI). Add source
+# here only to override [defaults] for the gate. These keys are ci-only:
 fail_on = "high"        # gate threshold: any | low | medium | high | critical | none
 to      = "console"     # surfaces; add "github" to open an issue per problem (needs GITHUB_TOKEN)
 deliver = "none"        # "github-pr" to open an accept-reality reconcile PR for drift

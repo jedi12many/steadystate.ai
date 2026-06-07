@@ -42,6 +42,7 @@ from .compliance import (
     compliance_report_as_dict,
     render_compliance_report,
 )
+from .config import config_table
 from .discover import (
     ansible_live_target,
     context_reachable,
@@ -562,12 +563,20 @@ def scan(
             probe = tgt.probe
         context = context or tgt.context  # explicit --context still wins
     elif path is None:
+        # No path + no target: fall back to the committed config's [defaults], so a configured repo
+        # runs a bare `scan` (the repo IS the wall). Config source only applies when source is still
+        # the built-in default (an explicit --source argocd still wins); config path fills the path.
+        defaults = config_table("defaults")
+        if source == "terraform" and defaults.get("source"):
+            source = str(defaults["source"])
+        if defaults.get("path"):
+            path = Path(str(defaults["path"]))
         # A pathless source (k8s-live) reads live state itself -- no file/dir to point at. Give the
         # factory a harmless placeholder it ignores; everything else still needs a path or --target.
-        if source in PATHLESS_SOURCES:
+        elif source in PATHLESS_SOURCES:
             path = Path(".")
         else:
-            raise typer.BadParameter("give a path to scan, or --target <name>.")
+            raise typer.BadParameter("give a path, --target <name>, or set [defaults] in config.")
     if autonomy not in ("observe", "suggest", "auto"):
         raise typer.BadParameter("autonomy must be: observe | suggest | auto")
     if autonomy == "auto" and stateless:
@@ -673,19 +682,9 @@ _CI_CONFIG_DEFAULT = "steadystate/config.toml"  # the committed convention (see 
 
 
 def _load_ci_config(path: Path) -> dict:
-    """The optional ``[ci]`` table from ``steadystate/config.toml`` (source / path / fail_on / to /
-    deliver) -- all keys optional. Missing/malformed file -> {} (CLI flags + defaults still apply).
-    Read-only stdlib ``tomllib``; never executes anything."""
-    if not path.exists():
-        return {}
-    import tomllib
-
-    try:
-        data = tomllib.loads(path.read_text())
-    except (OSError, ValueError):
-        return {}
-    ci = data.get("ci")
-    return ci if isinstance(ci, dict) else {}
+    """The optional ``[ci]`` table from the config (source / path / fail_on / to / deliver) -- all
+    keys optional. Missing/malformed -> {} (CLI flags + defaults still apply)."""
+    return config_table("ci", path)
 
 
 @app.command()
@@ -709,8 +708,9 @@ def ci(
     optional `steadystate/config.toml` `[ci]` table (source / path / fail_on / to / deliver); CLI
     flags override it. The lowest-friction posture: `git clone` + a token + this one line."""
     cfg = _load_ci_config(config)
-    source = source or str(cfg.get("source") or "terraform")
-    scan_path = path or Path(str(cfg.get("path") or "."))
+    base = config_table("defaults", config)  # [ci] overrides [defaults] overrides the built-in
+    source = source or str(cfg.get("source") or base.get("source") or "terraform")
+    scan_path = path or Path(str(cfg.get("path") or base.get("path") or "."))
     fail_on = (fail_on or str(cfg.get("fail_on") or "any")).lower()
     to = to or str(cfg.get("to") or "console")
     deliver = deliver or str(cfg.get("deliver") or "none")
