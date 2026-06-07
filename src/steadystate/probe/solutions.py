@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -181,3 +182,25 @@ def add_solution(raw: dict, author: str = "", path: str = "") -> tuple[Solution 
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(items, indent=2))
     return sol, f"solution '{sol.name}' added [{sol.kind}] by {sol.author} -- surfaces on a match."
+
+
+_DEFINE_SYSTEM = (
+    "You translate an operator's request into ONE steadystate solution (a problem->fix runbook "
+    "entry), as JSON. Pick a short kebab-case name. Set `for` to the finding category it fixes (or "
+    "`match` to a title regex). The `solution` is the fix the operator described -- a command, a "
+    "playbook, or a reboot; use {namespace}/{workload} where it should be scoped to the finding. "
+    "Set impact/reversibility honestly. Reply with ONLY the JSON object.\n\n" + SOLUTION_SCHEMA_HINT
+)
+
+
+def define_solution(text: str, complete: Callable[[str, str, str], str | None]) -> dict | None:
+    """Translate a natural-language request into a solution dict via the LLM seam (``complete``), or
+    None when no model is configured / the reply has no JSON. It only *proposes* the JSON -- the
+    caller runs it through :func:`add_solution`, so the schema gate + the author still decide."""
+    from ..reason.llm import _extract_json  # reuse the analyst's lenient JSON extraction
+
+    reply = complete(_DEFINE_SYSTEM, text, "define-solution")
+    if not reply:
+        return None
+    data = _extract_json(reply)
+    return data if isinstance(data, dict) else None

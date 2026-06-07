@@ -41,6 +41,22 @@ steadystate solutions                 # list the runbook
 steadystate show <fingerprint>        # a matching finding shows its known fix + who vouched
 ```
 
+## Author one (hand-edit, or have an agent write it)
+
+Edit the JSON directly, or use the verbs — both stamp an `author` (an unsigned fix is rejected):
+
+```sh
+steadystate add-solution '{"name":"reclaim-evicted","for":"Evicted",
+  "solution":{"kind":"command","run":"kubectl delete pods --field-selector=status.phase=Failed -n {namespace}"},
+  "impact":"low","reversibility":"high"}' --author jeff
+
+steadystate define-solution "for evicted pods, delete the Failed ones in that namespace" --author jeff
+```
+
+An agent can author too: the **`--author` MCP tier** exposes `add-solution` (and `add-check`)
+*without* the full `--write` grant — so it can write to your runbook (schema-gated, signed) but
+**not** approve/fix/run your infrastructure.
+
 When a finding matches (e.g. an `Evicted` pod, or a title like "akeyless **gateway not routing**"),
 `show` surfaces the documented fix and its author. An agent driving steadystate over MCP sees the
 same thing — your runbook, right where the problem is.

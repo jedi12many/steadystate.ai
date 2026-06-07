@@ -38,7 +38,7 @@ from ..metrics import fetch_metrics
 from ..notify import SURFACES
 from ..onboarding import Status, capabilities
 from ..probe.custom import add_check, describe_check, load_checks, run_smoke_checks
-from ..probe.solutions import describe_solution, load_solutions, solutions_for
+from ..probe.solutions import add_solution, describe_solution, load_solutions, solutions_for
 from ..reason.alert import Alert, Layer, Severity
 from ..reason.cost import roll_up, roll_up_by_period, scan_cost_line
 from ..reason.llm import LLMAnalyst
@@ -51,6 +51,7 @@ from ..targets import load_targets_from_env
 from .base import (
     ACTIONS_LIST,
     ADD_CHECK,
+    ADD_SOLUTION,
     APPROVE,
     CHECKS,
     COST,
@@ -1042,6 +1043,22 @@ def _add_check(payload: str, checks_path: str = "") -> str:
     return message
 
 
+def _add_solution(payload: str, author: str = "", solutions_path: str = "") -> str:
+    """Validate a solution (a JSON object/string) and store it in the wall's runbook, stamping the
+    ``author`` (an unsigned fix is rejected). Used by the `add-solution` verb an agent calls after
+    filling the schema. The schema + the required author are the gate on what's written."""
+    if not payload.strip():
+        return "add-solution needs a solution (a JSON object). See `solutions` / the schema."
+    try:
+        raw = json.loads(payload)
+    except ValueError:
+        return "couldn't parse the solution -- it must be a JSON object matching the schema."
+    if not isinstance(raw, dict):
+        return "a solution must be a single JSON object."
+    _sol, message = add_solution(raw, author=author or "agent", path=solutions_path)
+    return message
+
+
 def _record_probe_findings(report: Report, state_path: str) -> None:
     """Persist a summoned probe's findings to the store (new/recurring memory, and the db file
     itself) so they show in `findings` and can be muted. **Record-only**: no `resolve_absent` -- a
@@ -1206,6 +1223,8 @@ def run_command(command: Command, state_path: str) -> str:
         return _render_smoke()
     if command.verb == ADD_CHECK:
         return _add_check(command.argument)
+    if command.verb == ADD_SOLUTION:
+        return _add_solution(command.argument, author=command.actor)
     with StateStore(state_path) as store:
         if command.verb == APPROVE:
             fp, error = _resolve_pending(store, command.argument)

@@ -25,8 +25,19 @@ from typing import Any
 
 from .. import __version__
 from ..probe.custom import CHECK_SCHEMA_HINT
+from ..probe.solutions import SOLUTION_SCHEMA_HINT
 from ..state import StateStore, filter_findings
-from .base import ADD_CHECK, COMMANDS, FINDINGS, PROBE, SHOW, SUMMARY, Command, tool_schema
+from .base import (
+    ADD_CHECK,
+    ADD_SOLUTION,
+    COMMANDS,
+    FINDINGS,
+    PROBE,
+    SHOW,
+    SUMMARY,
+    Command,
+    tool_schema,
+)
 from .server import run_command
 
 # The MCP protocol revision we implement. We echo the client's requested version when it sends one
@@ -39,6 +50,14 @@ _ADD_CHECK_EXAMPLE = (
     '{"name": "postfix-routing", "read": {"kind": "kubectl-log", "selector": "app=postfix", '
     '"namespace": "mail"}, "when": {"pattern": "status=sent", "expect": "present"}, '
     '"emit": {"severity": "high", "title": "postfix is not routing mail"}}'
+)
+
+# A worked example for the add-solution tool -- an agent fills `solution` from this + the hint.
+_ADD_SOLUTION_EXAMPLE = (
+    '{"name": "reclaim-evicted", "for": "Evicted", "problem": "evicted pods pile up", '
+    '"solution": {"kind": "command", "run": "kubectl delete pods '
+    '--field-selector=status.phase=Failed -n {namespace}"}, "impact": "low", '
+    '"reversibility": "high", "author": "the-agent"}'
 )
 
 # An effect tag (from tool_schema) -> MCP tool annotations: the hints a client uses to decide
@@ -69,6 +88,14 @@ def _input_schema(tool: dict[str, Any]) -> dict[str, Any]:
                 f"Example: {_ADD_CHECK_EXAMPLE}"
             ),
         }
+    if tool["name"] == ADD_SOLUTION and "solution" in properties:
+        properties["solution"] = {
+            "type": "object",
+            "description": (
+                f"An authored fix (problem->fix runbook entry) as a JSON object. "
+                f"{SOLUTION_SCHEMA_HINT}\n\nExample: {_ADD_SOLUTION_EXAMPLE}"
+            ),
+        }
     schema: dict[str, Any] = {"type": "object", "properties": properties}
     if required:
         schema["required"] = required
@@ -78,7 +105,7 @@ def _input_schema(tool: dict[str, Any]) -> dict[str, Any]:
 # Write verbs that only author steadystate's own observe-only config (a custom check), not infra.
 # The ``author`` grant exposes these WITHOUT the full ``write`` (approve/fix/run) grant, so an agent
 # can help write safe, schema-gated checks without the power to remediate your infrastructure.
-_AUTHORING = frozenset({ADD_CHECK})
+_AUTHORING = frozenset({ADD_CHECK, ADD_SOLUTION})
 
 
 def mcp_tools(*, write: bool, author: bool = False) -> list[dict[str, Any]]:
