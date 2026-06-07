@@ -139,10 +139,17 @@ def build_metric_source(name: str = "") -> MetricSource | None:
     return factory()
 
 
-def fetch_metrics(name: str = "") -> list[Metric]:
+def fetch_metrics(name: str = "", workload: str = "") -> list[Metric]:
     """Build the configured metric source and fetch its readings. [] when none is configured or no
-    queries are defined -- a cheap no-op. Read-only; the agent's metric context, on demand."""
-    if not load_metric_queries():
+    queries are defined -- a cheap no-op. ``workload`` (when given) fills the ``$WORKLOAD``
+    placeholder in each query, so ``...{app="$WORKLOAD"}...`` scopes to that workload while queries
+    without it stay global. Read-only; the agent's metric context, on demand."""
+    queries = load_metric_queries()
+    if not queries:
         return []
     source = build_metric_source(name)
-    return source.fetch() if source is not None else []
+    if source is None:
+        return []
+    if workload and hasattr(source, "queries"):
+        source.queries = {n: q.replace("$WORKLOAD", workload) for n, q in queries.items()}
+    return source.fetch()

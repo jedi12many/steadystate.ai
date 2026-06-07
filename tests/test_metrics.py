@@ -125,3 +125,28 @@ def test_metrics_verb_renders_and_is_read_only(monkeypatch, tmp_path):
     assert "p99_latency" in out and "4.2" in out
     # read-only -> an agent can pull metric context without a write grant
     assert "metrics" in {t["name"] for t in mcp_tools(write=False)}
+
+
+def test_health_folds_in_the_metric_context(monkeypatch, tmp_path):
+    # the agent's verdict + WHY, now with the live monitoring numbers alongside it
+    from datetime import UTC, datetime
+
+    import steadystate.probe.custom as custom
+    from steadystate.inbound.server import _render_health
+    from steadystate.state import StateStore
+
+    monkeypatch.setenv("STEADYSTATE_METRIC_QUERIES", str(tmp_path / "metrics.json"))
+    (tmp_path / "metrics.json").write_text(json.dumps({"p99_latency": "q"}))
+    monkeypatch.setattr(custom, "load_checks", lambda _p="": [])  # no smoke checks
+    db = str(tmp_path / "s.db")
+    with StateStore(db) as store:
+        store.record(
+            {"a" * 64: ("high", "gateway 5xx spike")},
+            datetime.now(UTC),
+            {"a" * 64: {"category": "Unhealthy", "workload": "gateway"}},
+        )
+    with _prometheus(value="4.2") as url:
+        monkeypatch.setenv("PROMETHEUS_URL", url)
+        out = _render_health(db, workload="gateway")
+    assert out.startswith("DEGRADED")  # verdict unchanged -- metrics are CONTEXT, not part of it
+    assert "metrics:" in out and "p99_latency 4.2" in out  # monitoring folded in next to the verdict

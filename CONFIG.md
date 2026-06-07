@@ -63,7 +63,7 @@ See **[LLM_SAFETY.md](./LLM_SAFETY.md)** for how these compose into the control 
 | `STEADYSTATE_PLATFORM_NAMESPACES` | *(built-in set)* | **Additive** comma list of *your* cluster's system namespaces, added to the built-in k8s/Rancher set the platform/app classifier uses (so `summary` leads with your apps, sets the plumbing aside). You name only what's unusual; built-ins always covered. |
 | `STEADYSTATE_ENRICH_QUERY` | — | The PromQL bar for `--enrich prometheus` (escalate a drift whose resource is breaching it). |
 | `STEADYSTATE_METRICS_SOURCE` | `prometheus` (if `PROMETHEUS_URL` set) | Which monitoring backend `metrics` reads from — a registered metric source (`prometheus` ships; Datadog/CloudWatch/… are one registry entry away). steadystate **rents** monitoring, never reimplements it. |
-| `STEADYSTATE_METRIC_QUERIES` | `.steadystate/metrics.json` | A JSON `{name: query}` map of the readings `metrics` fetches (e.g. `{"p99_latency": "histogram_quantile(0.99, …)"}`) — the agent's metric context next to steadystate's findings. |
+| `STEADYSTATE_METRIC_QUERIES` | `.steadystate/metrics.json` | A JSON `{name: query}` map of the readings `metrics` fetches (e.g. `{"p99_latency": "histogram_quantile(0.99, …)"}`) — the agent's metric context next to steadystate's findings, also folded into `health`. A `$WORKLOAD` placeholder in a query (`…{app="$WORKLOAD"}…`) is filled when `health <workload>` scopes; queries without it stay global. |
 
 ## Surfaces — outbound, where alerts go (`--to`)
 
