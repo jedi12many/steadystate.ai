@@ -108,10 +108,11 @@ def test_tools_call_runs_a_read_only_verb_through_run_command(tmp_path):
         store.record(
             {"a" * 64: ("high", "web down")},
             __import__("datetime").datetime.now(__import__("datetime").UTC),
+            evidence={"a" * 64: {"category": "Unavailable"}},  # a live symptom -> impaired
         )
     out = handle_request(_req("tools/call", {"name": "summary", "arguments": {}}), db, write=False)
     result = out["result"]
-    assert result["isError"] is False and "open finding" in result["content"][0]["text"]
+    assert result["isError"] is False and "impaired" in result["content"][0]["text"]
 
 
 def test_tools_call_refuses_an_effectful_verb_without_the_write_grant():
@@ -225,7 +226,7 @@ def test_resources_read_returns_the_view_and_errors_on_an_unknown_uri(tmp_path):
         _req("resources/read", {"uri": "steadystate://summary"}), db, write=False
     )
     content = summary["result"]["contents"][0]
-    assert content["uri"] == "steadystate://summary" and "open finding" in content["text"]
+    assert content["uri"] == "steadystate://summary" and "impaired" in content["text"]
     # a per-finding resource reads its `show` evidence
     finding = handle_request(
         _req("resources/read", {"uri": f"steadystate://finding/{'a' * 64}"}), db, write=False
@@ -249,7 +250,7 @@ def test_prompts_list_and_get_fill_in_live_state(tmp_path):
     # triage drops the summary + findings into the message
     triage = handle_request(_req("prompts/get", {"name": "triage"}), db, write=False)["result"]
     text = triage["messages"][0]["content"]["text"]
-    assert "Which should I fix first" in text and "open finding" in text
+    assert "Which should I fix first" in text and "impaired" in text
     # explain-finding takes a fingerprint argument and reads that finding
     explain = handle_request(
         _req("prompts/get", {"name": "explain-finding", "arguments": {"fingerprint": "a" * 64}}),
@@ -356,7 +357,7 @@ def test_initialize_carries_the_wall_label_and_live_state(tmp_path):
     instr = out["instructions"]
     assert "wall: akeyless-use1" in instr
     # the live summary is embedded, so a connecting agent resumes WITHOUT a tool round-trip
-    assert "open finding" in instr and "CrashLoopBackOff" in instr
+    assert "impaired" in instr and "CrashLoopBackOff" in instr
 
 
 def test_initialize_without_a_label_omits_the_title():
