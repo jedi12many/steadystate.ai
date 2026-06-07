@@ -58,8 +58,12 @@ def test_parse_rejects_unsigned_unmatched_no_action_and_bad_regex():
 def test_match_is_strict_by_category_or_fuzzy_by_title_regex():
     strict = parse_solution(_entry())  # for=Evicted
     regex = parse_solution(
-        _entry(name="reboot-gw", **{"for": ""}, match=r"gateway.*(hung|not routing)",
-               solution={"kind": "reboot", "target": "{workload}"})
+        _entry(
+            name="reboot-gw",
+            **{"for": ""},
+            match=r"gateway.*(hung|not routing)",
+            solution={"kind": "reboot", "target": "{workload}"},
+        )
     )
     sols = [strict, regex]
 
