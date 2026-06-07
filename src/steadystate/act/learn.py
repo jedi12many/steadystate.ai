@@ -29,6 +29,7 @@ into this same seam next; today the attribution is deliberately coarse, and hone
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
@@ -116,6 +117,53 @@ def learn(findings: list[Finding], acted: set[str], *, min_occurrences: int = 2)
         lessons.append(_lesson_for(category, group, recurred))
     lessons.sort(key=lambda lesson: lesson.occurrences, reverse=True)
     return lessons
+
+
+def _slug(text: str) -> str:
+    """A kebab-case name from a category (Evicted -> evicted; CrashLoopBackOff -> crash-loop...)."""
+    spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "-", text)  # split camelCase boundaries
+    return re.sub(r"[^a-z0-9]+", "-", spaced.lower()).strip("-") or "fix"
+
+
+def _draft_solution(category: str, fix: str, occurrences: int) -> dict:
+    """A draft runbook entry capturing a category's one consistent recorded fix. Conservative bound
+    (the author tunes it); no author yet -- the authoring verb stamps that."""
+    return {
+        "name": f"{_slug(category)}-fix",
+        "for": category,
+        "problem": f"{category} recurred {occurrences}x; this recorded fix resolved it each time.",
+        "solution": {"kind": "command", "run": fix},
+        "impact": "medium",
+        "reversibility": "medium",
+    }
+
+
+def promotable_solutions(
+    findings: list[Finding],
+    acted: set[str],
+    *,
+    skip_categories: frozenset[str] = frozenset(),
+    min_occurrences: int = 2,
+) -> list[dict]:
+    """The on-ramp from `learn` to the runbook: draft solutions for categories whose out-of-band
+    resolutions show ONE consistent recorded fix (from `resolve <fp> "fix"`) and aren't already in
+    the runbook (``skip_categories``). Pure -- it only proposes the JSON; the authoring verb (which
+    stamps the author) and the bound + approval still gate whether it's stored or ever runs. A
+    category with inconsistent fixes is NOT drafted: there's no single safe command to capture."""
+    by_category: dict[str, list[Demonstration]] = defaultdict(list)
+    for demo in gather_demonstrations(findings, acted):
+        if demo.category not in skip_categories:
+            by_category[demo.category].append(demo)
+    drafts: list[dict] = []
+    for category, group in by_category.items():
+        if len(group) < min_occurrences:
+            continue
+        fixes = _distinct_fixes(group)
+        if len(fixes) != 1:  # need ONE consistent fix to be a clean, captureable solution
+            continue
+        drafts.append(_draft_solution(category, fixes[0], len(group)))
+    drafts.sort(key=lambda draft: draft["name"])
+    return drafts
 
 
 def _lesson_for(category: str, group: list[Demonstration], recurred: dict[str, int]) -> Lesson:
