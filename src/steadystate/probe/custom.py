@@ -48,16 +48,28 @@ from .ansible_health import (
 )  # reuse the vetted service_facts read
 from .base import Symptom
 
-DEFAULT_CHECKS_FILE = ".steadystate/checks.json"
+DEFAULT_CHECKS_FILE = ".steadystate/checks.json"  # legacy/gitignored -- still read if present
+COMMITTED_CHECKS_FILE = "steadystate/checks.json"  # version-controlled INTENT (the preferred home)
 CHECKS_ENV = "STEADYSTATE_CHECKS"
 
 
 def resolve_checks_path(explicit: str = "") -> str:
-    """Where the checks live: an ``explicit`` path wins, else ``STEADYSTATE_CHECKS``, else the
-    default in ``.steadystate/``. Checks are *intent* (IaC-grade), unlike the ephemeral ``state.db``
-    -- point this at a **version-controlled** file (separate from the gitignored ``.steadystate/``)
-    so authored/agent-written checks are reviewed in PRs and shared, not lost as local state."""
-    return explicit or os.environ.get(CHECKS_ENV, "").strip() or DEFAULT_CHECKS_FILE
+    """Where the checks live. Checks are *intent* (IaC-grade), unlike the ephemeral ``state.db``, so
+    the **committed** ``steadystate/`` is the home -- authored/agent-written checks are reviewed in
+    PRs and travel with the IaC, not lost in the gitignored ``.steadystate/``. Order: ``explicit``
+    path, else ``STEADYSTATE_CHECKS``, else committed ``steadystate/checks.json`` if it exists, else
+    the legacy ``.steadystate/checks.json`` if THAT exists -- and for a fresh write (neither yet),
+    the committed location, so a newly authored check lands somewhere version-controllable."""
+    if explicit:
+        return explicit
+    env = os.environ.get(CHECKS_ENV, "").strip()
+    if env:
+        return env
+    if Path(COMMITTED_CHECKS_FILE).exists():
+        return COMMITTED_CHECKS_FILE
+    if Path(DEFAULT_CHECKS_FILE).exists():
+        return DEFAULT_CHECKS_FILE
+    return COMMITTED_CHECKS_FILE
 
 
 _NUMERIC_KINDS = frozenset({"kubectl-cpu", "kubectl-mem"})  # a threshold over an aggregated value

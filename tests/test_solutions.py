@@ -186,3 +186,30 @@ def test_add_solution_is_exposed_only_at_the_author_tier():
     authoring = {t["name"] for t in mcp_tools(write=False, author=True)}
     assert "add-solution" not in read_only  # not a read-only tool
     assert "add-solution" in authoring  # the --author middle tier exposes it (no full --write)
+
+
+# -- the committed-intent convention: steadystate/ (committed) over .steadystate/ (gitignored) ----
+
+
+def test_intent_paths_prefer_the_committed_steadystate_dir(tmp_path, monkeypatch):
+    from steadystate.probe.custom import resolve_checks_path
+    from steadystate.probe.solutions import resolve_solutions_path
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("STEADYSTATE_SOLUTIONS", raising=False)
+    monkeypatch.delenv("STEADYSTATE_CHECKS", raising=False)
+    # a fresh repo -> the COMMITTED location (a new fix is version-controllable, not lost-as-state)
+    assert resolve_solutions_path() == "steadystate/solutions.json"
+    assert resolve_checks_path() == "steadystate/checks.json"
+    # only the legacy gitignored file exists -> read it (back-compat for existing setups)
+    (tmp_path / ".steadystate").mkdir()
+    (tmp_path / ".steadystate" / "solutions.json").write_text("[]")
+    assert resolve_solutions_path() == ".steadystate/solutions.json"
+    # the committed file exists -> prefer it over the legacy one
+    (tmp_path / "steadystate").mkdir()
+    (tmp_path / "steadystate" / "solutions.json").write_text("[]")
+    assert resolve_solutions_path() == "steadystate/solutions.json"
+    # env + explicit still win over either default
+    monkeypatch.setenv("STEADYSTATE_SOLUTIONS", "/custom.json")
+    assert resolve_solutions_path() == "/custom.json"
+    assert resolve_solutions_path("/explicit.json") == "/explicit.json"
