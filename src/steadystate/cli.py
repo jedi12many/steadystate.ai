@@ -837,6 +837,27 @@ def compliance(
         typer.echo(line)
 
 
+def _apply_remediations(drifts: list, executor, apply: bool) -> tuple[list, int]:
+    """Plan (and, with ``apply``, run) the remediation for each drift. Returns the (plan, result)
+    pairs + a failure count. **A remediation that throws (a terraform apply non-zero, a provider
+    constraint) is reported and skipped, never propagated** -- one bad apply must not abort the rest
+    or dump a raw traceback, so the operator learns what reconciled and what didn't (especially when
+    a finding was a security exposure). Found by a real-GCP run."""
+    items: list = []
+    failures = 0
+    for drift in drifts:
+        plan = executor.plan_for(drift)
+        result = None
+        if apply and plan.eligible:
+            try:
+                result = executor.remediate(drift, confirm=True)
+            except Exception as exc:  # noqa: BLE001 -- any remediation-tool failure, reported not raised
+                failures += 1
+                typer.secho(f"  remediation FAILED for {drift.identity}: {exc}", fg="red", err=True)
+        items.append((plan, result))
+    return items, failures
+
+
 @app.command()
 def fix(
     path: Path = typer.Argument(
@@ -869,12 +890,10 @@ def fix(
         # drift to remediate".
         typer.secho(f"fix failed: {exc}", fg="red", err=True)
         raise typer.Exit(1) from None
-    items = []
-    for drift in drifts:
-        plan = executor.plan_for(drift)
-        result = executor.remediate(drift, confirm=True) if (apply and plan.eligible) else None
-        items.append((plan, result))
+    items, failures = _apply_remediations(drifts, executor, apply)
     ConsoleSurface().emit_remediations(items)
+    if failures:
+        raise typer.Exit(1)  # non-zero so a script/CI knows a remediation didn't take
 
 
 _STATE_OPTION = typer.Option(
