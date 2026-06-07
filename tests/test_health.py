@@ -48,3 +48,26 @@ def test_wall_verdict_leads_with_smoke_then_impaired():
     assert wall_verdict(impaired=3, smoke_failures=0) == DEGRADED
     # smoke passing (or none) and nothing impaired -> WORKING
     assert wall_verdict(impaired=0, smoke_failures=0) == WORKING
+
+
+# -- posture: the honest 'am I bounded by your gates?' self-report --------------------------------
+
+
+def test_posture_states_both_what_it_bounds_and_what_it_cannot():
+    from steadystate.inbound.base import POSTURE, Command
+    from steadystate.inbound.server import run_command
+
+    out = run_command(Command(POSTURE, "mcp"), ":memory:")
+    # what it DOES enforce on its own path
+    assert "CATALOG" in out and "BOUND" in out and "AUDIT" in out
+    # and the honest limit -- it must NOT overclaim
+    assert "NOT a sandbox" in out
+    assert "shell" in out and ("RBAC" in out or "IAM" in out)  # the real boundary is credentials
+    assert "sole-actuator" in out and "--silo" in out  # how to make it a real fence
+
+
+def test_posture_is_read_only_so_an_agent_can_always_ask():
+    from steadystate.inbound.mcp import mcp_tools
+
+    # read-only -> exposed without any write/author grant: an agent can always ask "am I bounded?"
+    assert "posture" in {t["name"] for t in mcp_tools(write=False)}

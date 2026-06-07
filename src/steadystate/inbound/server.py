@@ -61,6 +61,7 @@ from .base import (
     LEARN,
     MUTE,
     PENDING,
+    POSTURE,
     PROBE,
     RUN,
     SEND,
@@ -869,6 +870,48 @@ def _names_workload(finding: Finding, workload: str) -> bool:
     return w in (finding.last_title or "").lower()
 
 
+def _render_posture() -> str:
+    """The honest answer to 'are you bounding me?' -- so a worried operator (or an agent they asked)
+    gets the real boundary, never an overclaim. States what steadystate enforces on its OWN path,
+    where that ends (it can't see your other tools), and the sole-actuator setup that makes it a
+    real fence. Deliberately candid: the point is to be trusted, which means not pretending."""
+    grant = (
+        "auto -- acts within the bound without asking"
+        if decider_auto_enabled()
+        else "manual -- a human approves each effectful action"
+    )
+    return "\n".join(
+        [
+            "steadystate -- what I bound, and what I don't (the honest answer):",
+            "",
+            "THROUGH steadystate (this CLI / chat / MCP), every change runs the gate:",
+            "  - a vetted action CATALOG -- you can only name a fixed menu item, never invent;",
+            "  - an impact x reversibility BOUND -- out-of-envelope actions are refused/escalated;",
+            "  - APPROVAL + an immutable AUDIT -- nothing effectful runs unseen;",
+            "  - grant tiers: read-only (observe) -> --author (checks) -> --write (remediate);",
+            f"  - decider right now: {grant}.",
+            "  On this path, I am a real boundary.",
+            "",
+            "But I am NOT a sandbox around you:",
+            "  - I govern only what flows THROUGH me; I can't see or constrain your OTHER tools.",
+            "  - If you also have a shell + cluster credentials, you can run kubectl directly or",
+            "    hit any API -- none of which passes my gate, because none of it goes through me.",
+            "  - Guardrails on a road, not a fence around the car. The real hard limit on a",
+            "    shell-enabled agent is the credentials it was given (RBAC / IAM), not me.",
+            "",
+            "To make me your REAL boundary (the sole-actuator setup):",
+            "  1. Give the agent ONLY the steadystate MCP -- no shell, no filesystem, no kubectl.",
+            "  2. Let steadystate hold the kubeconfig (`steadystate --silo <name> mcp`); you never",
+            "     see it.",
+            "  3. Grant: default read-only; add --author to write checks; --write to remediate.",
+            "  4. Scope steadystate's own credentials with least-privilege RBAC / IAM.",
+            "  Then your whole authority is my vetted, bounded, audited catalog -- no off-road.",
+            "",
+            "Full control model: LLM_SAFETY.md.",
+        ]
+    )
+
+
 def _render_health(state_path: str, checks_path: str = "", workload: str = "") -> str:
     """The one-call "is it working?" verdict, leading with the active signal: run the `http` smoke
     tests (proof), fold in the live malfunctions (impaired), and answer WORKING | DEGRADED | DOWN.
@@ -1072,6 +1115,8 @@ def run_command(command: Command, state_path: str) -> str:
         return _render_learn(state_path)
     if command.verb == HEALTH:
         return _render_health(state_path, workload=command.argument)
+    if command.verb == POSTURE:
+        return _render_posture()
     if command.verb == CHECKS:
         return _render_checks()
     if command.verb == SMOKE:

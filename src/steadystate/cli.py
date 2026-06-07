@@ -1520,6 +1520,16 @@ _CHECKS_OPTION = typer.Option(
 
 
 @app.command()
+def posture() -> None:
+    """The honest answer to 'am I bounded by steadystate's gates?' -- what it enforces on its own
+    path (catalog + bound + audit), where that ends (it can't constrain an agent's *other* tools,
+    e.g. a shell), and the sole-actuator setup that makes it a real fence -- no overclaim."""
+    from .inbound.server import _render_posture
+
+    typer.echo(_render_posture())
+
+
+@app.command()
 def checks(checks: str = _CHECKS_OPTION) -> None:
     """List the custom health checks (--checks / STEADYSTATE_CHECKS / .steadystate/checks.json)."""
     from .inbound.server import _render_checks
