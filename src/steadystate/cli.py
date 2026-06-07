@@ -665,6 +665,84 @@ def scan(
                 typer.echo(f"  {r.caller:<12} ~${r.cost_usd:.4f}  {r.calls} call(s)")
 
 
+# The CI-gate severity calculus: an alert fails the gate when its severity is at/above the
+# `fail_on` threshold. "any" trips on anything; "none" never trips (report/deliver only).
+_CI_SEVERITY = {"critical": 4, "high": 3, "medium": 2, "low": 1}
+_CI_THRESHOLD = {"any": 0, "low": 1, "medium": 2, "high": 3, "critical": 4, "none": 99}
+_CI_CONFIG_DEFAULT = "steadystate/config.toml"  # the committed convention (see repo-native-posture)
+
+
+def _load_ci_config(path: Path) -> dict:
+    """The optional ``[ci]`` table from ``steadystate/config.toml`` (source / path / fail_on / to /
+    deliver) -- all keys optional. Missing/malformed file -> {} (CLI flags + defaults still apply).
+    Read-only stdlib ``tomllib``; never executes anything."""
+    if not path.exists():
+        return {}
+    import tomllib
+
+    try:
+        data = tomllib.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+    ci = data.get("ci")
+    return ci if isinstance(ci, dict) else {}
+
+
+@app.command()
+def ci(
+    path: Path | None = typer.Argument(None, help="The IaC to scan (else config, else '.')."),
+    source: str = typer.Option("", "--source", help="Override the config/default source."),
+    fail_on: str = typer.Option(
+        "", "--fail-on", help="Gate threshold: any | low | medium | high | critical | none."
+    ),
+    to: str = typer.Option("", "--to", help="Surfaces, e.g. `github` to open an issue."),
+    deliver: str = typer.Option(
+        "", "--deliver", help="e.g. `github-pr` to open an accept-reality reconcile PR."
+    ),
+    config: Path = typer.Option(
+        Path(_CI_CONFIG_DEFAULT), "--config", help="The steadystate config file (TOML)."
+    ),
+) -> None:
+    """The GitOps gate: a **stateless, deterministic** scan of the repo's IaC -- no db, no LLM, no
+    standing creds -- that **exits non-zero on a problem** (a CI gate) and optionally **opens a PR**
+    (`--deliver github-pr`, for code-reconcilable drift) or an **issue** (`--to github`). Reads an
+    optional `steadystate/config.toml` `[ci]` table (source / path / fail_on / to / deliver); CLI
+    flags override it. The lowest-friction posture: `git clone` + a token + this one line."""
+    cfg = _load_ci_config(config)
+    source = source or str(cfg.get("source") or "terraform")
+    scan_path = path or Path(str(cfg.get("path") or "."))
+    fail_on = (fail_on or str(cfg.get("fail_on") or "any")).lower()
+    to = to or str(cfg.get("to") or "console")
+    deliver = deliver or str(cfg.get("deliver") or "none")
+    if fail_on not in _CI_THRESHOLD:
+        raise typer.BadParameter(f"--fail-on must be one of: {', '.join(_CI_THRESHOLD)}")
+    try:  # stateless + deterministic by design: reproducible, no spend, no egress, no creds
+        report = build_report(source, scan_path, no_llm=True)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from None
+    except SourceError as exc:
+        typer.secho(f"ci scan failed: {exc}", fg="red", err=True)
+        raise typer.Exit(1) from None  # a tooling failure is a gate failure, never a false "clean"
+    for surface in _surfaces([s.strip() for s in to.split(",") if s.strip()]):
+        surface.emit(report)
+    deliver_names = [d.strip() for d in deliver.split(",") if d.strip() and d.strip() != "none"]
+    if deliver_names:
+        _deliver(source, scan_path, report, deliver_names)
+    # The gate: count alerts at/above the threshold, print a one-line verdict, exit accordingly.
+    threshold = _CI_THRESHOLD[fail_on]
+    failing = [a for a in report.alerts if _CI_SEVERITY.get(a.severity.value, 0) >= threshold]
+    total = len(report.alerts)
+    if not failing:
+        clean = "clean -- no drift/malfunction" if not total else f"{total} finding(s) below gate"
+        typer.secho(f"steadystate ci: PASS -- {clean}", fg="green")
+        return
+    typer.secho(
+        f"steadystate ci: FAIL -- {len(failing)} of {total} finding(s) at/above '{fail_on}'",
+        fg="red",
+    )
+    raise typer.Exit(1)
+
+
 @app.command()
 def verify(
     declared: Path = typer.Argument(

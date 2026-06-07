@@ -1,7 +1,7 @@
 # Repo-native posture — steadystate as a stateless GitOps bot
 
-> Status: design + phase 1 shipped (the `steadystate/` committed-intent convention). Phases 2–4 are
-> the roadmap below.
+> Status: phase 1 (the `steadystate/` committed-intent convention) **shipped**; phase 2 (`steadystate
+> ci`, below) **shipped**. Phases 3–4 (a state-only source; the runbook-in-the-PR/issue) remain.
 
 steadystate has two deployment postures, and they share one core:
 
@@ -58,7 +58,7 @@ A **state-only source** is the right fit for a CI check that shouldn't hold broa
 answers "is the code in sync with what's deployed?" with nothing but **read access to the state
 bucket**. The full plan stays the option when you want live drift.
 
-## 4. The headline: `steadystate ci` (phase 2/4)
+## 4. The headline: `steadystate ci` (phase 2 — shipped)
 
 One command that needs **nothing but the repo and a token** — stateless, deterministic, **no db, no
 LLM**:
