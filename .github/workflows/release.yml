@@ -1,31 +1,69 @@
 name: release
 
-# Cut a GitHub Release when a vX.Y.Z tag is pushed.
+# Cut a release when a vX.Y.Z tag is pushed: build once, then publish to PyPI
+# (Trusted Publishing -- no stored token) AND attach the artifacts to a GitHub Release.
+#
+# ONE-TIME setup before the first tag (PyPI side, repo owner only):
+#   PyPI -> the `steadystate` project -> Publishing -> add a Trusted Publisher:
+#     owner = jedi12many, repo = steadystate.ai, workflow = release.yml, environment = pypi
+#   (For the very first publish, register it as a "pending publisher" -- the name is reserved
+#   on the first successful upload.) No API token is ever stored; PyPI verifies the OIDC identity
+#   of this workflow. Make sure __version__ matches the tag (e.g. v0.1.0 -> "0.1.0").
 on:
   push:
     tags:
       - "v*"
 
 permissions:
-  contents: write  # softprops/action-gh-release creates the Release
+  contents: read  # escalated per-job below (least privilege)
 
 jobs:
-  release:
-    # GitHub-hosted, isolated per job -- the right place for release credentials.
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      - name: Build
+      - name: Build + check
         run: |
           python -m pip install --upgrade pip
           pip install build twine
           python -m build
           twine check dist/*  # sanity-check sdist+wheel metadata before publishing
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  pypi:
+    needs: build
+    runs-on: ubuntu-latest
+    # GitHub-hosted, isolated; the `pypi` environment is the trusted-publisher identity PyPI checks.
+    environment:
+      name: pypi
+      url: https://pypi.org/project/steadystate/
+    permissions:
+      id-token: write  # OIDC for Trusted Publishing -- no API token stored
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # softprops/action-gh-release creates the Release
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
       - name: Publish GitHub Release
-        # GitHub Releases only -- no PyPI publish. Attaches the built artifacts.
         uses: softprops/action-gh-release@v3
         with:
           files: dist/*

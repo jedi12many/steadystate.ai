@@ -4,4 +4,4 @@ Reconcile declared infrastructure state (Terraform, ArgoCD, ...) against observe
 reality, reason about the drift, and surface only what's actionable.
 """
 
-__version__ = "0.0.1"
+__version__ = "0.1.0"
