@@ -345,10 +345,18 @@ def test_define_check_translates_via_the_llm_and_degrades_cleanly():
 
 
 def test_checks_path_resolves_explicit_then_env_then_default(tmp_path, monkeypatch):
-    # checks are intent, not runtime state -> they can live in a version-controlled file, separate
-    # from the gitignored .steadystate/. explicit (--checks) > STEADYSTATE_CHECKS > the default.
+    # checks are intent, not runtime state -> the COMMITTED steadystate/ is the home (reviewed in
+    # PRs), the gitignored .steadystate/ is legacy. explicit (--checks) > STEADYSTATE_CHECKS >
+    # committed-if-exists > legacy-if-exists > committed (so a fresh check is version-controllable).
+    monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("STEADYSTATE_CHECKS", raising=False)
-    assert resolve_checks_path() == ".steadystate/checks.json"
+    assert resolve_checks_path() == "steadystate/checks.json"  # fresh -> committed
+    (tmp_path / ".steadystate").mkdir()
+    (tmp_path / ".steadystate" / "checks.json").write_text("[]")
+    assert resolve_checks_path() == ".steadystate/checks.json"  # legacy present -> read it
+    (tmp_path / "steadystate").mkdir()
+    (tmp_path / "steadystate" / "checks.json").write_text("[]")
+    assert resolve_checks_path() == "steadystate/checks.json"  # committed present -> prefer it
     monkeypatch.setenv("STEADYSTATE_CHECKS", "/team/checks.json")
     assert resolve_checks_path() == "/team/checks.json"
     assert resolve_checks_path("/cli/override.json") == "/cli/override.json"  # explicit wins

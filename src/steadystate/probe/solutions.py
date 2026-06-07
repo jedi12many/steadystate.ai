@@ -25,18 +25,30 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-DEFAULT_SOLUTIONS_FILE = ".steadystate/solutions.json"
+DEFAULT_SOLUTIONS_FILE = ".steadystate/solutions.json"  # legacy/gitignored -- still read if present
+COMMITTED_SOLUTIONS_FILE = "steadystate/solutions.json"  # version-controlled INTENT (preferred)
 SOLUTIONS_ENV = "STEADYSTATE_SOLUTIONS"
 
 _BOUND_LEVELS = frozenset({"low", "medium", "high"})
 
 
 def resolve_solutions_path(explicit: str = "") -> str:
-    """Where the runbook lives: an ``explicit`` path wins, else ``STEADYSTATE_SOLUTIONS``, else the
-    default in ``.steadystate/``. Like checks, solutions are *intent* (IaC-grade), not ephemeral
-    state -- point this at a **version-controlled** file so authored fixes are reviewed in PRs,
-    shared across the team, and keep their audit (who wrote what, when), not lost as local state."""
-    return explicit or os.environ.get(SOLUTIONS_ENV, "").strip() or DEFAULT_SOLUTIONS_FILE
+    """Where the runbook lives. Solutions are *intent* (IaC-grade), not ephemeral state, so the
+    **committed** ``steadystate/`` is the home -- authored fixes are reviewed in PRs, shared across
+    the team, and travel with the IaC, not lost in the gitignored ``.steadystate/``. Order: an
+    ``explicit`` path, else ``STEADYSTATE_SOLUTIONS``, else committed ``steadystate/solutions.json``
+    if it exists, else the legacy ``.steadystate/solutions.json`` if THAT exists -- and for a fresh
+    write (neither yet), the committed location, so a new authored fix lands somewhere committed."""
+    if explicit:
+        return explicit
+    env = os.environ.get(SOLUTIONS_ENV, "").strip()
+    if env:
+        return env
+    if Path(COMMITTED_SOLUTIONS_FILE).exists():
+        return COMMITTED_SOLUTIONS_FILE
+    if Path(DEFAULT_SOLUTIONS_FILE).exists():
+        return DEFAULT_SOLUTIONS_FILE
+    return COMMITTED_SOLUTIONS_FILE
 
 
 @dataclass(frozen=True)
