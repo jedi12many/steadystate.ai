@@ -32,7 +32,7 @@ from ..act.learn import learn as derive_lessons
 from ..act.reflex import reflex_recurrence, reflexes
 from ..classify import APPLICATION, finding_layer
 from ..engine import build_report
-from ..health import IMPAIRED, NOTED, finding_disposition
+from ..health import IMPAIRED, NOTED, WORKING, finding_disposition, wall_verdict
 from ..notify import SURFACES
 from ..onboarding import Status, capabilities
 from ..probe.custom import add_check, describe_check, load_checks, run_smoke_checks
@@ -54,6 +54,7 @@ from .base import (
     DECLINE,
     FINDINGS,
     FIX,
+    HEALTH,
     HELP,
     HISTORY,
     HOLD,
@@ -857,6 +858,37 @@ def _render_smoke(checks_path: str = "") -> str:
     return "\n".join(lines)
 
 
+def _render_health(state_path: str, checks_path: str = "") -> str:
+    """The one-call "is it working?" verdict, leading with the active signal: run the `http` smoke
+    tests (proof), fold in the live malfunctions (impaired), and answer WORKING | DEGRADED | DOWN.
+    The agent's headline question -- and read-only, so it can ask without a write grant."""
+    smoke = run_smoke_checks(checks_path)
+    smoke_fail = [r for r in smoke if not r.passed]
+    impaired: list[Finding] = []
+    if state_path and Path(state_path).exists():
+        with StateStore(state_path) as store:
+            findings = filter_findings(store.all_findings(), "")  # open view
+        impaired = [
+            f
+            for f in findings
+            if finding_layer(f.details, f.last_title) == APPLICATION
+            and finding_disposition(f.details) == IMPAIRED
+        ]
+    verdict = wall_verdict(len(impaired), len(smoke_fail))
+    smoke_part = f"smoke {len(smoke) - len(smoke_fail)}/{len(smoke)} pass" if smoke else "no smoke"
+    head = f"{verdict}  --  {smoke_part}  |  {len(impaired)} impaired"
+    lines = [head]
+    for r in smoke_fail:  # name what's actively failing
+        why = f" -- {r.detail}" if r.detail else ""
+        lines.append(f"  [smoke FAIL] {r.name}  {r.target}{why}")
+    if impaired:
+        worst = min(impaired, key=lambda f: (-_SEVERITY_RANK.get(f.last_severity, 0), f.first_seen))
+        lines.append(f"  worst impaired: {worst.last_title}  [{worst.last_severity}]")
+    if verdict == WORKING and not smoke:
+        lines.append("  (no smoke test defined -- add an `http` check to actively verify)")
+    return "\n".join(lines)
+
+
 def _add_check(payload: str, checks_path: str = "") -> str:
     """Validate a check (a JSON object, or a JSON string) against the vetted schema and store it.
     The schema is the gate -- only a valid, observe-only check is written. Used by the `add-check`
@@ -1020,6 +1052,8 @@ def run_command(command: Command, state_path: str) -> str:
         return _render_hold(state_path)
     if command.verb == LEARN:
         return _render_learn(state_path)
+    if command.verb == HEALTH:
+        return _render_health(state_path)
     if command.verb == CHECKS:
         return _render_checks()
     if command.verb == SMOKE:
