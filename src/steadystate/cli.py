@@ -1520,6 +1520,16 @@ _CHECKS_OPTION = typer.Option(
 
 
 @app.command()
+def metrics() -> None:
+    """The live metric readings from your monitoring (Prometheus / ...) for the queries you
+    configured (`{name: query}` at STEADYSTATE_METRIC_QUERIES) -- the agent's metric context next to
+    steadystate's findings. steadystate *rents* your monitoring; it doesn't reimplement it."""
+    from .inbound.server import _render_metrics
+
+    typer.echo(_render_metrics())
+
+
+@app.command()
 def posture() -> None:
     """The honest answer to 'am I bounded by steadystate's gates?' -- what it enforces on its own
     path (catalog + bound + audit), where that ends (it can't constrain an agent's *other* tools,
@@ -2056,6 +2066,8 @@ _DIALS: tuple[tuple[str, str, str], ...] = (
     ("STEADYSTATE_SILOS", "~/.steadystate/silos.json", "named-silo registry (`silo add` / --silo)"),
     ("STEADYSTATE_CHECKS", ".steadystate/checks.json", "custom-checks file (version-control this)"),
     ("STEADYSTATE_ENRICH_QUERY", "(none)", "PromQL bar for --enrich prometheus"),
+    ("STEADYSTATE_METRICS_SOURCE", "prometheus", "monitoring backend the `metrics` verb reads"),
+    ("STEADYSTATE_METRIC_QUERIES", ".steadystate/metrics.json", "the {name: query} map for `metrics`"),
 )
 
 
