@@ -13,15 +13,17 @@ Read kinds: ``kubectl-cpu`` / ``kubectl-mem`` -- the live CPU/memory of the pods
 selector (metrics API), aggregated and compared to a threshold; ``kubectl-log`` -- a regex that
 should be *present* (a success signal, e.g. postfix's ``status=sent``) or *absent* (an error) in the
 pods' recent logs, i.e. "running, but doing its job?"; and ``docker-log`` -- the same, over the logs
-of the containers matching a ``docker ps`` filter (functional health for compose); ``ansible-service``
--- is a unit ``active``/``inactive`` across a host pattern; and ``http`` -- a **smoke test**: GET/HEAD
-an endpoint and assert the response (the strongest "is it working?" signal -- proof, not inference).
+of the containers matching a ``docker ps`` filter (functional health for compose);
+``ansible-service`` -- is a unit ``active``/``inactive`` across a host pattern; and ``http`` -- a
+**smoke test**: GET/HEAD an endpoint and assert the response (the strongest "is it working?" signal
+-- proof, not inference).
 
 The passive kinds are conservative: a read we couldn't take -> no finding (a *down* app is the
-generic prober's call). The ``http`` smoke test is the deliberate exception -- an endpoint that won't
-answer IS the service being down, so an unreachable probe FIRES. Each check is dispatched to the
-reader for its backend. The Symptoms ride the normal pipeline, so a custom finding is tracked
-new/recurring/resolved, muteable, feeds ``resolve``/``learn`` -- and counts as IMPAIRED in `summary`."""
+generic prober's call). The ``http`` smoke test is the deliberate exception -- an endpoint that
+won't answer IS the service being down, so an unreachable probe FIRES. Each check is dispatched to
+the reader for its backend. The Symptoms ride the normal pipeline, so a custom finding is tracked
+new/recurring/resolved, muteable, feeds ``resolve``/``learn`` -- and counts as IMPAIRED in
+`summary`."""
 
 from __future__ import annotations
 
@@ -37,6 +39,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote
 
+from .._http import safe_urlopen  # the single http(s)-gated urlopen
 from ..model import Provenance
 from ..reason.alert import Severity
 from .ansible_health import (
@@ -674,9 +677,9 @@ class HttpCheckEvaluator:
         """GET/HEAD the URL and judge the response: (ok, detail, evidence). A connection failure or
         timeout is a FAILED smoke test (the service didn't answer), never a no-op."""
         ev = {"url": check.url, "method": check.method, "expected_status": str(check.status)}
-        req = urllib.request.Request(check.url, method=check.method)  # noqa: S310 -- vetted http(s)
+        req = urllib.request.Request(check.url, method=check.method)
         try:
-            with urllib.request.urlopen(req, timeout=self._timeout) as resp:  # noqa: S310
+            with safe_urlopen(req, timeout=self._timeout) as resp:  # http(s)-gated open
                 status = resp.status
                 payload = resp.read(65536).decode("utf-8", "replace") if check.body else ""
         except urllib.error.HTTPError as exc:  # a 4xx/5xx still carries a status to compare
