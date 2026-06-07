@@ -1,0 +1,8 @@
+# steadystate, committed beside the IaC. `steadystate ci` reads this.
+# (In a real repo, point `path` at your terraform dir; here it's a captured plan so the
+#  demo runs offline -- no terraform binary, no cloud, deterministic every time.)
+
+[ci]
+source  = "terraform"
+path    = "plan.json"
+fail_on = "high"        # a high/critical finding fails the build

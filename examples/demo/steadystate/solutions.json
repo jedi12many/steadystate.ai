@@ -1,0 +1,15 @@
+[
+  {
+    "name": "relock-public-bucket",
+    "match": "public_access_block",
+    "problem": "An S3 public-access-block was removed out of band -- the bucket is exposed to the internet.",
+    "solution": {
+      "kind": "command",
+      "run": "terraform apply -target=aws_s3_bucket_public_access_block.logs -auto-approve"
+    },
+    "impact": "low",
+    "reversibility": "high",
+    "author": "jeff",
+    "added": "2026-06-07"
+  }
+]
