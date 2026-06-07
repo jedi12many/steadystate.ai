@@ -42,6 +42,7 @@ HOLD = "hold"
 LEARN = "learn"
 CHECKS = "checks"
 ADD_CHECK = "add-check"
+SOLUTIONS = "solutions"
 SMOKE = "smoke"
 HEALTH = "health"
 POSTURE = "posture"
@@ -114,6 +115,7 @@ COMMANDS: dict[str, tuple[str, str]] = {
         "STEADYSTATE_METRIC_QUERIES; steadystate rents the monitoring, never reimplements it",
     ),
     CHECKS: ("checks", "list this wall's custom health checks (.steadystate/checks.json)"),
+    SOLUTIONS: ("solutions", "list this wall's authored runbook of problem->fix entries"),
     SMOKE: (
         "smoke",
         "run this wall's `http` smoke tests live and report PASS/FAIL each -- the affirmative "
@@ -241,6 +243,7 @@ _TOOL_ARGS: dict[str, tuple[tuple[str, bool], ...]] = {
     POSTURE: (),
     METRICS: (),
     CHECKS: (),
+    SOLUTIONS: (),
     SMOKE: (),
     ADD_CHECK: (("check", True),),  # one arg: the check as a JSON object/string
     PROBE: (("target", True),),  # a target name, or "all" for the fleet
@@ -271,6 +274,7 @@ _TOOL_EFFECT: dict[str, str] = {
     POSTURE: "read-only",  # a self-report; an agent can always ask "am I bounded?" (no grant)
     METRICS: "read-only",  # reads your monitoring (GET) -- consumes it, never mutates
     CHECKS: "read-only",
+    SOLUTIONS: "read-only",  # lists the authored runbook -- showing a fix isn't running it
     SMOKE: "read-only",  # active (GET/HEAD probes) but idempotent -- reads, never mutates
     ADD_CHECK: "state-write",  # writes the wall's checks.json -- reversible config, no infra
     TARGETS: "read-only",

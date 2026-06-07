@@ -37,6 +37,7 @@ from ..metrics import fetch_metrics
 from ..notify import SURFACES
 from ..onboarding import Status, capabilities
 from ..probe.custom import add_check, describe_check, load_checks, run_smoke_checks
+from ..probe.solutions import describe_solution, load_solutions, solutions_for
 from ..reason.alert import Alert, Layer, Severity
 from ..reason.cost import roll_up, roll_up_by_period, scan_cost_line
 from ..reason.llm import LLMAnalyst
@@ -70,6 +71,7 @@ from .base import (
     SHOW,
     SMOKE,
     SNOOZE,
+    SOLUTIONS,
     SUMMARY,
     SURFACES_LIST,
     TARGETS,
@@ -451,6 +453,13 @@ def _render_show(fingerprint: str, state_path: str, flags: frozenset[str] = froz
         lines += [f"  {key:<14} {value}" for key, value in finding.details.items()]
     else:  # a finding recorded before evidence capture, or a type that carries none
         lines.append("  (no evidence captured -- re-run a `probe`/`scan` to capture it)")
+    # The wall's runbook: if the operator authored a solution for this problem (by category or a
+    # title regex), surface it -- "here's the documented fix, and who vouched for it". Read-only.
+    category = (finding.details or {}).get("category", "")
+    matches = solutions_for(category, finding.last_title, load_solutions())
+    if matches:
+        lines.append("  -- known solution(s) (authored runbook) --")
+        lines += [f"  {describe_solution(s)}" for s in matches]
     return "\n".join(lines)
 
 
@@ -853,6 +862,19 @@ def _render_checks(checks_path: str = "") -> str:
     return f"{len(checks)} custom check(s):\n" + "\n".join(f"  {describe_check(c)}" for c in checks)
 
 
+def _render_solutions(solutions_path: str = "") -> str:
+    """The chat/CLI/MCP view of the wall's authored runbook (STEADYSTATE_SOLUTIONS / the default) --
+    the documented problem->fix entries that surface against a matching finding. Read-only."""
+    sols = load_solutions(solutions_path)
+    if not sols:
+        return (
+            "no solutions authored here -- document a fix in .steadystate/solutions.json "
+            "(problem -> command/playbook/reboot, signed by an author). It surfaces on a match."
+        )
+    body = "\n".join(f"  {describe_solution(s)}" for s in sols)
+    return f"{len(sols)} solution(s) -- the wall's runbook:\n{body}"
+
+
 def _render_smoke(checks_path: str = "") -> str:
     """Run the wall's `http` smoke tests live and report PASS/FAIL each -- the affirmative
     'is it actually working?' view. Active (GET/HEAD), read-only. [] of checks -> a clear note."""
@@ -1174,6 +1196,8 @@ def run_command(command: Command, state_path: str) -> str:
         return _render_metrics()
     if command.verb == CHECKS:
         return _render_checks()
+    if command.verb == SOLUTIONS:
+        return _render_solutions()
     if command.verb == SMOKE:
         return _render_smoke()
     if command.verb == ADD_CHECK:

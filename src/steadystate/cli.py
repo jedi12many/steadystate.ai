@@ -1537,6 +1537,13 @@ _CHECKS_OPTION = typer.Option(
     "it at a VERSION-CONTROLLED file so checks are reviewed/shared, not lost like local state.",
 )
 
+_SOLUTIONS_OPTION = typer.Option(
+    "",
+    "--solutions",
+    help="Path to the runbook (else STEADYSTATE_SOLUTIONS, else .steadystate/solutions.json). "
+    "Version-control it so authored fixes are reviewed/shared and keep their audit.",
+)
+
 
 @app.command()
 def metrics() -> None:
@@ -1564,6 +1571,16 @@ def checks(checks: str = _CHECKS_OPTION) -> None:
     from .inbound.server import _render_checks
 
     typer.echo(_render_checks(checks))
+
+
+@app.command()
+def solutions(solutions: str = _SOLUTIONS_OPTION) -> None:
+    """List this wall's authored runbook -- the documented problem->fix entries (a command, a
+    playbook, a reboot), each signed by an author. They surface against a matching finding in
+    `show`. Read-only (--solutions / STEADYSTATE_SOLUTIONS / .steadystate/solutions.json)."""
+    from .inbound.server import _render_solutions
+
+    typer.echo(_render_solutions(solutions))
 
 
 @app.command()
@@ -2084,6 +2101,7 @@ _DIALS: tuple[tuple[str, str, str], ...] = (
     ("STEADYSTATE_PATCH_DIR", ".steadystate/patches", "where remediation patch files are written"),
     ("STEADYSTATE_SILOS", "~/.steadystate/silos.json", "named-silo registry (`silo add` / --silo)"),
     ("STEADYSTATE_CHECKS", ".steadystate/checks.json", "custom-checks file (version-control this)"),
+    ("STEADYSTATE_SOLUTIONS", ".steadystate/solutions.json", "authored runbook (version-control)"),
     ("STEADYSTATE_ENRICH_QUERY", "(none)", "PromQL bar for --enrich prometheus"),
     ("STEADYSTATE_METRICS_SOURCE", "prometheus", "monitoring backend `metrics` reads"),
     ("STEADYSTATE_METRIC_QUERIES", ".steadystate/metrics.json", "{name: query} map for `metrics`"),
