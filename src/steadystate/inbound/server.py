@@ -762,6 +762,10 @@ def _render_summary(state_path: str) -> str:
     # actually failing, so neither you nor an agent chases a red herring. Platform stays an aside.
     impaired = [f for f in app if finding_disposition(f.details) == IMPAIRED]
     noted = [f for f in app if finding_disposition(f.details) == NOTED]
+    # A high-severity NOTED finding (a drift exposure -- an opened firewall, a public bucket) is
+    # still not a *malfunction*, so it never drives the verdict or counts as impaired. But it must
+    # not be flattened into the count either: serious risk earns a REVIEW flag, not silence.
+    review = [f for f in noted if _SEVERITY_RANK.get(f.last_severity, 0) >= _SEVERITY_RANK["high"]]
     counts: dict[str, int] = {}
     for f in impaired:
         counts[f.last_severity] = counts.get(f.last_severity, 0) + 1
@@ -776,7 +780,8 @@ def _render_summary(state_path: str) -> str:
     if pendings:
         parts.append(f"{len(pendings)} pending your approval")
     if noted:
-        parts.append(f"{len(noted)} noted (drift/posture)")
+        flag = f"; {len(review)} to review" if review else ""
+        parts.append(f"{len(noted)} noted (drift/posture{flag})")
     if platform:
         parts.append(f"{len(platform)} platform")
     if not impaired and not pendings and not noted and not platform:
@@ -807,6 +812,12 @@ def _render_summary(state_path: str) -> str:
     if impaired:
         worst = min(impaired, key=lambda f: (-_SEVERITY_RANK.get(f.last_severity, 0), f.first_seen))
         lines.append(f"worst: {worst.last_title}  [{worst.last_severity}]")
+    # Review line: a serious NOTED finding (a high/critical drift -- a security exposure) is named,
+    # not buried in the count. A flag to look, never a 'worst'/'impaired' -- function-first holds
+    # (it doesn't make the wall not-working), but a real exposure is never silent.
+    if review:
+        top = min(review, key=lambda f: (-_SEVERITY_RANK.get(f.last_severity, 0), f.first_seen))
+        lines.append(f"review: {top.last_title}  [{top.last_severity}]")
     # Learning line: a response you keep applying by hand has earned an autonomy review (`learn`).
     if promotable:
         s = "s" if promotable != 1 else ""
@@ -945,6 +956,7 @@ def _render_health(state_path: str, checks_path: str = "", workload: str = "") -
     smoke_fail = [r for r in smoke if not r.passed]
     impaired: list[Finding] = []
     drifted: list[Finding] = []
+    review: list[Finding] = []
     if state_path and Path(state_path).exists():
         with StateStore(state_path) as store:
             findings = filter_findings(store.all_findings(), "")  # open view
@@ -953,6 +965,13 @@ def _render_health(state_path: str, checks_path: str = "", workload: str = "") -
             app = [f for f in app if _names_workload(f, workload)]
         impaired = [f for f in app if finding_disposition(f.details) == IMPAIRED]
         drifted = [f for f in app if "change" in (f.details or {})]  # config diverged here
+        # a high/critical NOTED finding (a security drift) -- flag for review, never the verdict
+        review = [
+            f
+            for f in app
+            if finding_disposition(f.details) == NOTED
+            and _SEVERITY_RANK.get(f.last_severity, 0) >= _SEVERITY_RANK["high"]
+        ]
     verdict = wall_verdict(len(impaired), len(smoke_fail))
     smoke_part = f"smoke {len(smoke) - len(smoke_fail)}/{len(smoke)} pass" if smoke else "no smoke"
     scope = f"{workload}  --  " if workload else ""
@@ -969,6 +988,11 @@ def _render_health(state_path: str, checks_path: str = "", workload: str = "") -
     # doesn't). A NOTED drift on a working app stays out of it (don't chase red herrings).
     if (smoke_fail or impaired) and drifted:
         lines.append(f"  likely cause: {drifted[0].last_title}  (config drift on this workload)")
+    # Review -- a serious drift (high/critical) named even when the wall is WORKING. It doesn't move
+    # the verdict (a drift isn't a malfunction), but a security exposure is never left silent.
+    if review:
+        top = min(review, key=lambda f: (-_SEVERITY_RANK.get(f.last_severity, 0), f.first_seen))
+        lines.append(f"  review: {top.last_title}  [{top.last_severity}]  (drift, not impaired)")
     # Enrichment -- the live metrics from your monitoring, as CONTEXT (not part of the verdict: a
     # high latency is for the agent to weigh, not an automatic DOWN). steadystate rents monitoring.
     shown = [m for m in fetch_metrics(workload=workload) if m.available]

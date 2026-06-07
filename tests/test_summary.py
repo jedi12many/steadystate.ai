@@ -97,9 +97,25 @@ def test_summary_leads_with_function_drift_is_noted_not_impaired(tmp_path):
             },
         )
     out = _render_summary(db)
-    assert "1 impaired (1 high)" in out and "1 noted (drift/posture)" in out
-    assert "worst: gateway 5xx spike  [high]" in out  # the live failure, NOT the drift
-    assert "image drifted" not in out.split("worst:")[1]  # the drift is never the headline problem
+    # the drift is NOTED (not impaired), but it's high-severity so it's flagged for REVIEW -- named,
+    # not buried, yet never the 'worst'/impaired (function-first holds: it's not the malfunction).
+    assert "1 impaired (1 high)" in out and "1 noted (drift/posture; 1 to review)" in out
+    assert "worst: gateway 5xx spike  [high]" in out  # the live failure is 'worst', NOT the drift
+    assert "review: gateway image drifted  [high]" in out  # the high drift is surfaced, as review
+    assert "image drifted" not in out.split("worst:")[1].split("review:")[0]  # never under 'worst'
+
+
+def test_summary_does_not_flag_a_low_severity_drift_for_review(tmp_path):
+    # only a HIGH/critical noted finding earns a review flag -- a medium/low drift stays just noted
+    db = str(tmp_path / "s.db")
+    with StateStore(db) as store:
+        store.record(
+            {"a" * 64: ("medium", "a label drifted")},
+            _NOW,
+            {"a" * 64: {"change": "MODIFIED", "kind": "bucket"}},
+        )
+    out = _render_summary(db)
+    assert "1 noted (drift/posture)" in out and "to review" not in out and "review:" not in out
 
 
 def test_summary_shows_data_freshness(tmp_path):
