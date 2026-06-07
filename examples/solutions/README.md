@@ -45,6 +45,23 @@ When a finding matches (e.g. an `Evicted` pod, or a title like "akeyless **gatew
 `show` surfaces the documented fix and its author. An agent driving steadystate over MCP sees the
 same thing — your runbook, right where the problem is.
 
-> **Next:** automation — a matched solution offered as a *pending remediation* you `approve` (or, with
-> autonomy granted and within the bound, applied automatically), then audited. Same gate as the
-> built-in catalog; the author is the vetting.
+## Run it through the gate
+
+A scan/probe that hits a malfunction matching a solution **with a runnable command** offers it as a
+*pending remediation* — so the runbook becomes one-approve-to-apply, on the **same gate** as every
+other action:
+
+```sh
+steadystate pending                   # the matched fix is listed (its command + who authored it)
+steadystate approve <fingerprint>     # runs it (argv, no shell, timeout) and audits it
+steadystate history                   # the trail: the solution + author (who vouched) + approver
+```
+
+The body is open (you vouch for the command), so there's no allow-pattern — the guardrail is
+**approval + the bound + the audit**, not a restriction on what you may run. A solution with only a
+`reboot` target (no `run`) is surfaced in `show` for a human, never offered as auto-runnable.
+
+> **Bound + next:** `impact`/`reversibility` are recorded on the offered action (the bound). Today
+> every solution is **approve-gated** (it never auto-runs). A future step lets a *low-impact,
+> reversible* fix auto-apply — but only with autonomy explicitly granted **and** within that bound;
+> anything destructive always waits for a human.

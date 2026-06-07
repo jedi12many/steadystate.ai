@@ -30,6 +30,7 @@ from ..act.execute import CATALOG_SOURCE
 from ..act.learn import ADOPT
 from ..act.learn import learn as derive_lessons
 from ..act.reflex import reflex_recurrence, reflexes
+from ..act.solution_remedy import record_solution_remediations
 from ..classify import APPLICATION, finding_layer
 from ..engine import build_report
 from ..health import IMPAIRED, NOTED, WORKING, finding_disposition, wall_verdict
@@ -1054,6 +1055,9 @@ def _record_probe_findings(report: Report, state_path: str) -> None:
             # Offer an approvable cleanup for any evicted pods -- so `pending` lists it and
             # `approve <fp>` runs the kubectl delete. Never auto-runs; approve is the gate.
             record_cleanups(store, report, now)
+            # Same gate for the wall's authored runbook: a malfunction matching a solution with a
+            # runnable command is offered as a pending remediation (approve runs it, audited).
+            record_solution_remediations(store, report, now)
 
 
 def probe_report(target_name: str, state_path: str, *, scan_logs: bool = False) -> Report:

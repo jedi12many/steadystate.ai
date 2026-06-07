@@ -35,6 +35,7 @@ from .act.learn import ADOPT
 from .act.learn import learn as derive_lessons
 from .act.plan import can_run_unattended
 from .act.reflex import reflexes, run_hold
+from .act.solution_remedy import record_solution_remediations
 from .catalog import gather_catalog, render_console, render_html
 from .compliance import (
     compliance_report,
@@ -643,6 +644,8 @@ def scan(
             # Offer approvable evicted-pod cleanups (approve-gated, never auto-run) -- independent
             # of --autonomy, since the cleanup is a safe delete of dead tombstones a human OKs.
             record_cleanups(store, report, now)
+            # Offer the wall's authored runbook fixes for any matching malfunction (approve-gated).
+            record_solution_remediations(store, report, now)
     if json_out:  # the machine-readable form: stdout is pure JSON, no surfaces, no spend footer
         payload = report_to_dict(report, resolved=resolved, spend=_spend_dict(report.llm_calls))
         typer.echo(json.dumps(payload, indent=2))
@@ -1258,6 +1261,7 @@ def hold(
     result = sweep_targets(registry, str(state), now, scan_logs=deep)
     with _open_store(state) as store:
         record_cleanups(store, result.report, now)  # offer cleanups so hold can approve them
+        record_solution_remediations(store, result.report, now)  # + authored runbook fixes
         outcome = run_hold(store, result.report, apply=apply, now=now)
     for line in _render_hold(outcome, apply=apply):
         typer.echo(line)
