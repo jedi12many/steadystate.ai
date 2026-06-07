@@ -32,6 +32,7 @@ from .breakglass import BREAKGLASS_SOURCE, breakglass_allowed
 from .catalog import action_for_command
 from .cleanup import CLEANUP_SOURCE, run_cleanup
 from .execute import CATALOG_SOURCE, run_catalog_action
+from .solution_remedy import SOLUTION_SOURCE, run_solution, solution_named
 
 
 def _audit(
@@ -88,6 +89,16 @@ def apply_pending(
         result = run_catalog_action(action, break_glass=True)
         outcome = VERIFIED if result.verified else APPLIED if result.applied else FAILED
         store.record_audit(_audit(action, actor, BREAKGLASS, outcome, result.detail), now)
+        return result.detail, result
+    if action.source == SOLUTION_SOURCE:  # an authored runbook command -- operator-vouched, gated
+        # Same race guard + audit as the cleanup, but no content allow-pattern: the operator wrote
+        # and vouched for this command (it's IaC-grade runbook intent). Recover the bound from the
+        # named solution for the plan; the audit records the solution + author (in drift_identity).
+        if not store.claim_pending(fingerprint, PENDING, APPROVED, actor):
+            return "no pending remediation for that fingerprint.", None
+        result = run_solution(action, solution_named(action.drift_identity))
+        outcome = VERIFIED if result.verified else APPLIED if result.applied else FAILED
+        store.record_audit(_audit(action, actor, APPROVED, outcome, result.detail), now)
         return result.detail, result
     if action.source in (CLEANUP_SOURCE, CATALOG_SOURCE):  # a direct, re-validated catalog command
         # Claim before the irreversible step (same race guard as the drift path), then run the
