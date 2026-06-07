@@ -59,6 +59,7 @@ from .base import (
     HISTORY,
     HOLD,
     LEARN,
+    METRICS,
     MUTE,
     PENDING,
     POSTURE,
@@ -870,6 +871,28 @@ def _names_workload(finding: Finding, workload: str) -> bool:
     return w in (finding.last_title or "").lower()
 
 
+def _render_metrics() -> str:
+    """The agent's metric context: the live readings from your monitoring (Prometheus / ...) for the
+    queries you configured. steadystate *consumes* monitoring, it doesn't reimplement it. Read-only;
+    an unavailable reading is shown as such (never a guessed number)."""
+    from ..metrics import fetch_metrics, load_metric_queries
+
+    if not load_metric_queries():
+        return (
+            "no metrics configured -- set STEADYSTATE_METRIC_QUERIES (a JSON {name: query} file) + "
+            "a source (e.g. PROMETHEUS_URL). steadystate rents monitoring, doesn't replace it."
+        )
+    readings = fetch_metrics()
+    lines = ["metrics (from your monitoring):"]
+    for m in readings:
+        if m.available:
+            extra = f"  ({m.note})" if m.note else ""
+            lines.append(f"  {m.name}: {m.value:g}{extra}")
+        else:
+            lines.append(f"  {m.name}: unavailable -- {m.note}")
+    return "\n".join(lines)
+
+
 def _render_posture() -> str:
     """The honest answer to 'are you bounding me?' -- so a worried operator (or an agent they asked)
     gets the real boundary, never an overclaim. States what steadystate enforces on its OWN path,
@@ -1117,6 +1140,8 @@ def run_command(command: Command, state_path: str) -> str:
         return _render_health(state_path, workload=command.argument)
     if command.verb == POSTURE:
         return _render_posture()
+    if command.verb == METRICS:
+        return _render_metrics()
     if command.verb == CHECKS:
         return _render_checks()
     if command.verb == SMOKE:

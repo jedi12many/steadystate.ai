@@ -45,6 +45,7 @@ ADD_CHECK = "add-check"
 SMOKE = "smoke"
 HEALTH = "health"
 POSTURE = "posture"
+METRICS = "metrics"
 FINDINGS = "findings"
 SHOW = "show"
 SURFACES_LIST = "surfaces"
@@ -105,6 +106,12 @@ COMMANDS: dict[str, tuple[str, str]] = {
         "the honest answer to 'am I bounded by your gates?' -- what steadystate enforces on its "
         "own path (catalog + bound + audit), where that ends (it can't constrain your other tools, "
         "e.g. a shell), and how to make it a real boundary (the sole-actuator setup)",
+    ),
+    METRICS: (
+        "metrics",
+        "the live metric readings from your monitoring (Prometheus / ...) -- the agent's metric "
+        "context alongside steadystate's findings. Configure {name: query} in "
+        "STEADYSTATE_METRIC_QUERIES; steadystate rents the monitoring, never reimplements it",
     ),
     CHECKS: ("checks", "list this wall's custom health checks (.steadystate/checks.json)"),
     SMOKE: (
@@ -232,6 +239,7 @@ _TOOL_ARGS: dict[str, tuple[tuple[str, bool], ...]] = {
     PENDING: (),
     HEALTH: (("workload", False),),  # optional: scope the verdict to one workload + correlate
     POSTURE: (),
+    METRICS: (),
     CHECKS: (),
     SMOKE: (),
     ADD_CHECK: (("check", True),),  # one arg: the check as a JSON object/string
@@ -261,6 +269,7 @@ _TOOL_EFFECT: dict[str, str] = {
     SUMMARY: "read-only",
     HEALTH: "read-only",  # runs smoke (GET/HEAD) + reads findings -- active but never mutates
     POSTURE: "read-only",  # a self-report; an agent can always ask "am I bounded?" (no grant)
+    METRICS: "read-only",  # reads your monitoring (GET) -- consumes it, never mutates
     CHECKS: "read-only",
     SMOKE: "read-only",  # active (GET/HEAD probes) but idempotent -- reads, never mutates
     ADD_CHECK: "state-write",  # writes the wall's checks.json -- reversible config, no infra
