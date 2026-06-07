@@ -495,3 +495,41 @@ def test_smoke_with_no_http_checks_is_a_clear_note(monkeypatch):
     monkeypatch.setattr(mod, "load_checks", lambda _p="": [])
     assert run_smoke_checks() == []
     assert "no smoke tests" in _render_smoke()
+
+
+# -- the `health` verdict: smoke (active) + impaired (passive) -> WORKING/DEGRADED/DOWN ----------
+
+
+def test_health_verdict_combines_smoke_and_impaired(monkeypatch, tmp_path):
+    import steadystate.probe.custom as mod
+    from steadystate.inbound.server import _render_health
+    from steadystate.state import StateStore
+
+    db = str(tmp_path / "s.db")
+    # an impaired finding in the store (a live symptom)
+    from datetime import UTC, datetime
+
+    with StateStore(db) as store:
+        store.record(
+            {"a" * 64: ("high", "gw 5xx spike")},
+            datetime.now(UTC),
+            {"a" * 64: {"category": "Unhealthy", "namespace": "akeyless"}},
+        )
+
+    with _server(200, "all ok here") as good:  # smoke passes, but a symptom is open -> DEGRADED
+        monkeypatch.setattr(mod, "load_checks", lambda _p="": _two_http_checks(good, good)[:1])
+        out = _render_health(db)
+        assert out.startswith("DEGRADED") and "1 impaired" in out and "1/1 pass" in out
+
+    with _server(503, "down") as bad:  # smoke FAILS -> DOWN (it actively isn't working)
+        monkeypatch.setattr(mod, "load_checks", lambda _p="": _two_http_checks(bad, bad)[:1])
+        out = _render_health(db)
+        assert out.startswith("DOWN") and "[smoke FAIL]" in out
+
+    # nothing impaired + smoke passes -> WORKING
+    empty = str(tmp_path / "empty.db")
+    with StateStore(empty):
+        pass
+    with _server(200, "all ok here") as good:
+        monkeypatch.setattr(mod, "load_checks", lambda _p="": _two_http_checks(good, good)[:1])
+        assert _render_health(empty).startswith("WORKING")

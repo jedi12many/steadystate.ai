@@ -43,6 +43,7 @@ LEARN = "learn"
 CHECKS = "checks"
 ADD_CHECK = "add-check"
 SMOKE = "smoke"
+HEALTH = "health"
 FINDINGS = "findings"
 SHOW = "show"
 SURFACES_LIST = "surfaces"
@@ -91,6 +92,11 @@ COMMANDS: dict[str, tuple[str, str]] = {
         "learn",
         "what steadystate has learned from findings that resolved on their own (out-of-band) -- "
         "categories to adopt a reflex for, or that self-heal",
+    ),
+    HEALTH: (
+        "health",
+        "the one-glance 'is it actually working?' verdict (WORKING | DEGRADED | DOWN) -- runs the "
+        "`http` smoke tests live and folds in the live malfunctions. The headline question",
     ),
     CHECKS: ("checks", "list this wall's custom health checks (.steadystate/checks.json)"),
     SMOKE: (
@@ -216,6 +222,7 @@ _TOOL_ARGS: dict[str, tuple[tuple[str, bool], ...]] = {
     SUMMARY: (),
     TARGETS: (),
     PENDING: (),
+    HEALTH: (),
     CHECKS: (),
     SMOKE: (),
     ADD_CHECK: (("check", True),),  # one arg: the check as a JSON object/string
@@ -243,6 +250,7 @@ _TOOL_ARGS: dict[str, tuple[tuple[str, bool], ...]] = {
 _TOOL_EFFECT: dict[str, str] = {
     HELP: "read-only",
     SUMMARY: "read-only",
+    HEALTH: "read-only",  # runs smoke (GET/HEAD) + reads findings -- active but never mutates
     CHECKS: "read-only",
     SMOKE: "read-only",  # active (GET/HEAD probes) but idempotent -- reads, never mutates
     ADD_CHECK: "state-write",  # writes the wall's checks.json -- reversible config, no infra

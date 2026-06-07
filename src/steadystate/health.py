@@ -33,3 +33,21 @@ def finding_disposition(details: Mapping[str, str] | None) -> str:
     if "change" in d:
         return NOTED  # a config drift -- diverged from declared, not a live failure
     return IMPAIRED  # probe/check evidence with no change -> a live symptom -> impaired
+
+
+# The one-word "is it working?" verdict, leading with the strongest signal. A FAILED smoke test
+# means the service actively isn't serving (DOWN); a live malfunction with smoke passing means it's
+# up but hurting (DEGRADED); otherwise WORKING. The smoke test dominates -- proof beats inference.
+WORKING = "WORKING"
+DEGRADED = "DEGRADED"
+DOWN = "DOWN"
+
+
+def wall_verdict(impaired: int, smoke_failures: int) -> str:
+    """Combine the active smoke result + the passive impaired count into one verdict. A smoke
+    failure -> DOWN (actively not working); malfunctions but smoke ok -> DEGRADED; else WORKING."""
+    if smoke_failures:
+        return DOWN
+    if impaired:
+        return DEGRADED
+    return WORKING
