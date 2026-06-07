@@ -1,129 +1,179 @@
 # steadystate.ai
 
-**Detect drift *and* malfunction across your infrastructure, reason about what matters, and remediate within a bound you set.** A deterministic, stdlib-only core; an optional LLM that advises and proposes but never decides; guardrailed throughout.
+**The operational substrate for IT-Ops — whether a human or an agent drives it.** steadystate
+watches your *deployed* infrastructure (live, and in CI), tells you whether it's actually
+**working**, carries your team's **runbook**, and **closes the loop** — but only ever within a
+**bound you commit**. A deterministic, stdlib-only core; an optional LLM that advises and proposes but
+never decides.
 
-You declare desired state as IaC — Terraform, Ansible, Kubernetes/Rancher, ArgoCD, docker-compose, Helm. steadystate reconciles **declared vs. observed** by riding each tool's *own* machine-readable output (`terraform show -json`, `kubectl`, `helm`, …) rather than parsing raw files, and separates two distinct failure modes: **drift** (config diverged from what you declared) and **malfunction** (config is fine, but the resource is failing *right now* — read from the platform's own health verdict as a first-class `Symptom`). When a failing resource *also* drifted, the Symptom and Drift fold into one root-caused alert (*"failing — likely cause: this drift"*).
+The job isn't "find drift." It's the two things an operator — or an agent acting as one — actually
+needs: **grounded truth** (what's declared, what's observed, *is it working*, what changed) and a
+**governed way to act** (a vetted catalog, an impact×reversibility bound, approval, an immutable
+audit). Rent your monitoring for the metrics; steadystate is the layer that knows your *desired*
+state and can safely return you to it.
 
-**Everything pluggable is a seam.** Sources (what to reconcile), domain packs (security/compliance scoring), surfaces (where alerts go), and probes (live health) are entry-point plugins — a third-party package adds one without forking. The core runs with **no model at all**: detection, scoring, correlation, and the apply decision are deterministic and fully testable. An LLM is an optional add-on (an Anthropic key or any OpenAI-compatible endpoint) for plain-language reasoning and, where you grant it, *proposing* a fix or *driving* the tool as an agent.
+## Two postures, one core
 
-**Define what *healthy* means for your app.** Running ≠ working. Beyond the platform's generic verdict, declare **custom checks** — *is postfix routing mail? is squid running on the proxy hosts? has the gateway gone cold?* — as a **vetted, read-only rule** (Kubernetes, docker, or Ansible) that emits a finding and **never runs code**. Author them in plain English (`define-check`) or let an agent fill the schema (`add-check`); either way the schema is the gate. And *"is my app healthy?"* means **your** workloads — steadystate tells your app apart from the Rancher/k8s plumbing.
+steadystate runs in two shapes that share the same deterministic engine and the same committed
+runbook:
 
-**Operate it where you work** — the terminal, chat (Slack/Teams/Discord, with natural-language understanding when an LLM is configured, so *"why is web crashlooping?"* resolves to a vetted command), or an agent over **MCP** (steadystate runs as a Model Context Protocol server). Remediation is gated identically through all three: a vetted action catalog, an impact×reversibility **bound**, and an approve + immutable audit trail. **The LLM proposes _what_; a deterministic gate decides _whether_** — the full control model is **[LLM_SAFETY.md](./LLM_SAFETY.md)**.
+| | **Live watcher** | **Repo-native (GitOps)** |
+|---|---|---|
+| Runs | a long-running server/CLI next to a deployment | **stateless, in CI**, inside the IaC repo |
+| Holds | creds, a kubeconfig, a state db | **nothing** but the repo + a token |
+| Acts by | guardrailed remediation on live infra (when you grant it) | **opening a PR / an issue** — a human merges |
+| Driven by | you, or an agent over **MCP** | one CI line: `steadystate ci` |
 
-It's not a dashboard to babysit: steady state is silence — you hear from it only when something departs in a way worth attention.
+Post-deploy and pre-deploy, the *same* tool. The PR-bot posture is the safest actuator there is — it
+has **zero infra access**; its only power is a proposal you review. See
+[`docs/repo-native-posture.md`](./docs/repo-native-posture.md).
+
+## Is it *working*? — the verdict, function-first
+
+Running ≠ working. steadystate leads with the question an operator actually asks — **is it
+working?** — and answers `WORKING | DEGRADED | DOWN`:
+
+- **Smoke tests** — the strongest signal is to *exercise* the service: an `http` check GETs an
+  endpoint and asserts the response. A service that won't answer **is** the service being down.
+- **Live malfunction (`Symptom`)** vs **drift** — a `CrashLoopBackOff` is the app *failing now*; a
+  diverged config is drift. steadystate keeps them distinct, and when a failing resource *also*
+  drifted, folds them into **one root-caused alert** (*"failing — likely cause: this drift"*).
+- **Function-first triage** — `summary` leads with *what's impaired* (a live malfunction worth
+  attention), not a wall of findings, so neither you nor an agent chases a red herring. A serious
+  config drift (an opened firewall) is still **flagged for review** — never buried, never called a
+  malfunction.
+- **Correlation + enrichment** — scoped to a workload, it correlates the smoke result, the live
+  symptoms, and the drift that likely caused them, and folds in live metrics from *your* monitoring
+  (Prometheus) as context. It rents the metrics; it never reimplements monitoring.
+
+## Your runbook — author a fix once, then it's everywhere
+
+The other half of grounded truth is *what to do about it*. A **solution** is an operator-vouched
+`problem → fix` — *"for evicted pods, run this; for a hung gateway, reboot it"* — committed to
+`steadystate/solutions.json`, the catalog you grow over time:
+
+- **Authored or learned.** Write one (`add-solution`), describe it in plain English
+  (`define-solution`), or let `learn` notice a fix you keep applying by hand and hand you the exact
+  command to capture it. Each is **signed by an author** — the audit anchor.
+- **Matched + surfaced.** When a finding matches (by category or a title regex), `show` names the
+  documented fix and who vouched, a CI-opened **issue carries it**, and an agent over MCP sees the
+  same — your runbook, right where the problem is.
+- **Run through the gate.** A matched fix becomes a one-`approve` remediation, run as an argv (no
+  shell) and audited with author + approver. Opt in to **auto-apply** (`STEADYSTATE_SOLUTION_AUTO`)
+  and a *low-impact, reversible* one runs unattended — anything bigger always waits for a human.
+
+## Act — within a bound you *commit*
+
+Acting is gated identically everywhere — terminal, chat, agent, CI:
+
+- **A vetted catalog** — the only commands it can run are a fixed menu of safe shapes, re-validated
+  at run time against an injection-proof allow-pattern; an authored solution is *your* extension of
+  that catalog, vouched and audited.
+- **The bound** — every action carries an envelope (*impact* × *reversibility*). The bound is the one
+  decision that should never be casual, so you **commit it** in `steadystate/config.toml`'s `[bound]`
+  table — *reviewed in a PR*, not a loose env var. A lossless, tenant-scoped fix runs in bound;
+  scaling to zero or deleting a node escalates to a human.
+- **Approval + an immutable audit** — nothing effectful runs unseen; every approve / decline /
+  auto / break-glass appends to `history`.
+- **Autonomy is a switch, not a track record** — off by default, granted by you (`STEADYSTATE_*_AUTO`),
+  bounded by the envelope above.
+
+> **The LLM proposes _what_; a deterministic gate decides _whether_.** The full control model — and,
+> just as honestly, *where the guarantee ends* (a shell-enabled agent's real limit is its RBAC, not
+> us) — is **[LLM_SAFETY.md](./LLM_SAFETY.md)**. Ask the tool itself with `steadystate posture`.
+
+## Drive it — terminal, chat, agents, CI
+
+The *same* vetted command grammar, four ways in:
+
+- **Terminal** — `steadystate health` for the working/degraded/down verdict; `summary` for the
+  one-glance rollup; `findings` / `show` to inspect; `chat` for a local REPL.
+- **Chat** (Slack / Teams / Discord) — signed webhooks; `@steadystate probe <target>`, approve from a
+  button. With an LLM, plain English works (*"why is web crashlooping?"*) — a read-only ask runs, an
+  effectful one is echoed back to confirm. Chat is a trigger, never a bypass.
+- **Agents over MCP** — `steadystate mcp` runs as a Model Context Protocol server (stdio, stdlib-only)
+  so Claude Code/Desktop or any agent drives the same verbs through the same guardrails. Three grant
+  tiers: **read-only** (default) → **`--author`** (write checks + runbook solutions, *not* infra) →
+  **`--write`** (remediate). Make it an agent's *sole* actuator — no shell, steadystate holds the
+  creds — and the gate becomes a real fence (see the `contained-agent` example).
+- **CI** — `steadystate ci`: stateless, deterministic, no creds; scan the IaC, gate the merge
+  (non-zero on a problem), and open a PR/issue that already says how to fix it.
+
+## Detect — the grounded truth it's built on
+
+Everything here runs with **no model**: fully deterministic, fully testable. It rides each tool's own
+machine-readable output (`terraform show -json`, `kubectl`, `helm`, …), never raw-file parsing.
+
+- **Sources** (`--source`) — `terraform · terraform-state · ansible · kubernetes · rancher · argocd ·
+  docker-compose · helm`, plus live variants. **`terraform-state`** diffs config-vs-state with
+  `-refresh=false` — *no per-resource cloud refresh*, so a CI gate needs only state-bucket read, not
+  broad cloud creds.
+- **Drift** vs **malfunction** (`--probe`) — config diverged vs failing-right-now, folded when both.
+- **Custom checks** — declare what *healthy* means for **your** app (*is postfix routing mail? is
+  squid up?*) as a vetted, read-only rule that emits a finding and **never runs code**; author by
+  talking (`define-check`) or let an agent fill the schema (`add-check`).
+- **Domain packs + live compliance** — security (AWS · GCP · Azure → ATT&CK), Docker CIS, k8s Pod
+  Security; a CIS/STIG live-posture scan, honest about what's checkable live.
+- **Surfaces** (`--to`) — `console · slack · teams · discord · github · servicenow · pagerduty ·
+  prometheus · grafana · webhook`. **`github`** opens an issue *when sure* (deduped by fingerprint,
+  auto-closed when it clears, and carrying the matched runbook fix); an unconfigured surface says so
+  and skips.
+- **Silos** — name your deployments (`silo add`, `--silo <name>` works like `git -C`) so a laptop
+  drives deployment 1, 2, 3 — each its own db + targets + kubeconfig — without collision.
+- **Extensible** — sources, packs, surfaces, probes, metric adapters are entry-point plugins; a
+  third-party package adds one without a fork. Self-describing: `catalog` / `commands`.
+
+## Config as code
+
+The same convention all the way down: **committed beside your IaC, reviewed in PRs**.
 
 ```
-detect → probe → reason → surface → suggest → approve → act
+your-iac-repo/
+├── main.tf, ...
+├── steadystate/                  # COMMITTED intent
+│   ├── config.toml               # [defaults] source/path · [bound] the envelope · [ci] the gate
+│   ├── solutions.json            # your runbook (problem → fix)
+│   └── checks.json               # what "healthy" means for your app
+└── .steadystate/                 # gitignored ephemeral state (state.db, patches)
 ```
 
-Every environment variable — providers, surfaces, listeners, and the autonomy dials — is in **[CONFIG.md](./CONFIG.md)**; `steadystate doctor` shows what's set (and the live value of each dial).
+Precedence is 12-factor and non-breaking: **flag > env var > config > built-in default**. Every
+variable is in **[CONFIG.md](./CONFIG.md)**; `steadystate doctor` shows what's set and each dial's
+live value.
 
-## Getting started — point it at *your* setup
+## The optional LLM — advises, never decides
 
-Not sure which `--source` fits, or what to feed it? Start from the directory holding your IaC and let the tool tell you. The four steps escalate: **what's possible → what's actually there → register it → scan it.**
+An LLM adds the plain-language *"why this matters"*, groups events by root cause, answers questions
+in chat, drafts a check/solution from your words, and — where you grant it — *proposes* a remediation
+or *drives* the tool as an agent. But detection, scoring, correlation-fallback, and the apply
+decision stay deterministic, and a proposed action runs only if the gate authorizes it.
 
-```bash
-cd your-infra/
+- **Providers** — Anthropic (`ANTHROPIC_API_KEY`) or any OpenAI-compatible endpoint.
+- **Kill switch + egress gate** — `--no-llm` makes zero calls; `--confirm-llm` shows the exact prompt
+  + destination and asks before anything is sent (decline → degrades to deterministic).
+- **Cost** — every scan prints `LLM: N calls · ~$X`; `steadystate cost` rolls it up; surface
+  `steadystate_llm_cost_usd_total` to Prometheus.
 
-# 1. What can I scan here? Per --source and --probe: is the CLI installed, the backend
-#    reachable, an input present? — and the exact command to run for each.
-steadystate discover
+## Honest about what it is
 
-# 2. Go live (read-only): interrogate the reachable backends and tailor the advice to what's
-#    really there — your actual cluster nodes, Helm releases, compose projects, Argo apps —
-#    with commands carrying your real release/namespace names.
-steadystate discover --deep
+The pieces aren't all novel — CI drift detection exists (Spacelift, env0, Terraform Cloud, driftctl)
+and IaC PR-bots exist (Atlantis). What's different is the **combination**: a committed, *matched
+runbook* (your problem→fix knowledge, not just a diff); a **function-first verdict** with the bound
+(is it *working*, and is this *safe* to auto-fix?); **one substrate across both postures** sharing
+that runbook; and the PR-bot as a *deliberately* zero-access actuator. A deployment model and a
+coherence, more than a single unique feature — and the lowest-friction front door to all of it.
 
-# 3. Register what it found as named targets (name -> source + path), so the CLI, a scheduled
-#    job, and a chat-summoned `@steadystate probe <name>` all resolve it without hand-writing
-#    JSON. Named after the directory; suffixed per source when several are found. Merges, never
-#    clobbers. `steadystate targets [--check]` lists and validates the registry.
-steadystate discover --create        # writes .steadystate/targets.json (or $STEADYSTATE_TARGETS)
+## Pointers
 
-# 4. Scan — by target name (source/path/label/probe come from the registry) ...
-steadystate scan --target your-infra
-#    ... or spell it out with the command discover handed you:
-steadystate scan . --source terraform
-```
-
-`discover` is read-only and safe to run anywhere; `--deep` only runs `get`/`list` reads and skips any backend it can't reach. Nothing here writes to your infrastructure.
-
-## What it does — the deterministic core
-
-Everything here runs with **no model**: fully deterministic, fully testable.
-
-- **Sources** (`--source`) — `terraform · ansible · kubernetes · rancher · argocd · docker-compose · helm`. Each rides the tool's own machine-readable output, never raw-file parsing.
-- **Drift** — reconcile declared vs observed, score, and surface only what clears the bar.
-- **Malfunction** (`--probe kubectl|docker|argocd`) — read the live health verdict the platform already computes into a first-class **Symptom**, even with no drift. If that resource *also* drifted, the Symptom and Drift fold into **one root-caused alert** (*"failing — likely cause: this drift"*).
-- **Verify the left** (`steadystate verify <dir>`) — render your declared Git state (a **Kustomize** overlay or a **Helm** chart, auto-detected, with the platform's own tooling) and reconcile it against the live cluster, scoped to the namespaces it touches: *in Git but not running* (ADDED), *running but drifted* (an out-of-band image/replica change → MODIFIED), *running but not in Git* (REMOVED). Coarse on purpose, so it flags real divergence — including the kind `helm upgrade` leaves in place.
-- **Domain packs + live compliance** — security (AWS · GCP · Azure, mapped to ATT&CK), Docker CIS, Kubernetes Pod Security; a stacked **CIS/STIG live-posture scan** flags standing violations, not just drift, with an honest disclaimer about what's checkable from the live side.
-- **Enrichment** (`--enrich`) — escalate a drift that's *also* live-dangerous right now: `prometheus` (a resource breaching a PromQL bar) or `sentinel` (a resource with an active Microsoft Sentinel incident — the SIEM is firing on it). Reads a verdict the monitor/SIEM already computed; never detects itself.
-- **Surfaces** (`--to`) — `console · slack · teams · discord · prometheus · grafana · webhook · pagerduty`. **`webhook`** POSTs each alert as JSON to any endpoint (Opsgenie/Jira/ServiceNow/a bus); **`pagerduty`** opens an incident per alert (Events API v2, deduped by fingerprint) — so a drift breaching a PromQL bar *right now* can page, not just post. An unconfigured surface says so and skips; it never pretends it delivered.
-- **Guardrailed remediation** (`--autonomy observe|suggest|auto`) — apply-eligibility → snapshot → verify, with **advisory revert** guidance (Terraform/Ansible aren't transactional, so rollback is steps to run, not an automatic undo). Approve from the terminal or a chat button (Slack/Teams/Discord). A `REMOVED` drift is never auto-eligible, so it reconciles *toward* declared config and never destroys. **Applying is per-source: only `terraform` and `ansible` have executors** — the other five are *detect-only* (drift is surfaced, not applied), and each alert is tagged **`can apply`** vs **`manual`** so you know which is which.
-- **Two ways to fix, picked at review** — a `suggest` suggestion carries both directions where they exist: the **enforce** command `approve` would run (change reality to match config), *and* an **accept-reality patch** — a reviewable code change (change config to match reality), computed **deterministically** (the model never authors it). The first patch case is a Terraform `REMOVED` drift, where enforcing would *destroy* the resource: instead, the patch **re-adds the deleted declaration** so the destroy is averted. `steadystate pending` shows the patch; you `git apply` + merge it, or **`scan --deliver github-pr`** opens it as a PR (via the GitHub API — the Actions `GITHUB_TOKEN` works, no personal PAT) so drift flows through your normal review (CODEOWNERS/CI). The tool never applies a code change itself — auth lives only in the delivery adapter, and `--deliver patch-file` needs none, so it works even where automation can't authenticate as a person (e.g. GitHub EMU).
-- **Extensible** — sources, packs, surfaces, and probes are plugins; a third-party package adds one via an entry point, no fork.
-
-Self-describing: `steadystate catalog` and `steadystate commands` print exactly what this build can do and run.
-
-## The homeostat — act on the known-safe, escalate the rest
-
-For live Kubernetes malfunctions, steadystate can do more than surface — it can **maintain steady state within a bound you set**.
-
-- **A vetted catalog** — the only commands it can ever run are a fixed menu of safe shapes (reclaim evicted pods, rollout-restart a controller, …), each re-validated at run time against a **flexible-but-injection-proof allow-pattern**: argument order can vary, but a shell metacharacter, an unknown flag, a wrong value, or a bare-pod target is rejected.
-- **The bound** — every action carries an envelope (*impact* × *reversibility*). A lossless, tenant-scoped reclaim is inside the default bound; scaling to zero or deleting a node is outside it and **escalates to a human**. The gate judges the *catalog's* envelope, never a proposer's claim.
-- **A decider that proposes, a gate that decides** — a deterministic `CatalogDecider` (and, optionally, an `LLMDecider`) proposes one menu action; the gate authorizes it only if it's vetted, valid, and within the bound. **Autonomy is a switch** (`STEADYSTATE_DECIDER_AUTO` / `STEADYSTATE_REFLEX_AUTO`), off by default — granted by you, never earned by a track record.
-
-Validated on a live cluster: it reclaimed evicted pods autonomously (in bound) and **escalated** a crash-loop's scale-to-zero (out of bound) rather than running it. The full control model is **[LLM_SAFETY.md](./LLM_SAFETY.md)**.
-
-## Operate it — terminal, chat, and agents (MCP)
-
-Same vetted command grammar, three ways in:
-
-- **Terminal** — `steadystate summary` for a one-glance rollup; `findings` / `show` to inspect; `chat` for a local REPL.
-- **Chat** (Slack / Teams / Discord) — signed webhooks; `@steadystate probe <target>`, approve from a button. With an LLM configured, **plain English works**: ask *"why is web crashlooping?"* and get a grounded answer (or `explain <finding>`); a read-only request runs, an effectful one is echoed back for you to confirm — chat is a trigger, never a bypass.
-- **Agents over MCP** — `steadystate mcp` runs as a **Model Context Protocol** server (stdio, stdlib-only, no SDK) so Claude Code/Desktop or any agent can drive the *same* verbs through the *same* guardrails: **tools** to call, **resources** to pull state into context, and **prompts** like `triage`. Read-only by default; effectful verbs need `--write` and are audited as the `mcp` actor.
-
-## LLM reasoning — optional add-on, with safety + cost controls
-
-An LLM adds the plain-language **"why this matters"**, groups events by root cause, answers questions in chat, and — where you grant it — **proposes** a remediation or **drives** the tool as an agent. But detection, scoring, the packs, the correlation fallback, and the apply decision stay deterministic, and a proposed or agent-driven action runs only if a deterministic gate authorizes it: **the model proposes _what_; the gate decides _whether_.** The full control model — the bound, the vetted catalog, the egress + autonomy switches, the audit trail — is **[LLM_SAFETY.md](./LLM_SAFETY.md)**.
-
-- **Providers** — Anthropic (`ANTHROPIC_API_KEY`) or any OpenAI-compatible endpoint (`STEADYSTATE_LLM_BASE_URL` / `_API_KEY` / `_MODEL`).
-- **Safety**
-  - **Kill switch** — `--no-llm` (or `STEADYSTATE_LLM_ENABLED=false`) makes zero model calls.
-  - **Egress gate** — `--confirm-llm` shows the exact prompt + destination and asks *before* anything is sent; decline and nothing leaves the box (the scan degrades to deterministic). A per-call data-egress review, and a hard spend gate.
-  - **Honest by construction** — the model recommends the fix only, never speculating about what the tool can do; the *can-apply* verdict is computed deterministically, not by the model; no capability or config data is added to the prompt.
-- **Cost**
-  - Every scan prints a one-line **`LLM: N calls · ~$X`** footer (`--cost` breaks it down by caller).
-  - `steadystate cost` rolls up spend by caller over all / 24h / 60m, or as a `--by day|week` trend (priced at read time, cache-aware).
-  - Surface `steadystate_llm_cost_usd_total` to **Prometheus → Grafana** for a time series.
-
-## State — stateless by default, memory with SQLite
-
-A scan is **stateless** by default (`--stateless` forces a pure, amnesiac run). Point `--state <file.db>` at a small **SQLite** file and it becomes memoryful:
-
-- **new / recurring / resolved** — a finding is tracked across scans, so you see what *changed*, not the same wall every run.
-- **mute / snooze** — silence a known-benign finding by fingerprint; suppression is honored on future scans and chat probes.
-- **pending approvals + audit log** — `--autonomy suggest` records eligible remediations to approve later, and every approve / decline / auto-apply appends to an immutable `history`.
-- **LLM spend history** — token usage stored and re-priced at read time.
-
-It's one file — mount a volume to persist it across runs; the scheduled scan and the chat listener share it.
-
-## Deploying
-
-See **[`examples/`](./examples/)** — worked deployment scenarios (a CI drift check, an in-cluster CronJob, a persistent chat listener, and live **fleet health** from a dir of kubeconfigs), each a short walkthrough plus the model they share. The ready-to-adapt container image and manifests they apply live under [`deploy/`](./deploy/).
-
-## Design
-
-See **[ARCHITECTURE.md](./ARCHITECTURE.md)** — the thesis (drift **and** malfunction), the canonical state model (Drift · PolicyFinding · Symptom), the plugin seams, the guardrail model, and the build-vs-rent decisions.
+- **[CONFIG.md](./CONFIG.md)** — every variable + the committed `config.toml`.
+- **[LLM_SAFETY.md](./LLM_SAFETY.md)** — the control model, and where the guarantee ends.
+- **[docs/repo-native-posture.md](./docs/repo-native-posture.md)** — the GitOps posture, end to end.
+- **[ARCHITECTURE.md](./ARCHITECTURE.md)** — the state model, the seams, build-vs-rent.
+- **[examples/](./examples/)** — worked scenarios: repo-native CI, custom checks, the runbook, a
+  contained agent, brokered creds, fleet health, an MCP-driven wall.
+- **[SECURITY.md](./SECURITY.md)** — scope + how to report a vulnerability.
 
 ## Built with
 
-Python, stdlib-only at the core (HTTP/LLM via `urllib`; `typer` + `rich` for the CLI). Ship via `pip` or the container image.
-
-## Security
-
-A tool that can change live infrastructure should hold itself to the bar it enforces. Every PR is scanned — **CodeQL** (SAST), **pip-audit** (dependency CVEs), and **bandit** (Python SAST), plus Dependabot — and every outbound request goes through one http(s)-allow-listed gate. The remediation **guardrails** (apply-eligibility → snapshot → verify, with advisory revert guidance; chat and agents are triggers, never a bypass) are the highest-severity area: see **[SECURITY.md](./SECURITY.md)** for what's in scope and how to report a vulnerability privately, and **[LLM_SAFETY.md](./LLM_SAFETY.md)** for how a model or agent is kept inside the envelope you set.
-
-## License
-
-Apache-2.0. See [LICENSE](./LICENSE).
+Python, stdlib-only at the core (HTTP/LLM via `urllib`; `typer` + `rich` for the CLI). Ship via `pip`
+or the container image. Apache-2.0 — see [LICENSE](./LICENSE).
