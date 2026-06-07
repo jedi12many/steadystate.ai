@@ -858,25 +858,38 @@ def _render_smoke(checks_path: str = "") -> str:
     return "\n".join(lines)
 
 
-def _render_health(state_path: str, checks_path: str = "") -> str:
+def _names_workload(finding: Finding, workload: str) -> bool:
+    """Whether a finding belongs to ``workload`` -- by its structured ``workload`` field (a Symptom
+    carries it) or, failing that, by the name appearing in its title. A forgiving substring match,
+    so `health gateway` catches `akeyless-gateway`."""
+    w = workload.lower()
+    wl = (finding.details or {}).get("workload", "").lower()
+    if wl:
+        return w in wl
+    return w in (finding.last_title or "").lower()
+
+
+def _render_health(state_path: str, checks_path: str = "", workload: str = "") -> str:
     """The one-call "is it working?" verdict, leading with the active signal: run the `http` smoke
     tests (proof), fold in the live malfunctions (impaired), and answer WORKING | DEGRADED | DOWN.
-    The agent's headline question -- and read-only, so it can ask without a write grant."""
-    smoke = run_smoke_checks(checks_path)
+    With ``workload`` it scopes to one workload and **correlates** -- the smoke result, the live
+    symptoms, AND a config drift on that same workload (a likely cause). Read-only; no grant."""
+    smoke = run_smoke_checks(checks_path, match=workload)
     smoke_fail = [r for r in smoke if not r.passed]
     impaired: list[Finding] = []
+    drifted: list[Finding] = []
     if state_path and Path(state_path).exists():
         with StateStore(state_path) as store:
             findings = filter_findings(store.all_findings(), "")  # open view
-        impaired = [
-            f
-            for f in findings
-            if finding_layer(f.details, f.last_title) == APPLICATION
-            and finding_disposition(f.details) == IMPAIRED
-        ]
+        app = [f for f in findings if finding_layer(f.details, f.last_title) == APPLICATION]
+        if workload:
+            app = [f for f in app if _names_workload(f, workload)]
+        impaired = [f for f in app if finding_disposition(f.details) == IMPAIRED]
+        drifted = [f for f in app if "change" in (f.details or {})]  # config diverged here
     verdict = wall_verdict(len(impaired), len(smoke_fail))
     smoke_part = f"smoke {len(smoke) - len(smoke_fail)}/{len(smoke)} pass" if smoke else "no smoke"
-    head = f"{verdict}  --  {smoke_part}  |  {len(impaired)} impaired"
+    scope = f"{workload}  --  " if workload else ""
+    head = f"{verdict}  --  {scope}{smoke_part}  |  {len(impaired)} impaired"
     lines = [head]
     for r in smoke_fail:  # name what's actively failing
         why = f" -- {r.detail}" if r.detail else ""
@@ -884,8 +897,13 @@ def _render_health(state_path: str, checks_path: str = "") -> str:
     if impaired:
         worst = min(impaired, key=lambda f: (-_SEVERITY_RANK.get(f.last_severity, 0), f.first_seen))
         lines.append(f"  worst impaired: {worst.last_title}  [{worst.last_severity}]")
+    # Correlation -- the fresh edge: if something's wrong AND a config drift sits on the same
+    # workload, surface it as a likely cause (steadystate knows declared-vs-observed; monitoring
+    # doesn't). A NOTED drift on a working app stays out of it (don't chase red herrings).
+    if (smoke_fail or impaired) and drifted:
+        lines.append(f"  likely cause: {drifted[0].last_title}  (config drift on this workload)")
     if verdict == WORKING and not smoke:
-        lines.append("  (no smoke test defined -- add an `http` check to actively verify)")
+        lines.append("  (no smoke test here -- add an `http` check to actively verify)")
     return "\n".join(lines)
 
 
@@ -1053,7 +1071,7 @@ def run_command(command: Command, state_path: str) -> str:
     if command.verb == LEARN:
         return _render_learn(state_path)
     if command.verb == HEALTH:
-        return _render_health(state_path)
+        return _render_health(state_path, workload=command.argument)
     if command.verb == CHECKS:
         return _render_checks()
     if command.verb == SMOKE:

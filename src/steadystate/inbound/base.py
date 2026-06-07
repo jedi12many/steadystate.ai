@@ -96,7 +96,8 @@ COMMANDS: dict[str, tuple[str, str]] = {
     HEALTH: (
         "health",
         "the one-glance 'is it actually working?' verdict (WORKING | DEGRADED | DOWN) -- runs the "
-        "`http` smoke tests live and folds in the live malfunctions. The headline question",
+        "`http` smoke tests live and folds in the live malfunctions. Add a workload name to scope "
+        "to it and correlate (smoke + symptom + the drift that likely caused it). The headline Q",
     ),
     CHECKS: ("checks", "list this wall's custom health checks (.steadystate/checks.json)"),
     SMOKE: (
@@ -222,7 +223,7 @@ _TOOL_ARGS: dict[str, tuple[tuple[str, bool], ...]] = {
     SUMMARY: (),
     TARGETS: (),
     PENDING: (),
-    HEALTH: (),
+    HEALTH: (("workload", False),),  # optional: scope the verdict to one workload + correlate
     CHECKS: (),
     SMOKE: (),
     ADD_CHECK: (("check", True),),  # one arg: the check as a JSON object/string
