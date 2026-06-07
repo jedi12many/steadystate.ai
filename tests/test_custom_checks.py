@@ -25,6 +25,7 @@ from steadystate.probe.custom import (
     load_checks,
     parse_check,
     resolve_checks_path,
+    run_smoke_checks,
 )
 
 _GOOD = {
@@ -446,3 +447,51 @@ def test_http_smoke_unreachable_is_a_failure_not_a_noop(monkeypatch):
     syms = _smoke_eval("http://127.0.0.1:1/health", monkeypatch).evaluate()  # nothing listening
     assert len(syms) == 1 and "did not respond" in syms[0].detail
     assert syms[0].provenance.source == "custom-check"  # rides the pipeline as a Symptom
+
+
+# -- the `smoke` verb: run the smoke tests live and report PASS *and* FAIL ------------------------
+
+
+def _two_http_checks(good_url: str, bad_url: str):
+    good = parse_check({**_SMOKE, "read": {"kind": "http", "url": good_url}})
+    bad = parse_check(
+        {**_SMOKE, "name": "db-smoke", "read": {"kind": "http", "url": bad_url}, "when": {}}
+    )
+    return [c for c in (good, bad) if c is not None]
+
+
+def test_run_smoke_checks_reports_a_pass_affirmatively_not_just_silence(monkeypatch):
+    import steadystate.probe.custom as mod
+
+    with _server(200, "all ok here") as good, _server(503, "down") as bad:
+        monkeypatch.setattr(mod, "load_checks", lambda _p="": _two_http_checks(good, bad))
+        by = {r.name: r for r in run_smoke_checks()}
+    assert (
+        by["gw-smoke"].passed is True and by["gw-smoke"].detail == ""
+    )  # a PASS is SHOWN, not silent
+    assert by["gw-smoke"].kind == "http" and by["gw-smoke"].target.endswith("/health")
+    assert by["db-smoke"].passed is False and "503" in by["db-smoke"].detail
+
+
+def test_smoke_verb_renders_failures_first_and_dispatches(monkeypatch):
+    import steadystate.probe.custom as mod
+    from steadystate.inbound.base import SMOKE, Command
+    from steadystate.inbound.server import _render_smoke, run_command
+
+    with _server(200, "all ok here") as good, _server(503, "down") as bad:
+        monkeypatch.setattr(mod, "load_checks", lambda _p="": _two_http_checks(good, bad))
+        out = _render_smoke()
+        assert "1 pass, 1 FAIL" in out
+        assert out.index("[FAIL]") < out.index("[PASS]")  # failures lead -- the thing that matters
+        assert "gw-smoke" in out and "db-smoke" in out
+        # rides the chat/MCP grammar like any other verb
+        assert "FAIL" in run_command(Command(SMOKE, "mcp"), ":memory:")
+
+
+def test_smoke_with_no_http_checks_is_a_clear_note(monkeypatch):
+    import steadystate.probe.custom as mod
+    from steadystate.inbound.server import _render_smoke
+
+    monkeypatch.setattr(mod, "load_checks", lambda _p="": [])
+    assert run_smoke_checks() == []
+    assert "no smoke tests" in _render_smoke()

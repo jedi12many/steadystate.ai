@@ -35,7 +35,7 @@ from ..engine import build_report
 from ..health import IMPAIRED, NOTED, finding_disposition
 from ..notify import SURFACES
 from ..onboarding import Status, capabilities
-from ..probe.custom import add_check, describe_check, load_checks
+from ..probe.custom import add_check, describe_check, load_checks, run_smoke_checks
 from ..reason.alert import Alert, Layer, Severity
 from ..reason.cost import roll_up, roll_up_by_period, scan_cost_line
 from ..reason.llm import LLMAnalyst
@@ -64,6 +64,7 @@ from .base import (
     RUN,
     SEND,
     SHOW,
+    SMOKE,
     SNOOZE,
     SUMMARY,
     SURFACES_LIST,
@@ -837,6 +838,25 @@ def _render_checks(checks_path: str = "") -> str:
     return f"{len(checks)} custom check(s):\n" + "\n".join(f"  {describe_check(c)}" for c in checks)
 
 
+def _render_smoke(checks_path: str = "") -> str:
+    """Run the wall's `http` smoke tests live and report PASS/FAIL each -- the affirmative
+    'is it actually working?' view. Active (GET/HEAD), read-only. [] of checks -> a clear note."""
+    results = run_smoke_checks(checks_path)
+    if not results:
+        return "no smoke tests defined -- add an `http` check to actively verify a service."
+    passed = sum(1 for r in results if r.passed)
+    failed = len(results) - passed
+    head = f"{len(results)} smoke test(s): {passed} pass" + (f", {failed} FAIL" if failed else "")
+    lines = [head]
+    for r in sorted(results, key=lambda r: r.passed):  # failures first
+        mark = "PASS" if r.passed else "FAIL"
+        line = f"  [{mark}] {r.name}  {r.target}"
+        if not r.passed and r.detail:
+            line += f" -- {r.detail}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def _add_check(payload: str, checks_path: str = "") -> str:
     """Validate a check (a JSON object, or a JSON string) against the vetted schema and store it.
     The schema is the gate -- only a valid, observe-only check is written. Used by the `add-check`
@@ -1002,6 +1022,8 @@ def run_command(command: Command, state_path: str) -> str:
         return _render_learn(state_path)
     if command.verb == CHECKS:
         return _render_checks()
+    if command.verb == SMOKE:
+        return _render_smoke()
     if command.verb == ADD_CHECK:
         return _add_check(command.argument)
     with StateStore(state_path) as store:

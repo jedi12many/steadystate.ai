@@ -113,6 +113,19 @@ class CustomCheck:
         return "millicores" if self.kind == "kubectl-cpu" else "MiB"
 
 
+@dataclass(frozen=True)
+class CheckResult:
+    """One smoke test's outcome -- PASS or FAIL, with the target and a reason. Unlike a Symptom
+    (emitted only on failure), a result is reported either way, so `smoke` can affirmatively show
+    that a service is *working*, not merely that nothing failed."""
+
+    name: str
+    kind: str
+    passed: bool
+    detail: str  # the failure reason when not passed; "" on a pass
+    target: str  # what was exercised (the URL)
+
+
 def parse_check(raw: dict) -> CustomCheck | None:
     """Build a :class:`CustomCheck` from one JSON object, or None if it's malformed / uses a read
     kind or operator outside the vetted set. The validation IS the safety boundary on the schema."""
@@ -664,14 +677,29 @@ class HttpCheckEvaluator:
         self._timeout = timeout
 
     def evaluate(self) -> list[Symptom]:
-        symptoms: list[Symptom] = []
+        """The pipeline view: a Symptom for each FAILED smoke test (a passing one is silent)."""
+        return [
+            _to_symptom(check, detail, ev, "") for check, ok, detail, ev in self._run() if not ok
+        ]
+
+    def results(self) -> list[CheckResult]:
+        """The affirmative view: PASS *and* FAIL for every smoke test -- so `smoke` can show that
+        the gateway is *working*, not just the absence of a failure. The close-the-loop verdict."""
+        return [
+            CheckResult(
+                name=check.name, kind=check.kind, passed=ok, detail=detail, target=check.url
+            )
+            for check, ok, detail, _ev in self._run()
+        ]
+
+    def _run(self) -> list[tuple[CustomCheck, bool, str, dict[str, str]]]:
+        out: list[tuple[CustomCheck, bool, str, dict[str, str]]] = []
         for check in load_checks(self._checks_path):
             if check.kind != "http":
                 continue
             ok, detail, evidence = self._request(check)
-            if not ok:
-                symptoms.append(_to_symptom(check, detail, evidence, ""))
-        return symptoms
+            out.append((check, ok, detail, evidence))
+        return out
 
     def _request(self, check: CustomCheck) -> tuple[bool, str, dict[str, str]]:
         """GET/HEAD the URL and judge the response: (ok, detail, evidence). A connection failure or
@@ -776,3 +804,13 @@ def evaluate_custom_checks(
     if any(c.kind in _HTTP_KINDS for c in checks):
         symptoms += HttpCheckEvaluator(checks_path=checks_path).evaluate()
     return symptoms
+
+
+def run_smoke_checks(checks_path: str = "") -> list[CheckResult]:
+    """Run the wall's ``http`` smoke tests live and return each one's PASS/FAIL -- the affirmative
+    'is it working?' view (a passing test is *shown*, not just silent). [] when none are defined.
+    Active but read-only (GET/HEAD). Backs the `smoke` verb + the agent's close-the-loop check."""
+    checks_path = resolve_checks_path(checks_path)
+    if not any(c.kind in _HTTP_KINDS for c in load_checks(checks_path)):
+        return []
+    return HttpCheckEvaluator(checks_path=checks_path).results()

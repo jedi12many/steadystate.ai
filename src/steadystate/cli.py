@@ -1431,6 +1431,19 @@ def checks(checks: str = _CHECKS_OPTION) -> None:
     typer.echo(_render_checks(checks))
 
 
+@app.command()
+def smoke(checks: str = _CHECKS_OPTION) -> None:
+    """Run this wall's `http` smoke tests live and report PASS/FAIL each -- the affirmative
+    'is it actually working?' answer (it exercises the endpoint), and an agent's close-the-loop
+    verify after a fix. Active but read-only (GET/HEAD). Exits non-zero if any smoke test fails."""
+    from .inbound.server import _render_smoke
+    from .probe.custom import run_smoke_checks
+
+    typer.echo(_render_smoke(checks))
+    if any(not r.passed for r in run_smoke_checks(checks)):
+        raise typer.Exit(1)  # a failed smoke test -> non-zero, so CI / a script can gate on it
+
+
 @app.command("add-check")
 def add_check_cmd(
     check: str = typer.Argument(..., help="The check as a JSON object."),

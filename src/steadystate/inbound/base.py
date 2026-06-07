@@ -42,6 +42,7 @@ HOLD = "hold"
 LEARN = "learn"
 CHECKS = "checks"
 ADD_CHECK = "add-check"
+SMOKE = "smoke"
 FINDINGS = "findings"
 SHOW = "show"
 SURFACES_LIST = "surfaces"
@@ -92,6 +93,11 @@ COMMANDS: dict[str, tuple[str, str]] = {
         "categories to adopt a reflex for, or that self-heal",
     ),
     CHECKS: ("checks", "list this wall's custom health checks (.steadystate/checks.json)"),
+    SMOKE: (
+        "smoke",
+        "run this wall's `http` smoke tests live and report PASS/FAIL each -- the affirmative "
+        "'is it actually working?' answer (exercises the endpoint), and a close-the-loop verify",
+    ),
     ADD_CHECK: (
         "add-check",
         "define a custom health check from a JSON object -- validated against the vetted schema "
@@ -211,6 +217,7 @@ _TOOL_ARGS: dict[str, tuple[tuple[str, bool], ...]] = {
     TARGETS: (),
     PENDING: (),
     CHECKS: (),
+    SMOKE: (),
     ADD_CHECK: (("check", True),),  # one arg: the check as a JSON object/string
     PROBE: (("target", True),),  # a target name, or "all" for the fleet
     COST: (("period", False),),  # day | week, optional
@@ -237,6 +244,7 @@ _TOOL_EFFECT: dict[str, str] = {
     HELP: "read-only",
     SUMMARY: "read-only",
     CHECKS: "read-only",
+    SMOKE: "read-only",  # active (GET/HEAD probes) but idempotent -- reads, never mutates
     ADD_CHECK: "state-write",  # writes the wall's checks.json -- reversible config, no infra
     TARGETS: "read-only",
     PENDING: "read-only",
