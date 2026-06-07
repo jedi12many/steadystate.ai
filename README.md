@@ -12,6 +12,17 @@ needs: **grounded truth** (what's declared, what's observed, *is it working*, wh
 audit). Rent your monitoring for the metrics; steadystate is the layer that knows your *desired*
 state and can safely return you to it.
 
+## Install
+
+```bash
+pipx install git+https://github.com/jedi12many/steadystate.ai   # today (pre-release)
+pip install steadystate                                          # once published to PyPI
+```
+
+steadystate is a **CLI you run from *inside* your IaC repo** — its config, runbook, and state are
+read CWD-relative, so the repo never imports it as a library. `--silo <name>` chdirs into a
+registered deployment (like `git -C`); the container image lives under [`deploy/`](./deploy/).
+
 ## Two postures, one core
 
 steadystate runs in two shapes that share the same deterministic engine and the same committed
@@ -175,5 +186,5 @@ coherence, more than a single unique feature — and the lowest-friction front d
 
 ## Built with
 
-Python, stdlib-only at the core (HTTP/LLM via `urllib`; `typer` + `rich` for the CLI). Ship via `pip`
-or the container image. Apache-2.0 — see [LICENSE](./LICENSE).
+Python, stdlib-only at the core (HTTP/LLM via `urllib`; `typer` + `rich` for the CLI). Apache-2.0 —
+see [LICENSE](./LICENSE).
