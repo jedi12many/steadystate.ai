@@ -38,7 +38,7 @@ steadystate ci                 # reads steadystate/config.toml; exits non-zero o
 
 ```yaml
 # .github/workflows/steadystate.yml
-- run: pipx install git+https://github.com/jedi12many/steadystate.ai   # `pip install steadystate` once on PyPI
+- run: pip install steadystate
 - run: steadystate ci          # config.toml drives it; non-zero fails the check
   env:
     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # only needed for --to github / --deliver github-pr

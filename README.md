@@ -15,8 +15,7 @@ state and can safely return you to it.
 ## Install
 
 ```bash
-pipx install git+https://github.com/jedi12many/steadystate.ai   # today (pre-release)
-pip install steadystate                                          # once published to PyPI
+pip install steadystate          # or: pipx install steadystate  (the CLI, isolated)
 ```
 
 steadystate is a **CLI you run from *inside* your IaC repo** — its config, runbook, and state are

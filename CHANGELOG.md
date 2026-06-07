@@ -62,7 +62,7 @@ change between releases until 1.0.0. Releases are published as GitHub Releases.
 
 ### Changed
 
-- **Packaging: ready for PyPI (`pip install steadystate`).** Bumped to **0.1.0** (the first real release), and `release.yml` now publishes to **PyPI on a `vX.Y.Z` tag** via **Trusted Publishing** (OIDC -- no API token stored) alongside the existing GitHub Release. Needs a one-time trusted-publisher setup on PyPI (owner only); until the first publish, install from git (`pipx install git+https://github.com/jedi12many/steadystate.ai`). The name `steadystate` is available on PyPI.
+- **Published to PyPI: `pip install steadystate`.** The first real release (**0.1.0**); `release.yml` publishes to **PyPI on a `vX.Y.Z` tag** via **Trusted Publishing** (OIDC -- no API token stored) alongside the GitHub Release.
 
 - **Docs: an honest, upfront statement of what steadystate's gates do and *don't* keep safe (LLM_SAFETY.md).** A new lead section spells out the boundary so no one over-trusts it: steadystate gates every action that flows *through* it (a real fence when it's the agent's *sole* actuator -- no shell, no creds of its own), but it is **not** a sandbox around an agent that also has a shell + your credentials (which can bypass it with raw `kubectl`). The honest rule -- *guardrails on a road, not a fence around the car* -- plus that the real boundary for a shell-enabled agent is its **RBAC/IAM**, and a per-environment posture table (sole-actuator+approval / sole-actuator+auto / broad-access+resilience). Also corrects an overclaim in the intro. README trimmed (dropped the redundant Quickstart; the worked `discover` flow under "Getting started" stays).
 
