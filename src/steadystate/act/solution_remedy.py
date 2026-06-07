@@ -17,20 +17,28 @@ it records (from impact/reversibility) is what a future auto path will read.
 
 from __future__ import annotations
 
+import os
 import re
 import shlex
 import subprocess  # noqa: S404 -- argv list (no shell); the operator authored + vouched for the command
 from datetime import datetime
 
 from ..probe.solutions import Solution, load_solutions, solutions_for
-from ..state import PendingAction, StateStore
+from ..state import APPLIED, APPROVED, FAILED, VERIFIED, AuditEntry, PendingAction, StateStore
 from .base import RemediationResult
-from .bounds import Envelope, Impact, Reversibility
+from .bounds import Envelope, Impact, Reversibility, bound_from_env, within_bounds
 from .plan import RemediationPlan, Risk
 
 # The sentinel ``source`` marking a PendingAction as an authored-solution command (apply_pending
 # routes on it). Not a real DriftSource -- the stored command is the whole action.
 SOLUTION_SOURCE = "solution"
+
+# The opt-in to AUTO-APPLY matched solutions (off by default). Even on, only a solution WITHIN THE
+# BOUND auto-runs -- so a reboot / anything not low-impact-and-reversible always waits for a human.
+# Distinct from the drift/decider autonomy on purpose: auto-running an authored command is its own
+# explicit trust decision, never enabled as a side effect of turning on drift auto-apply.
+_SOLUTION_AUTO_ENV = "STEADYSTATE_SOLUTION_AUTO"
+_TRUTHY = frozenset({"1", "true", "yes", "on"})
 
 _PLACEHOLDER = re.compile(r"\{(\w+)\}")  # {namespace} / {workload} -- filled from the finding
 
@@ -58,17 +66,35 @@ def _envelope(sol: Solution) -> Envelope:
     )
 
 
+def _solution_auto_enabled() -> bool:
+    return (os.environ.get(_SOLUTION_AUTO_ENV) or "").strip().lower() in _TRUTHY
+
+
 def record_solution_remediations(
-    store: StateStore, report, now: datetime, *, solutions: list[Solution] | None = None
+    store: StateStore,
+    report,
+    now: datetime,
+    *,
+    solutions: list[Solution] | None = None,
+    auto: bool | None = None,
 ) -> int:
-    """For every malfunction (Symptom) that matches an authored solution with a runnable command,
-    record a PendingAction (keyed by the symptom's fingerprint) so it shows in `pending` and
-    `approve <fp>` runs it. The author rides in ``drift_identity`` -> the audit. Idempotent
-    (record_pending upserts). A solution with no `run`, or whose placeholders don't fill, is
-    skipped (surfaced in `show`, not offered). Never auto-runs -- it offers; approve is the gate."""
+    """For every malfunction (Symptom) matching an authored solution with a runnable command, OFFER
+    it as a PendingAction (keyed by the symptom's fingerprint) so `pending` lists it and `approve
+    <fp>` runs it. The author rides in ``drift_identity`` -> the audit. A solution with no `run`, or
+    whose placeholders don't fill, is skipped (surfaced in `show`, not offered).
+
+    With ``auto`` (default: ``STEADYSTATE_SOLUTION_AUTO``) AND the solution's bound within the
+    autonomous ceiling (`within_bounds` -- only low-impact + reversible; `STEADYSTATE_BOUND` widens
+    it like everywhere else), it's RUN immediately and audited as ``auto`` instead of offered -- but
+    only once per fingerprint (already-acted ones are left, so a persisting symptom never loops). A
+    reboot / anything not low-and-reversible always falls through to the pending offer. Returns the
+    count offered-or-auto-applied."""
     sols = solutions if solutions is not None else load_solutions()
     if not sols:
         return 0
+    auto = _solution_auto_enabled() if auto is None else auto
+    policy = bound_from_env()
+    already = store.acted_fingerprints() if auto else set()
     recorded = 0
     for alert in report.alerts:
         for symptom in alert.symptoms:
@@ -77,22 +103,45 @@ def record_solution_remediations(
             if runnable is None:
                 continue
             command = _fill(runnable.run, symptom.evidence)
-            if _PLACEHOLDER.search(
-                command
-            ):  # an unfilled {placeholder} -> don't offer a broken cmd
+            if _PLACEHOLDER.search(command):  # an unfilled {placeholder} -> skip a broken command
                 continue
-            store.record_pending(
-                PendingAction(
-                    fingerprint=symptom.fingerprint,
-                    source=SOLUTION_SOURCE,
-                    path="",
-                    drift_identity=f"{runnable.name} (author: {runnable.author})",
-                    command=command,
-                ),
-                now,
+            action = PendingAction(
+                fingerprint=symptom.fingerprint,
+                source=SOLUTION_SOURCE,
+                path="",
+                drift_identity=f"{runnable.name} (author: {runnable.author})",
+                command=command,
             )
+            if (
+                auto
+                and symptom.fingerprint not in already
+                and within_bounds(_envelope(runnable), policy)
+            ):
+                _auto_apply(store, action, runnable, now)
+            else:
+                store.record_pending(action, now)
             recorded += 1
     return recorded
+
+
+def _auto_apply(store: StateStore, action: PendingAction, sol: Solution, now: datetime) -> None:
+    """Run a within-bound matched solution unattended and audit it as ``auto`` -- the autonomy path,
+    reached only with the opt-in on AND the bound satisfied. Best-effort: a failure is audited, not
+    raised (a wedged command never sinks the scan)."""
+    result = run_solution(action, sol)
+    outcome = VERIFIED if result.verified else APPLIED if result.applied else FAILED
+    store.record_audit(
+        AuditEntry(
+            fingerprint=action.fingerprint,
+            source=SOLUTION_SOURCE,
+            drift_identity=action.drift_identity,
+            actor="auto",
+            decision=APPROVED,
+            outcome=outcome,
+            detail=result.detail,
+        ),
+        now,
+    )
 
 
 def run_solution(

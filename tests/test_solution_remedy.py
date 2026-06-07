@@ -151,3 +151,48 @@ def test_solution_named_resolves_the_bound_for_the_plan(tmp_path, monkeypatch):
     sol = solution_named("reclaim-evicted (author: jeff)")
     assert sol is not None and sol.impact == "low" and sol.reversibility == "high"
     assert solution_named("nonexistent (author: x)") is None
+
+
+# -- auto-apply: opt-in + within-bound only (the autonomy path) -------------------
+
+_MEDIUM = {  # medium/medium -> above the autonomous ceiling -> never auto-runs
+    "name": "needs-human",
+    "for": "Hung",
+    "solution": {"kind": "command", "run": "python -c \"print('hi')\""},
+    "impact": "medium",
+    "reversibility": "medium",
+    "author": "jeff",
+}
+
+
+def test_auto_off_by_default_everything_waits_for_approve(tmp_path, monkeypatch):
+    monkeypatch.delenv("STEADYSTATE_SOLUTION_AUTO", raising=False)
+    monkeypatch.setenv("STEADYSTATE_SOLUTIONS", _runbook(tmp_path, [_EVICTED]))
+    report = _Report(_Alert(_sym("Evicted", "web Evicted")))
+    with StateStore(":memory:") as store:
+        record_solution_remediations(store, report, datetime.now(UTC))
+        assert len(store.all_pending()) == 1 and not store.audit_log()  # offered, not run
+
+
+def test_auto_applies_only_a_within_bound_solution(tmp_path, monkeypatch):
+    monkeypatch.setenv("STEADYSTATE_SOLUTION_AUTO", "1")
+    monkeypatch.setenv("STEADYSTATE_SOLUTIONS", _runbook(tmp_path, [_EVICTED, _MEDIUM]))
+    report = _Report(_Alert(_sym("Evicted", "web Evicted")), _Alert(_sym("Hung", "gw hung")))
+    with StateStore(":memory:") as store:
+        record_solution_remediations(store, report, datetime.now(UTC))
+        pending = [p.drift_identity for p in store.all_pending()]
+        audit = [(a.actor, a.outcome, a.drift_identity) for a in store.audit_log()]
+    # the low/high one auto-ran (audited as auto); the medium one waits for a human
+    assert audit == [("auto", "applied", "reclaim-evicted (author: jeff)")]
+    assert pending == ["needs-human (author: jeff)"]
+
+
+def test_auto_does_not_re_run_an_already_acted_fingerprint(tmp_path, monkeypatch):
+    monkeypatch.setenv("STEADYSTATE_SOLUTION_AUTO", "1")
+    monkeypatch.setenv("STEADYSTATE_SOLUTIONS", _runbook(tmp_path, [_EVICTED]))
+    sym = _sym("Evicted", "web Evicted")
+    report = _Report(_Alert(sym))
+    with StateStore(":memory:") as store:
+        record_solution_remediations(store, report, datetime.now(UTC))  # auto-applies once
+        record_solution_remediations(store, report, datetime.now(UTC))  # same symptom -> NOT re-run
+        assert len(store.audit_log()) == 1  # exactly one auto-apply, no loop

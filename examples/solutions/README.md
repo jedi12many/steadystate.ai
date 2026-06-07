@@ -77,7 +77,19 @@ The body is open (you vouch for the command), so there's no allow-pattern — th
 **approval + the bound + the audit**, not a restriction on what you may run. A solution with only a
 `reboot` target (no `run`) is surfaced in `show` for a human, never offered as auto-runnable.
 
-> **Bound + next:** `impact`/`reversibility` are recorded on the offered action (the bound). Today
-> every solution is **approve-gated** (it never auto-runs). A future step lets a *low-impact,
-> reversible* fix auto-apply — but only with autonomy explicitly granted **and** within that bound;
-> anything destructive always waits for a human.
+## Auto-apply (opt-in, within-bound only)
+
+By default every solution is **approve-gated**. Turn on auto-apply and a matched solution runs
+**without a human** — but *only* one that's **low-impact + reversible** (`impact`/`reversibility`):
+
+```sh
+export STEADYSTATE_SOLUTION_AUTO=1     # a separate, explicit opt-in (not drift autonomy)
+# reclaim-evicted (low/high) -> auto-applies on a match, audited as `auto`
+# reboot-hung-gateway (medium/medium) -> still waits for `approve`, even with auto on
+```
+
+It's a **deliberately separate** switch from drift/decider autonomy — auto-running an *authored
+command* is its own trust decision, never a side effect of turning on drift auto-apply. The bound is
+the same `within_bounds` gate the whole tool uses (`STEADYSTATE_BOUND` widens it), so a `reboot` or
+anything not low-and-reversible always escalates to a human. It runs **once per fingerprint** (a
+persisting symptom never loops) and is audited as `auto`.
