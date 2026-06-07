@@ -150,6 +150,29 @@ def solutions_for(category: str, title: str, solutions: list[Solution]) -> list[
     return out
 
 
+def solutions_for_alert(alert: object, solutions: list[Solution] | None = None) -> list[Solution]:
+    """The authored runbook fixes that match an Alert -- by any of its symptoms' category, or its
+    title (regex). De-duplicated, order-stable. **Duck-typed** (reads ``alert.title`` +
+    ``alert.symptoms[*].category``) so a surface can enrich a ticket/issue/PR with "here's the
+    documented fix" without coupling solutions to the alert model. Loads the runbook when not
+    supplied; [] when there's none. A drift-only alert (no symptom categories) matches by title."""
+    sols = solutions if solutions is not None else load_solutions()
+    if not sols:
+        return []
+    title = str(getattr(alert, "title", "") or "")
+    categories = {
+        str(getattr(symptom, "category", "")) for symptom in getattr(alert, "symptoms", [])
+    } or {""}
+    seen: set[str] = set()
+    out: list[Solution] = []
+    for category in categories:
+        for match in solutions_for(category, title, sols):
+            if match.name not in seen:
+                seen.add(match.name)
+                out.append(match)
+    return out
+
+
 def describe_solution(sol: Solution) -> str:
     """One-line runbook entry for ``solutions`` / surfacing against a finding: the action + how it's
     matched + who vouched for it."""
