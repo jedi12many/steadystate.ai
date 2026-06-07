@@ -43,6 +43,7 @@ LEARN = "learn"
 CHECKS = "checks"
 ADD_CHECK = "add-check"
 SOLUTIONS = "solutions"
+ADD_SOLUTION = "add-solution"
 SMOKE = "smoke"
 HEALTH = "health"
 POSTURE = "posture"
@@ -126,6 +127,12 @@ COMMANDS: dict[str, tuple[str, str]] = {
         "define a custom health check from a JSON object -- validated against the vetted schema "
         "(read kind + condition + emit), then stored in this wall. Authors observe-only checks; "
         "never code. e.g. is postfix routing mail, is squid running, is a pod's CPU too low",
+    ),
+    ADD_SOLUTION: (
+        "add-solution",
+        "add an authored fix to this wall's runbook from a JSON object -- a problem->fix entry "
+        "(for/match + a command/playbook/reboot), signed by an author. Surfaces against a matching "
+        "finding and can be approved to run; acting still passes the bound + audit",
     ),
     SURFACES_LIST: (
         "surfaces",
@@ -246,6 +253,7 @@ _TOOL_ARGS: dict[str, tuple[tuple[str, bool], ...]] = {
     SOLUTIONS: (),
     SMOKE: (),
     ADD_CHECK: (("check", True),),  # one arg: the check as a JSON object/string
+    ADD_SOLUTION: (("solution", True),),  # one arg: the solution as a JSON object/string
     PROBE: (("target", True),),  # a target name, or "all" for the fleet
     COST: (("period", False),),  # day | week, optional
     FINDINGS: (("filter", False),),  # an optional status word and/or keyword to grep
@@ -277,6 +285,7 @@ _TOOL_EFFECT: dict[str, str] = {
     SOLUTIONS: "read-only",  # lists the authored runbook -- showing a fix isn't running it
     SMOKE: "read-only",  # active (GET/HEAD probes) but idempotent -- reads, never mutates
     ADD_CHECK: "state-write",  # writes the wall's checks.json -- reversible config, no infra
+    ADD_SOLUTION: "state-write",  # writes the wall's solutions.json -- reversible config, no infra
     TARGETS: "read-only",
     PENDING: "read-only",
     PROBE: "read-only",  # scans + records findings, never acts on infra

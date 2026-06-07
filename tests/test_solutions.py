@@ -139,3 +139,50 @@ def test_describe_solution_shows_action_join_bound_and_author():
     line = describe_solution(parse_solution(_entry()))
     assert "reclaim-evicted" in line and "for=Evicted" in line and "[low/high]" in line
     assert "by jeff" in line
+
+
+# -- authoring: the verbs (an agent / plain English writes to the runbook) --------
+
+
+def test_add_solution_handler_stores_with_the_calling_author(tmp_path, monkeypatch):
+    from steadystate.inbound.server import _add_solution
+
+    monkeypatch.setenv("STEADYSTATE_SOLUTIONS", str(tmp_path / "sol.json"))
+    payload = json.dumps(
+        {
+            "name": "reclaim",
+            "for": "Evicted",
+            "solution": {"kind": "command", "run": "kubectl delete pods -n {namespace}"},
+        }
+    )
+    msg = _add_solution(payload, author="copilot")
+    assert "added" in msg and "by copilot" in msg  # the calling agent is the author
+    assert load_solutions()[0].author == "copilot"
+    # a non-JSON payload is a clean message, not a crash
+    assert "couldn't parse" in _add_solution("not json", author="x")
+
+
+def test_define_solution_proposes_json_via_the_llm_seam():
+    from steadystate.probe.solutions import define_solution
+
+    drafted = json.dumps(
+        {
+            "name": "reclaim-evicted",
+            "for": "Evicted",
+            "solution": {"kind": "command", "run": "kubectl delete pods -n {namespace}"},
+            "author": "the-agent",
+        }
+    )
+    proposed = define_solution("delete evicted pods", lambda _sys, _msg, _caller: drafted)
+    assert proposed["name"] == "reclaim-evicted" and proposed["for"] == "Evicted"
+    # no model / no JSON -> None (the caller falls back to add-solution with JSON)
+    assert define_solution("x", lambda *_a: None) is None
+
+
+def test_add_solution_is_exposed_only_at_the_author_tier():
+    from steadystate.inbound.mcp import mcp_tools
+
+    read_only = {t["name"] for t in mcp_tools(write=False, author=False)}
+    authoring = {t["name"] for t in mcp_tools(write=False, author=True)}
+    assert "add-solution" not in read_only  # not a read-only tool
+    assert "add-solution" in authoring  # the --author middle tier exposes it (no full --write)

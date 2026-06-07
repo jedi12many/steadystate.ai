@@ -1666,6 +1666,59 @@ def define_check_cmd(
         raise typer.Exit(1)
 
 
+_AUTHOR_OPTION = typer.Option(
+    "cli", "--author", help="Who authored this fix -- recorded on the entry (the audit anchor)."
+)
+
+
+@app.command("add-solution")
+def add_solution_cmd(
+    solution: str = typer.Argument(..., help="The solution as a JSON object."),
+    author: str = _AUTHOR_OPTION,
+    solutions: str = _SOLUTIONS_OPTION,
+) -> None:
+    """Add an authored fix to this wall's runbook from a JSON object -- a problem->fix entry
+    (for/match + a command/playbook/reboot), stamped with --author and validated (an unsigned fix is
+    rejected). Re-using a name updates it. Version-control the file (--solutions / STEADYSTATE_
+    SOLUTIONS). To author one in plain English instead, use `define-solution`."""
+    from .inbound.server import _add_solution
+
+    typer.echo(_add_solution(solution, author=author, solutions_path=solutions))
+
+
+@app.command("define-solution")
+def define_solution_cmd(
+    request: str = typer.Argument(..., help="The problem and its fix, in plain English."),
+    author: str = _AUTHOR_OPTION,
+    solutions: str = _SOLUTIONS_OPTION,
+) -> None:
+    """Author a runbook solution by describing it -- the LLM drafts the entry, steadystate validates
+    it and stamps --author, then writes it to the runbook. Needs an LLM (see `doctor`). e.g.
+    "for evicted pods, delete the Failed ones in that namespace"."""
+    from .probe.solutions import add_solution, define_solution
+
+    analyst = LLMAnalyst()
+    if analyst._provider() == "none":
+        typer.echo(
+            "define-solution needs an LLM (ANTHROPIC_API_KEY or a custom endpoint). Use "
+            "`add-solution` with JSON, or see `doctor`.",
+            err=True,
+        )
+        raise typer.Exit(1)
+    raw = define_solution(request, analyst._complete)
+    if raw is None:
+        typer.echo(
+            "the model didn't return a solution -- try rephrasing, or `add-solution` with JSON.",
+            err=True,
+        )
+        raise typer.Exit(1)
+    sol, message = add_solution(raw, author=author, path=solutions)
+    typer.echo(message)
+    if sol is None:
+        typer.echo(f"\n(the model proposed: {raw})", err=True)
+        raise typer.Exit(1)
+
+
 @app.command()
 def mcp(
     state: Path = _STATE_OPTION,
@@ -1694,9 +1747,10 @@ def mcp(
     author: bool = typer.Option(
         False,
         "--author",
-        help="Expose the check-AUTHORING verbs (`add-check`) WITHOUT full --write -- an agent can "
-        "write custom checks (observe-only, schema-gated) but NOT approve/fix/run infra. The "
-        "middle tier between read-only and --write. Also enabled by STEADYSTATE_MCP_AUTHOR=1.",
+        help="Expose the AUTHORING verbs (`add-check`, `add-solution`) WITHOUT full --write -- an "
+        "agent can write custom checks + runbook solutions (schema-gated, signed) but NOT "
+        "approve/fix/run infra. The middle tier between read-only and --write. Also "
+        "STEADYSTATE_MCP_AUTHOR=1.",
     ),
     write: bool = typer.Option(
         False,
@@ -1708,8 +1762,9 @@ def mcp(
 ) -> None:
     """Run steadystate as an MCP (Model Context Protocol) server over stdio, so Claude Code/Desktop
     or any agent can drive the vetted command grammar. Three grant tiers: **read-only** (default --
-    `summary`/`findings`/`show`/`probe`); **--author** adds `add-check` so an agent can write custom
-    checks (observe-only, schema-gated) without touching infra; **--write** adds the effectful verbs
+    `summary`/`findings`/`show`/`probe`); **--author** adds `add-check`/`add-solution` so an agent
+    writes custom checks + runbook fixes (schema-gated, signed) without touching infra; **--write**
+    adds the effectful verbs
     (`approve`/`fix`/`run`/...) within the SAME guardrails a human hits. The agent picks WHAT;
     the gate decides WHETHER. Speaks JSON-RPC over stdio; point your client at `steadystate mcp`.
 
