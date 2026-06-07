@@ -2328,7 +2328,21 @@ def init(
     console.print("[dim]Secrets live only in this file. Never commit it.[/dim]")
 
 
+def _ensure_utf8_streams() -> None:
+    """Make stdout/stderr UTF-8 with a replace fallback. LLM output (and resource names) can carry
+    any Unicode -- an arrow, an em-dash, an emoji -- but a Windows console stdout defaults to a
+    non-UTF-8 codec (cp1252), which **crashes** rich/typer on such a character. So a model writing
+    ``->`` could take down a whole scan. This makes output encodable everywhere; a no-op where a
+    stream can't be reconfigured (a redirected pipe without the method)."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            with contextlib.suppress(Exception):
+                reconfigure(encoding="utf-8", errors="replace")
+
+
 def main() -> None:
+    _ensure_utf8_streams()
     app()
 
 
