@@ -44,6 +44,7 @@ CHECKS = "checks"
 ADD_CHECK = "add-check"
 SMOKE = "smoke"
 HEALTH = "health"
+POSTURE = "posture"
 FINDINGS = "findings"
 SHOW = "show"
 SURFACES_LIST = "surfaces"
@@ -98,6 +99,12 @@ COMMANDS: dict[str, tuple[str, str]] = {
         "the one-glance 'is it actually working?' verdict (WORKING | DEGRADED | DOWN) -- runs the "
         "`http` smoke tests live and folds in the live malfunctions. Add a workload name to scope "
         "to it and correlate (smoke + symptom + the drift that likely caused it). The headline Q",
+    ),
+    POSTURE: (
+        "posture",
+        "the honest answer to 'am I bounded by your gates?' -- what steadystate enforces on its "
+        "own path (catalog + bound + audit), where that ends (it can't constrain your other tools, "
+        "e.g. a shell), and how to make it a real boundary (the sole-actuator setup)",
     ),
     CHECKS: ("checks", "list this wall's custom health checks (.steadystate/checks.json)"),
     SMOKE: (
@@ -224,6 +231,7 @@ _TOOL_ARGS: dict[str, tuple[tuple[str, bool], ...]] = {
     TARGETS: (),
     PENDING: (),
     HEALTH: (("workload", False),),  # optional: scope the verdict to one workload + correlate
+    POSTURE: (),
     CHECKS: (),
     SMOKE: (),
     ADD_CHECK: (("check", True),),  # one arg: the check as a JSON object/string
@@ -252,6 +260,7 @@ _TOOL_EFFECT: dict[str, str] = {
     HELP: "read-only",
     SUMMARY: "read-only",
     HEALTH: "read-only",  # runs smoke (GET/HEAD) + reads findings -- active but never mutates
+    POSTURE: "read-only",  # a self-report; an agent can always ask "am I bounded?" (no grant)
     CHECKS: "read-only",
     SMOKE: "read-only",  # active (GET/HEAD probes) but idempotent -- reads, never mutates
     ADD_CHECK: "state-write",  # writes the wall's checks.json -- reversible config, no infra
