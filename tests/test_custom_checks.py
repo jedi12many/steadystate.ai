@@ -4,12 +4,16 @@ fired check becomes a normal Symptom (so it rides the pipeline). The read is fak
 
 from __future__ import annotations
 
+import contextlib
 import json
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from steadystate.probe.custom import (
     AnsibleCheckEvaluator,
     CustomCheckEvaluator,
     DockerCheckEvaluator,
+    HttpCheckEvaluator,
     _aggregate,
     _cpu_millicores,
     _fires,
@@ -369,3 +373,76 @@ def test_add_check_and_checks_dispatch_through_run_command(tmp_path, monkeypatch
     assert "squid-up" in listed and "ansible-service" in listed
     # a malformed payload is refused, not stored
     assert "parse" in run_command(Command(ADD_CHECK, "mcp", "{not json"), ":memory:").lower()
+
+
+# -- http: the smoke test -- actively exercise an endpoint and assert the response --------------
+
+_SMOKE = {
+    "name": "gw-smoke",
+    "read": {"kind": "http", "url": "https://gw/health"},
+    "when": {"status": 200, "body": "ok"},
+    "emit": {"severity": "high", "title": "gateway not responding"},
+}
+
+
+def test_http_smoke_parses_and_rejects_unsafe_requests():
+    c = parse_check(_SMOKE)
+    assert c is not None and c.kind == "http" and c.method == "GET" and c.status == 200
+    assert c.url == "https://gw/health" and c.body == "ok" and c.selector == ""  # url is the target
+    # the safety boundary: only idempotent methods, only http(s), a compilable body regex
+    mutate = {**_SMOKE, "read": {"kind": "http", "url": "https://gw/h", "method": "POST"}}
+    assert parse_check(mutate) is None  # a mutating method -- a smoke test reads, never writes
+    assert parse_check({**_SMOKE, "read": {"kind": "http", "url": "file:///etc/passwd"}}) is None
+    assert parse_check({**_SMOKE, "when": {"body": "[unclosed"}}) is None  # broken regex dropped
+
+
+def _handler(status: int, body: str):
+    class _H(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802 -- BaseHTTPRequestHandler's required name
+            self.send_response(status)
+            self.end_headers()
+            self.wfile.write(body.encode())
+
+        def log_message(self, *_a):  # keep the test output quiet
+            return
+
+    return _H
+
+
+@contextlib.contextmanager
+def _server(status: int, body: str):
+    httpd = HTTPServer(("127.0.0.1", 0), _handler(status, body))
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        yield f"http://127.0.0.1:{httpd.server_address[1]}/health"
+    finally:
+        httpd.shutdown()
+
+
+def _smoke_eval(url: str, monkeypatch) -> HttpCheckEvaluator:
+    import steadystate.probe.custom as mod
+
+    check = parse_check({**_SMOKE, "read": {"kind": "http", "url": url}})
+    monkeypatch.setattr(mod, "load_checks", lambda _p: [check])
+    return HttpCheckEvaluator(timeout=3.0)
+
+
+def test_http_smoke_is_clean_when_status_and_body_match(monkeypatch):
+    with _server(200, "all ok here") as url:  # 200 + body contains 'ok' -> working
+        assert _smoke_eval(url, monkeypatch).evaluate() == []
+
+
+def test_http_smoke_fires_on_a_wrong_status_or_a_missing_body_signal(monkeypatch):
+    with _server(503, "down") as url:
+        syms = _smoke_eval(url, monkeypatch).evaluate()
+        assert len(syms) == 1 and "503" in syms[0].detail and syms[0].evidence["status"] == "503"
+    with _server(200, "nope") as url:  # answers 200 but the success signal 'ok' is missing
+        syms = _smoke_eval(url, monkeypatch).evaluate()
+        assert len(syms) == 1 and "body missing" in syms[0].detail
+
+
+def test_http_smoke_unreachable_is_a_failure_not_a_noop(monkeypatch):
+    # the opposite of the passive kinds: a smoke test that can't reach the service IS it being down
+    syms = _smoke_eval("http://127.0.0.1:1/health", monkeypatch).evaluate()  # nothing listening
+    assert len(syms) == 1 and "did not respond" in syms[0].detail
+    assert syms[0].provenance.source == "custom-check"  # rides the pipeline as a Symptom

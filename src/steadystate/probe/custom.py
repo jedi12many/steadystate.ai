@@ -13,10 +13,15 @@ Read kinds: ``kubectl-cpu`` / ``kubectl-mem`` -- the live CPU/memory of the pods
 selector (metrics API), aggregated and compared to a threshold; ``kubectl-log`` -- a regex that
 should be *present* (a success signal, e.g. postfix's ``status=sent``) or *absent* (an error) in the
 pods' recent logs, i.e. "running, but doing its job?"; and ``docker-log`` -- the same, over the logs
-of the containers matching a ``docker ps`` filter (functional health for compose). A read we
-couldn't take -> no finding (never a false alarm; a *down* app is the generic prober's call). Each
-check is dispatched to the reader for its backend. The Symptoms ride the normal pipeline, so a
-custom finding is tracked new/recurring/resolved, muteable, and feeds ``resolve``/``learn``."""
+of the containers matching a ``docker ps`` filter (functional health for compose); ``ansible-service``
+-- is a unit ``active``/``inactive`` across a host pattern; and ``http`` -- a **smoke test**: GET/HEAD
+an endpoint and assert the response (the strongest "is it working?" signal -- proof, not inference).
+
+The passive kinds are conservative: a read we couldn't take -> no finding (a *down* app is the
+generic prober's call). The ``http`` smoke test is the deliberate exception -- an endpoint that won't
+answer IS the service being down, so an unreachable probe FIRES. Each check is dispatched to the
+reader for its backend. The Symptoms ride the normal pipeline, so a custom finding is tracked
+new/recurring/resolved, muteable, feeds ``resolve``/``learn`` -- and counts as IMPAIRED in `summary`."""
 
 from __future__ import annotations
 
@@ -25,6 +30,8 @@ import os
 import re
 import shutil
 import subprocess  # noqa: S404 -- argv only, no shell; reads only
+import urllib.error
+import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -56,7 +63,11 @@ _NUMERIC_KINDS = frozenset({"kubectl-cpu", "kubectl-mem"})  # a threshold over a
 _LOG_KINDS = frozenset({"kubectl-log", "docker-log"})
 _KUBECTL_KINDS = _NUMERIC_KINDS | {"kubectl-log"}
 _ANSIBLE_KINDS = frozenset({"ansible-service"})  # is a host/VM service in the expected state?
-_ALL_KINDS = _NUMERIC_KINDS | _LOG_KINDS | _ANSIBLE_KINDS
+# the SMOKE TEST: actively exercise an endpoint and assert the response -- the strongest "is it
+# doing its job?" signal (proof, not inference), and an agent's close-the-loop verdict after a fix.
+_HTTP_KINDS = frozenset({"http"})
+_ALL_KINDS = _NUMERIC_KINDS | _LOG_KINDS | _ANSIBLE_KINDS | _HTTP_KINDS
+_SAFE_METHODS = frozenset({"GET", "HEAD"})  # idempotent only -- a smoke test reads, never mutates
 _OPS = frozenset({"<", ">", "<=", ">=", "==", "!="})
 _AGGS = frozenset({"sum", "max", "avg"})
 _EXPECT = frozenset({"present", "absent"})  # for the log kinds
@@ -88,6 +99,11 @@ class CustomCheck:
     tail: int = 200  # lines of recent log per pod/container to read
     # service (ansible-service): the unit name, in its expected state across the host pattern
     service: str = ""  # e.g. "postfix" (".service" suffix optional)
+    # http (smoke test): exercise an endpoint and assert the response
+    url: str = ""  # the http(s) endpoint to probe (the target; http checks carry no selector)
+    method: str = "GET"  # GET | HEAD only -- safe, idempotent; a smoke test reads, never mutates
+    status: int = 200  # the expected HTTP status; a different status (or no response) fires
+    body: str = ""  # optional regex that must be PRESENT in the response body (a success signal)
 
     @property
     def unit(self) -> str:
@@ -101,25 +117,31 @@ def parse_check(raw: dict) -> CustomCheck | None:
         return None
     read, when, emit = raw.get("read") or {}, raw.get("when") or {}, raw.get("emit") or {}
     name = raw.get("name")
-    kind, selector = read.get("kind"), read.get("selector")
+    kind = read.get("kind")
     namespace = read.get("namespace", "")  # k8s only; a docker filter carries its own scope
     severity, title = emit.get("severity"), emit.get("title")
     if not (isinstance(name, str) and name):
         return None
-    if kind not in _ALL_KINDS or not isinstance(selector, str) or not selector:
+    if kind not in _ALL_KINDS or not isinstance(namespace, str):
         return None
-    if not isinstance(namespace, str):
+    if severity not in _SEVERITIES or not isinstance(title, str) or not title:
+        return None
+    sev = _SEVERITIES[severity]
+    # http (smoke test): the URL is the target -- no selector / namespace, a different shape.
+    if kind in _HTTP_KINDS:
+        return _parse_http_check(name, sev, title, read, when)
+    # every other kind targets a selector (a label / docker filter / host pattern).
+    selector = read.get("selector")
+    if not isinstance(selector, str) or not selector:
         return None
     if kind in _KUBECTL_KINDS and not namespace:
         return None  # a kubectl read is scoped to one namespace
-    if severity not in _SEVERITIES or not isinstance(title, str) or not title:
-        return None
     common = {
         "name": name,
         "kind": kind,
         "selector": selector,
         "namespace": namespace,
-        "severity": _SEVERITIES[severity],
+        "severity": sev,
         "title": title,
     }
     if kind in _NUMERIC_KINDS:
@@ -154,6 +176,44 @@ def _parse_log_fields(when: dict, read: dict) -> dict | None:
     return {"pattern": pattern, "expect": expect, "tail": tail}
 
 
+def _parse_http_check(
+    name: str, severity: Severity, title: str, read: dict, when: dict
+) -> CustomCheck | None:
+    """Validate a ``http`` smoke test: a vetted, **idempotent** request (GET/HEAD only -- it reads
+    by exercising, never mutates) to an http(s) URL, asserting an expected status and, optionally, a
+    body regex. The method allowlist + the http(s)-only URL are the safety boundary on the active
+    kind. None if malformed (a bad URL, an unsafe method, an uncompilable body regex)."""
+    url = read.get("url")
+    method = str(read.get("method", "GET")).upper()
+    expected_status = when.get("status", 200)
+    body = when.get("body", "")
+    if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+        return None
+    if method not in _SAFE_METHODS:
+        return None
+    if not isinstance(expected_status, int) or isinstance(expected_status, bool):
+        return None
+    if not isinstance(body, str):
+        return None
+    if body:
+        try:
+            re.compile(body)
+        except re.error:
+            return None
+    return CustomCheck(
+        name=name,
+        kind="http",
+        selector="",
+        namespace="",
+        severity=severity,
+        title=title,
+        url=url,
+        method=method,
+        status=expected_status,
+        body=body,
+    )
+
+
 def load_checks(path: str = "") -> list[CustomCheck]:
     """The valid checks (a JSON list of check objects, from ``resolve_checks_path``). Missing /
     malformed file -> [] (the un-checked path is unchanged). Invalid entries are skipped, valid ones
@@ -184,7 +244,10 @@ CHECK_SCHEMA_HINT = (
     "fires when it APPEARS.\n"
     "- docker-log: read{selector(a `docker ps` filter, e.g. name=web), tail?}, "
     "when{pattern, expect}.\n"
-    "- ansible-service: read{selector(host pattern), service}, when{expect(active|inactive)}."
+    "- ansible-service: read{selector(host pattern), service}, when{expect(active|inactive)}.\n"
+    "- http (a SMOKE TEST -- the strongest 'is it working?' signal): read{url(http/https), "
+    "method?(GET|HEAD)}, when{status?(expected, default 200), body?(regex that must be present)} "
+    "-- fires on a wrong status, a missing body signal, or no response."
 )
 
 
@@ -582,6 +645,53 @@ def _service_running(services: dict, name: str) -> bool:
     return str(info.get("state") or "").lower() in _RUNNING_STATES
 
 
+# -- http: the SMOKE TEST -- exercise an endpoint and assert the response ------------------------
+
+
+class HttpCheckEvaluator:
+    """Runs the wall's ``http`` smoke tests: GET/HEAD an endpoint and assert the response (an
+    expected status, optionally a body regex). The strongest "is it doing its job?" signal -- it
+    *exercises* the service rather than inferring from logs/status. A wrong status, a missing body
+    signal, OR an unreachable endpoint all FIRE -- a smoke test that can't reach the service IS the
+    service being down (the opposite of the passive kinds, where an unreadable signal is a no-op).
+    Read-only: GET/HEAD only. A failed smoke test rides the pipeline as a Symptom (-> IMPAIRED)."""
+
+    def __init__(self, *, checks_path: str = DEFAULT_CHECKS_FILE, timeout: float = 10.0) -> None:
+        self._checks_path = checks_path
+        self._timeout = timeout
+
+    def evaluate(self) -> list[Symptom]:
+        symptoms: list[Symptom] = []
+        for check in load_checks(self._checks_path):
+            if check.kind != "http":
+                continue
+            ok, detail, evidence = self._request(check)
+            if not ok:
+                symptoms.append(_to_symptom(check, detail, evidence, ""))
+        return symptoms
+
+    def _request(self, check: CustomCheck) -> tuple[bool, str, dict[str, str]]:
+        """GET/HEAD the URL and judge the response: (ok, detail, evidence). A connection failure or
+        timeout is a FAILED smoke test (the service didn't answer), never a no-op."""
+        ev = {"url": check.url, "method": check.method, "expected_status": str(check.status)}
+        req = urllib.request.Request(check.url, method=check.method)  # noqa: S310 -- vetted http(s)
+        try:
+            with urllib.request.urlopen(req, timeout=self._timeout) as resp:  # noqa: S310
+                status = resp.status
+                payload = resp.read(65536).decode("utf-8", "replace") if check.body else ""
+        except urllib.error.HTTPError as exc:  # a 4xx/5xx still carries a status to compare
+            status = exc.code
+            payload = exc.read(65536).decode("utf-8", "replace") if check.body else ""
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+            return False, f"{check.url} did not respond ({exc})", {**ev, "error": str(exc)[:200]}
+        ev["status"] = str(status)
+        if status != check.status:
+            return False, f"{check.url} returned {status} (expected {check.status})", ev
+        if check.body and re.search(check.body, payload) is None:
+            return False, f"{check.url} answered {status} but body missing /{check.body}/", ev
+        return True, "", ev
+
+
 def _log_symptom(check: CustomCheck, logs: str | None, context: str) -> Symptom | None:
     """The condition shared by every log kind: ``expect=present`` fires when the pattern is MISSING
     (a success signal that's gone), ``expect=absent`` fires when it's FOUND (an error appeared). A
@@ -660,4 +770,6 @@ def evaluate_custom_checks(
         symptoms += DockerCheckEvaluator(checks_path=checks_path).evaluate()
     if any(c.kind in _ANSIBLE_KINDS for c in checks):
         symptoms += AnsibleCheckEvaluator(checks_path=checks_path, inventory=inventory).evaluate()
+    if any(c.kind in _HTTP_KINDS for c in checks):
+        symptoms += HttpCheckEvaluator(checks_path=checks_path).evaluate()
     return symptoms
