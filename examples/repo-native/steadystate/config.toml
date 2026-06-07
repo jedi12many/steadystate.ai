@@ -1,0 +1,9 @@
+# steadystate -- the repo-native config (committed, next to your IaC).
+# `steadystate ci` reads the [ci] table; every key is optional (CLI flags override).
+
+[ci]
+source  = "terraform"   # the declared-state source (terraform | argocd | ...)
+path    = "."           # the IaC to scan (the repo root, beside this file)
+fail_on = "high"        # gate threshold: any | low | medium | high | critical | none
+to      = "console"     # surfaces; add "github" to open an issue per problem (needs GITHUB_TOKEN)
+deliver = "none"        # "github-pr" to open an accept-reality reconcile PR for drift
