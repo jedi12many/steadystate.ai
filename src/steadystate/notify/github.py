@@ -33,6 +33,7 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 from .._http import safe_urlopen
+from ..probe.solutions import solutions_for_alert
 from ..reason.alert import Alert
 from ..reason.report import Report
 
@@ -93,6 +94,15 @@ def format_issue(alert: Alert) -> dict:
     if alert.references:
         refs = ", ".join(f"{r.framework} {r.id}" for r in alert.references)
         lines.append(f"\n**References:** {refs}")
+    # The runbook, surfaced where the problem lands: if the team authored a fix for this, name it +
+    # who vouched, so the issue carries the problem AND your known solution. Read-only -- the issue
+    # documents the fix; running it still goes through `approve` + the bound + the audit.
+    matched = solutions_for_alert(alert)
+    if matched:
+        lines.append("\n**Known fix (from your runbook):**")
+        for sol in matched:
+            action = sol.run or f"{sol.kind} {sol.target}".strip()
+            lines.append(f"- `{action}` -- *{sol.name}*, by {sol.author}")
     lines.append(f"\n<!-- steadystate-fp: {fp} -->")
     lines.append("_Opened by steadystate; closed automatically when the finding clears._")
     return {

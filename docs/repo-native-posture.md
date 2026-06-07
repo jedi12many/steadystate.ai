@@ -1,8 +1,8 @@
 # Repo-native posture — steadystate as a stateless GitOps bot
 
-> Status: phases 1–3 **shipped** — the `steadystate/` committed-intent convention, `steadystate ci`,
-> and the `terraform-state` (refresh-free, config-vs-state) source. Phase 4 (the runbook in the
-> PR/issue) remains.
+> Status: **all four phases shipped** — the `steadystate/` committed-intent convention, `steadystate
+> ci`, the `terraform-state` (refresh-free, config-vs-state) source, and the runbook surfaced in the
+> opened issue (a problem carries its documented fix).
 
 steadystate has two deployment postures, and they share one core:
 
@@ -85,6 +85,12 @@ So it's **both** a CI gate (block the merge) **and** a PR-bot (propose the fix).
 **The learn division falls out cleanly:** *learning* needs history, so it happens in the **live**
 posture → you **commit the learned solution** to `steadystate/solutions.json` → the **stateless CI**
 run *uses* it. **Learn live → commit → apply stateless.**
+
+**The runbook rides along (phase 4 — shipped).** When `ci` opens an **issue** for a problem, it
+includes the **matched authored solution** — the documented fix + who vouched — so the issue carries
+the problem *and* your team's known answer, right where someone will read it. (A reconcile **PR** is
+already self-contained: the patch *is* the fix.) Read-only enrichment; running a solution still goes
+through `approve` + the bound + the audit. Stateless-friendly — matched at render time, no store.
 
 ## How it fits the mission
 

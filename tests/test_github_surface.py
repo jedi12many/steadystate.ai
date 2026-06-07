@@ -102,6 +102,29 @@ def test_format_issue_embeds_the_fingerprint_marker_and_labels():
     assert f"<!-- steadystate-fp: {'f' * 64} -->" in issue["body"]  # the dedup key
 
 
+def test_issue_carries_the_matched_runbook_fix(tmp_path, monkeypatch):
+    # the runbook closes the loop: an issue for a problem also names your documented fix + author
+    import json
+
+    sp = tmp_path / "solutions.json"
+    sp.write_text(
+        json.dumps(
+            [
+                {
+                    "name": "reclaim-evicted",
+                    "match": "evicted",
+                    "solution": {"kind": "command", "run": "kubectl delete pods --field=..."},
+                    "author": "jeff",
+                }
+            ]
+        )
+    )
+    monkeypatch.setenv("STEADYSTATE_SOLUTIONS", str(sp))
+    body = format_issue(_alert("web pods Evicted", Severity.HIGH, "a" * 64))["body"]
+    assert "Known fix (from your runbook)" in body
+    assert "kubectl delete pods" in body and "reclaim-evicted" in body and "by jeff" in body
+
+
 # -- the lifecycle --------------------------------------------------------------
 
 

@@ -141,6 +141,40 @@ def test_describe_solution_shows_action_join_bound_and_author():
     assert "by jeff" in line
 
 
+# -- solutions_for_alert: matching a runbook fix to an alert (for surfaces) --------
+
+
+class _Sym:
+    def __init__(self, category):
+        self.category = category
+
+
+class _Alert:
+    def __init__(self, title, symptoms):
+        self.title = title
+        self.symptoms = symptoms
+
+
+def test_solutions_for_alert_matches_by_symptom_category_or_drift_title():
+    from steadystate.probe.solutions import solutions_for_alert
+
+    alert = _Alert("web pods Evicted", [_Sym("Evicted")])
+    by_cat = solutions_for_alert(alert, [parse_solution(_entry())])
+    assert [s.name for s in by_cat] == ["reclaim-evicted"]  # matched on the symptom category
+    # a drift-only alert (no symptom categories) still matches a title-regex solution
+    regex = parse_solution(_entry(name="fw", **{"for": ""}, match="firewall"))
+    drift_alert = _Alert("modified firewall opened to 0.0.0.0/0", [])
+    assert [s.name for s in solutions_for_alert(drift_alert, [regex])] == ["fw"]
+
+
+def test_solutions_for_alert_dedupes_and_is_empty_without_a_runbook():
+    from steadystate.probe.solutions import solutions_for_alert
+
+    alert = _Alert("web Evicted", [_Sym("Evicted"), _Sym("Evicted")])  # repeated category
+    assert len(solutions_for_alert(alert, [parse_solution(_entry())])) == 1  # one solution, once
+    assert solutions_for_alert(alert, []) == []  # no runbook -> nothing
+
+
 # -- authoring: the verbs (an agent / plain English writes to the runbook) --------
 
 
