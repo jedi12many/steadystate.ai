@@ -1528,14 +1528,21 @@ def checks(checks: str = _CHECKS_OPTION) -> None:
 
 
 @app.command()
-def health(state: Path = _STATE_OPTION, checks: str = _CHECKS_OPTION) -> None:
+def health(
+    workload: str = typer.Argument(
+        "", help="Scope to one workload + correlate (smoke / symptom / drift)."
+    ),
+    state: Path = _STATE_OPTION,
+    checks: str = _CHECKS_OPTION,
+) -> None:
     """The one-glance 'is it actually working?' verdict (WORKING | DEGRADED | DOWN) -- runs this
-    wall's `http` smoke tests live and folds in the live malfunctions. The headline question, in one
-    call. Active but read-only. Exits non-zero when the verdict isn't WORKING (for CI / a gate)."""
+    wall's `http` smoke tests live and folds in the live malfunctions. Add a workload name to scope
+    to it and correlate the smoke result + live symptoms + the config drift that likely caused them.
+    Active but read-only. Exits non-zero when the verdict isn't WORKING (for CI / a gate)."""
     from .health import WORKING
     from .inbound.server import _render_health
 
-    out = _render_health(str(state), checks)
+    out = _render_health(str(state), checks, workload)
     typer.echo(out)
     if not out.startswith(WORKING):
         raise typer.Exit(1)

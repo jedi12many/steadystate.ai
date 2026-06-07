@@ -806,11 +806,13 @@ def evaluate_custom_checks(
     return symptoms
 
 
-def run_smoke_checks(checks_path: str = "") -> list[CheckResult]:
+def run_smoke_checks(checks_path: str = "", match: str = "") -> list[CheckResult]:
     """Run the wall's ``http`` smoke tests live and return each one's PASS/FAIL -- the affirmative
     'is it working?' view (a passing test is *shown*, not just silent). [] when none are defined.
-    Active but read-only (GET/HEAD). Backs the `smoke` verb + the agent's close-the-loop check."""
-    checks_path = resolve_checks_path(checks_path)
-    if not any(c.kind in _HTTP_KINDS for c in load_checks(checks_path)):
-        return []
-    return HttpCheckEvaluator(checks_path=checks_path).results()
+    ``match`` (when set) runs only the smoke tests naming it (in the check name or URL) -- so
+    scoping to a workload doesn't fire unrelated probes. Read-only (GET/HEAD). Backs smoke."""
+    results = HttpCheckEvaluator(checks_path=resolve_checks_path(checks_path)).results()
+    if not match:
+        return results
+    m = match.lower()
+    return [r for r in results if m in r.name.lower() or m in r.target.lower()]

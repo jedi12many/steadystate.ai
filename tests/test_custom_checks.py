@@ -533,3 +533,41 @@ def test_health_verdict_combines_smoke_and_impaired(monkeypatch, tmp_path):
     with _server(200, "all ok here") as good:
         monkeypatch.setattr(mod, "load_checks", lambda _p="": _two_http_checks(good, good)[:1])
         assert _render_health(empty).startswith("WORKING")
+
+
+def test_health_scopes_to_a_workload_and_correlates_smoke_symptom_drift(monkeypatch, tmp_path):
+    from datetime import UTC, datetime
+
+    import steadystate.probe.custom as mod
+    from steadystate.inbound.server import _render_health
+    from steadystate.state import StateStore
+
+    db = str(tmp_path / "s.db")
+    with StateStore(db) as store:
+        store.record(
+            {
+                "a" * 64: ("high", "akeyless-gateway 5xx spike"),
+                "b" * 64: ("high", "akeyless-gateway image drifted"),
+                "c" * 64: ("medium", "db slow query"),  # an UNRELATED workload
+            },
+            datetime.now(UTC),
+            {
+                "a" * 64: {"category": "Unhealthy", "workload": "akeyless-gateway"},  # symptom
+                "b" * 64: {
+                    "change": "MODIFIED",
+                    "kind": "deployment",
+                    "workload": "akeyless-gateway",
+                },
+                "c" * 64: {"category": "Slow", "workload": "db"},
+            },
+        )
+    with _server(503, "down") as gw:
+        check = parse_check(
+            {**_SMOKE, "name": "akeyless-gateway-smoke", "read": {"kind": "http", "url": gw}}
+        )
+        monkeypatch.setattr(mod, "load_checks", lambda _p="": [check])
+        out = _render_health(db, workload="akeyless-gateway")
+    assert out.startswith("DOWN") and "akeyless-gateway" in out
+    assert "smoke FAIL" in out and "5xx spike" in out  # the active probe + the live symptom
+    assert "likely cause" in out and "image drifted" in out  # correlated to the config drift
+    assert "db slow query" not in out  # the unrelated workload is scoped out
