@@ -149,4 +149,4 @@ def test_health_folds_in_the_metric_context(monkeypatch, tmp_path):
         monkeypatch.setenv("PROMETHEUS_URL", url)
         out = _render_health(db, workload="gateway")
     assert out.startswith("DEGRADED")  # verdict unchanged -- metrics are CONTEXT, not part of it
-    assert "metrics:" in out and "p99_latency 4.2" in out  # monitoring folded in next to the verdict
+    assert "metrics:" in out and "p99_latency 4.2" in out  # monitoring folded in beside the verdict
