@@ -350,12 +350,12 @@ def test_mcp_refresh_probes_before_serving(monkeypatch):
     assert calls == [("probe", "probe", "prod"), "served"]
 
 
-def test_initialize_carries_the_wall_label_and_live_state(tmp_path):
+def test_initialize_carries_the_silo_label_and_live_state(tmp_path):
     db = _db_with_findings(tmp_path)  # one high CrashLoopBackOff finding
     out = handle_request(_req("initialize", {}), db, write=False, label="akeyless-use1")["result"]
-    assert out["serverInfo"]["title"] == "steadystate (akeyless-use1)"  # the wall self-identifies
+    assert out["serverInfo"]["title"] == "steadystate (akeyless-use1)"  # the silo self-identifies
     instr = out["instructions"]
-    assert "wall: akeyless-use1" in instr
+    assert "silo: akeyless-use1" in instr
     # the live summary is embedded, so a connecting agent resumes WITHOUT a tool round-trip
     assert "impaired" in instr and "CrashLoopBackOff" in instr
 
