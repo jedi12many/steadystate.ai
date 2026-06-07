@@ -48,6 +48,7 @@ def _raise(exc):
 # a constant []). Add an entry when you add a source.
 _LIVE: dict[str, Callable[[object], Callable[[], object]]] = {
     "terraform": lambda d: TerraformSource(working_dir=d).collect_drift,
+    "terraform-state": lambda d: TerraformSource(working_dir=d, refresh=False).collect_drift,
     "k8s": lambda d: KubernetesSource(declared=[], get_args=["pods"]).collect_drift,
     "k8s-live": lambda d: KubernetesLiveSource().collect_declared,
     # baseline injected so collect_drift gets past the baseline load to the live read (the kubectl).

@@ -41,6 +41,7 @@ def _inputs(tmp_path):
         "kustomize-live": overlay,
         "helm-live": chart,
         "terraform": _sample(tmp_path, "plan.json", {"resource_changes": []}),
+        "terraform-state": _sample(tmp_path, "state-plan.json", {"resource_changes": []}),
         "argocd": _sample(tmp_path, "app.json", {"status": {"resources": []}}),
         "ansible": _sample(tmp_path, "ansible.json", {"plays": []}),
         # ansible-live is pathless (the path is ignored); its collect_drift is a constant [] -- the
