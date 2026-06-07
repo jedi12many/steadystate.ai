@@ -12,6 +12,7 @@ from steadystate.act.learn import (
     SELF_HEAL,
     gather_demonstrations,
     learn,
+    promotable_solutions,
 )
 from steadystate.state import APPLIED, RESOLVED, AuditEntry, Finding, StateStore
 
@@ -194,3 +195,49 @@ def test_acted_fingerprints_excludes_what_we_applied():
     findings = [_finding("a" * 64, "Evicted"), _finding("b" * 64, "Evicted")]
     demos = gather_demonstrations(findings, acted)
     assert [d.fingerprint for d in demos] == ["b" * 64]
+
+
+# -- the on-ramp to the runbook: promotable_solutions ---------------------------
+
+_FIX = "kubectl delete pods --field-selector=status.phase=Failed -n prod"
+
+
+def test_a_category_with_one_consistent_recorded_fix_is_draftable():
+    findings = [
+        _finding("a" * 64, "Evicted", note=_FIX),
+        _finding("b" * 64, "Evicted", note=_FIX),
+    ]
+    drafts = promotable_solutions(findings, acted=set())
+    assert len(drafts) == 1
+    draft = drafts[0]
+    assert draft["for"] == "Evicted" and draft["name"] == "evicted-fix"
+    assert draft["solution"] == {"kind": "command", "run": _FIX}
+    assert draft["impact"] == "medium" and draft["reversibility"] == "medium"  # safe default
+
+
+def test_inconsistent_fixes_are_not_draftable():
+    # two different recorded fixes -> no single safe command to capture -> not drafted
+    findings = [
+        _finding("a" * 64, "Evicted", note=_FIX),
+        _finding("b" * 64, "Evicted", note="kubectl rollout restart deploy/web"),
+    ]
+    assert promotable_solutions(findings, acted=set()) == []
+
+
+def test_a_single_resolution_is_not_yet_a_pattern():
+    assert promotable_solutions([_finding("a" * 64, "Evicted", note=_FIX)], acted=set()) == []
+
+
+def test_a_category_already_in_the_runbook_is_skipped():
+    findings = [
+        _finding("a" * 64, "Evicted", note=_FIX),
+        _finding("b" * 64, "Evicted", note=_FIX),
+    ]
+    drafts = promotable_solutions(findings, acted=set(), skip_categories=frozenset({"Evicted"}))
+    assert drafts == []  # already captured -- don't re-suggest
+
+
+def test_a_category_with_no_recorded_fix_is_not_drafted():
+    # resolved out-of-band but HOW was never recorded (no `resolve` note) -> nothing to capture
+    findings = [_finding("a" * 64, "Evicted"), _finding("b" * 64, "Evicted")]
+    assert promotable_solutions(findings, acted=set()) == []

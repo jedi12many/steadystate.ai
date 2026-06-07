@@ -27,7 +27,7 @@ from ..act.catalog import CatalogAction, FindingFields, catalog_action, offered_
 from ..act.cleanup import record_cleanups
 from ..act.decide import decider_auto_enabled
 from ..act.execute import CATALOG_SOURCE
-from ..act.learn import ADOPT
+from ..act.learn import ADOPT, promotable_solutions
 from ..act.learn import learn as derive_lessons
 from ..act.reflex import reflex_recurrence, reflexes
 from ..act.solution_remedy import record_solution_remediations
@@ -844,15 +844,31 @@ def _render_learn(state_path: str) -> str:
     if not state_path or not Path(state_path).exists():
         return "Nothing learned yet -- steadystate learns from findings that resolve on their own."
     with StateStore(state_path) as store:
-        lessons = derive_lessons(store.all_findings(), store.acted_fingerprints())
-    if not lessons:
+        findings = store.all_findings()
+        acted = store.acted_fingerprints()
+    lessons = derive_lessons(findings, acted)
+    # The on-ramp to the runbook: a category you keep fixing by hand with ONE consistent command is
+    # ready to capture as an authored solution (so next time it's offered + one-approve). Skip ones
+    # already in the runbook; surface the exact `add-solution`. Learning proposes; authoring gates.
+    have = frozenset(s.for_category for s in load_solutions() if s.for_category)
+    drafts = promotable_solutions(findings, acted, skip_categories=have)
+    if not lessons and not drafts:
         return "Nothing learned yet -- run scans/probes over time so resolutions accumulate."
-    backing = sum(lesson.occurrences for lesson in lessons)
-    lines = [f"learned from {backing} out-of-band resolution(s) -- {len(lessons)} lesson(s):"]
-    for lesson in lessons:
-        tag = "ADOPT" if lesson.kind == ADOPT else "SELF-HEAL"
-        lines.append(f"  [{tag}] {lesson.category} x{lesson.occurrences} {lesson.scope}")
-        lines.append(f"      {lesson.recommendation}")
+    lines: list[str] = []
+    if lessons:
+        backing = sum(lesson.occurrences for lesson in lessons)
+        lines.append(f"learned from {backing} out-of-band fix(es) -- {len(lessons)} lesson(s):")
+        for lesson in lessons:
+            tag = "ADOPT" if lesson.kind == ADOPT else "SELF-HEAL"
+            lines.append(f"  [{tag}] {lesson.category} x{lesson.occurrences} {lesson.scope}")
+            lines.append(f"      {lesson.recommendation}")
+    if drafts:
+        lines.append("")
+        lines.append("ready to capture as runbook solutions (a fix you keep applying by hand):")
+        for draft in drafts:
+            run = draft["solution"]["run"]
+            lines.append(f"  {draft['for']}: you keep running `{run}`")
+            lines.append(f"      capture: add-solution '{json.dumps(draft)}' --author you")
     return "\n".join(lines)
 
 
