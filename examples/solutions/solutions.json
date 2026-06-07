@@ -1,0 +1,41 @@
+[
+  {
+    "name": "reclaim-evicted-pods",
+    "for": "Evicted",
+    "problem": "Pods evicted under ephemeral-storage pressure pile up as Failed and clutter the namespace.",
+    "solution": {
+      "kind": "command",
+      "run": "kubectl delete pods --field-selector=status.phase=Failed -n {namespace}"
+    },
+    "impact": "low",
+    "reversibility": "high",
+    "author": "jeff",
+    "added": "2026-06-07"
+  },
+  {
+    "name": "reload-squid-config",
+    "for": "squid-config-drift",
+    "problem": "Squid's config drifted from declared; a reload applies it without a full restart.",
+    "solution": {
+      "kind": "playbook",
+      "run": "ansible-playbook reload-squid.yml -l {workload}"
+    },
+    "impact": "low",
+    "reversibility": "high",
+    "author": "jeff",
+    "added": "2026-06-07"
+  },
+  {
+    "name": "reboot-hung-gateway",
+    "match": "gateway.*(hung|not routing|memory climbing)",
+    "problem": "The Akeyless gateway hangs (stops routing, memory climbs). A reboot clears it; investigate after.",
+    "solution": {
+      "kind": "reboot",
+      "target": "{workload}"
+    },
+    "impact": "medium",
+    "reversibility": "medium",
+    "author": "jeff",
+    "added": "2026-06-07"
+  }
+]
