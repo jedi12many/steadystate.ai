@@ -13,6 +13,29 @@ never printing a secret value) and lists the **runtime dials** with their live v
 > Most of these are optional. The core runs with **nothing set** — point it at IaC and scan. You add
 > a variable to switch on a capability (an LLM, a surface, a listener) or to turn a dial.
 
+## The committed config — `steadystate/config.toml`
+
+Instead of scattering `STEADYSTATE_*` env vars, commit a **`steadystate/config.toml`** beside your
+IaC (version-controlled, reviewed in PRs — the same convention as `checks.json` / `solutions.json`).
+Precedence is 12-factor and non-breaking: **flag > env var > config > built-in default** — the file
+is the *baseline*, env/flags still override per run.
+
+```toml
+[defaults]              # source/path for a bare `scan`/`ci` (the repo IS the wall)
+source = "terraform-state"
+path   = "."
+
+[bound]                 # the autonomy envelope — reviewed in a PR, not a loose env var
+self_healing = "service"    # highest blast radius that may run UNATTENDED, per reversibility
+recoverable  = "none"       # ("none" forbids it). STEADYSTATE_BOUND overrides per run.
+
+[ci]                    # the GitOps gate (inherits source/path from [defaults])
+fail_on = "high"        # any | low | medium | high | critical | none
+to      = "console"     # add "github" to open an issue; deliver = "github-pr" for a reconcile PR
+```
+
+`STEADYSTATE_CONFIG` points elsewhere; it's read CWD-relative, so `--silo` gets per-silo config.
+
 ## Targeting & state
 
 | Variable | Default | Effect |

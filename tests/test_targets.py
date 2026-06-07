@@ -203,7 +203,7 @@ def test_scan_target_and_path_are_mutually_exclusive(monkeypatch, tmp_path):
 def test_scan_needs_a_path_or_target(monkeypatch, tmp_path):
     result = _run(monkeypatch, _targets_dir(tmp_path), ["scan", "--stateless"])
     assert result.exit_code != 0
-    assert "give a path to scan, or --target" in _clean(result.output)
+    assert "give a path, --target" in _clean(result.output)
 
 
 def test_targets_command_lists(monkeypatch, tmp_path):

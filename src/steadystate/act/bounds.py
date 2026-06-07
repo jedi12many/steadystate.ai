@@ -122,33 +122,49 @@ _REVERSIBILITY_BY_NAME = {r.name.lower(): r for r in Reversibility}
 _IMPACT_BY_NAME = {i.name.lower(): i for i in Impact}
 
 
+def _config_bound_table() -> dict:
+    from ..config import config_table  # local import: keep bounds.py importable without the config
+
+    return config_table("bound")
+
+
+def _apply_bound_pair(policy: BoundPolicy, rev_name: str, impact_name: str) -> None:
+    """Overlay one ``reversibility=impact`` decision onto ``policy`` (in place). An unknown
+    reversibility or impact is **skipped**, never applied -- a typo can only leave the bound at the
+    conservative default, never silently widen it ('never escalate on uncertainty')."""
+    reversibility = _REVERSIBILITY_BY_NAME.get(rev_name.strip().lower())
+    if reversibility is None:
+        return
+    impact = impact_name.strip().lower()
+    if impact in ("none", "never", ""):
+        policy[reversibility] = None  # explicitly forbid auto for this reversibility
+    elif impact in _IMPACT_BY_NAME:
+        policy[reversibility] = _IMPACT_BY_NAME[impact]
+    # else: an unknown impact name -> skip (stay conservative; never widen on a typo)
+
+
 def bound_from_env(raw: str | None = None) -> BoundPolicy:
-    """The *active* bound: ``DEFAULT_BOUND`` overlaid with the operator's ``STEADYSTATE_BOUND`` knob
-    -- the widen/narrow dial, the same env-overlay idiom reflex promotion uses
-    (``STEADYSTATE_REFLEX_AUTO``). Every autonomy gate reads this, so one dial governs the whole
-    tool: drift auto-apply, reflexes, and the decider all honor it.
+    """The *active* bound: ``DEFAULT_BOUND`` overlaid with the committed ``[bound]`` table, then the
+    ``STEADYSTATE_BOUND`` env knob (env wins). The widen/narrow dial every autonomy gate reads, so
+    one source governs the whole tool: drift auto-apply, reflexes, solution auto-apply, the decider.
 
-    Format: comma-separated ``reversibility=impact`` pairs, each naming the HIGHEST impact tier that
-    may run unattended for that reversibility (``none`` forbids it entirely). The reversibility
-    names are ``lossless`` / ``self_healing`` / ``recoverable`` / ``irreversible``; the impact names
-    ``one`` / ``service`` / ``tenant`` / ``node`` / ``fleet``. e.g.
-    ``STEADYSTATE_BOUND="recoverable=service"`` lets a recoverable change up to one service auto-run
-    (the dial a terraform operator turns to re-enable `--autonomy auto` after watching it be right).
+    The bound is the one decision that should never be casual -- so it belongs in the **committed
+    config**, reviewed in PRs (`[bound]` with ``reversibility = "impact"`` keys), with the env var
+    the per-run override. Reversibility names: ``lossless`` / ``self_healing`` / ``recoverable`` /
+    ``irreversible``; impact names ``one`` / ``service`` / ``tenant`` / ``node`` / ``fleet`` (each
+    pair names the HIGHEST impact tier that may run unattended for that reversibility; ``none``
+    forbids it). Env format mirrors it: comma-separated ``reversibility=impact`` pairs, e.g.
+    ``STEADYSTATE_BOUND="recoverable=service"``.
 
-    Unparseable tokens are **skipped**, never applied -- a typo can only leave the bound at the
-    conservative default, never silently widen it (the same 'never escalate on uncertainty' the
-    enrichers take). Pure given ``raw`` (reads ``STEADYSTATE_BOUND`` only when ``raw`` is None)."""
-    raw = os.environ.get("STEADYSTATE_BOUND", "") if raw is None else raw
+    Unparseable entries are skipped (never widen on a typo). Pure given ``raw``; with ``raw`` None
+    it reads the committed ``[bound]`` table then ``STEADYSTATE_BOUND``."""
     policy = dict(DEFAULT_BOUND)
+    if raw is None:  # the live resolution: committed config first (baseline), then env (override)
+        for rev_name, impact in _config_bound_table().items():
+            _apply_bound_pair(policy, rev_name, str(impact))
+        raw = os.environ.get("STEADYSTATE_BOUND", "")
     for token in raw.replace(";", ",").split(","):
         key, sep, value = token.partition("=")
-        reversibility = _REVERSIBILITY_BY_NAME.get(key.strip().lower())
-        if not sep or reversibility is None:
-            continue  # not a `reversibility=...` pair, or an unknown reversibility -> skip
-        v = value.strip().lower()
-        if v in ("none", "never", ""):
-            policy[reversibility] = None  # explicitly forbid auto for this reversibility
-        elif v in _IMPACT_BY_NAME:
-            policy[reversibility] = _IMPACT_BY_NAME[v]
-        # else: an unknown impact name -> skip (stay conservative; never widen on a typo)
+        if sep:  # a `reversibility=impact` pair (a bare token is skipped)
+            _apply_bound_pair(policy, key, value)
     return policy
