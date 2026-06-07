@@ -113,6 +113,9 @@ def _version_callback(value: bool) -> None:
         raise typer.Exit()
 
 
+_ACTIVE_SILO = ""  # the named silo this invocation is operating in (set by --silo), for the label
+
+
 @app.callback()
 def _root(
     version: bool = typer.Option(
@@ -122,8 +125,101 @@ def _root(
         is_eager=True,
         help="Show the steadystate version and exit.",
     ),
+    silo: str = typer.Option(
+        "",
+        "--silo",
+        help="Operate in a named silo (a registered deployment): chdir into its folder so its "
+        "state.db / targets / checks / kubeconfig all resolve there -- keeping deployments apart. "
+        "Register with `steadystate silo add <name> <dir>`. Like `git -C`, but by name.",
+    ),
 ) -> None:
     """Stateful monitoring: reconcile declared state vs reality, reason about drift."""
+    global _ACTIVE_SILO
+    _ACTIVE_SILO = silo  # reset each invocation (CliRunner reuses the process)
+    if not silo:
+        return
+    from .silos import resolve_silo
+
+    directory = resolve_silo(silo)
+    if directory is None:
+        raise typer.BadParameter(f"unknown silo: {silo!r}. See `steadystate silo list`.")
+    if not Path(directory).is_dir():
+        raise typer.BadParameter(f"silo {silo!r} points at a missing folder: {directory}")
+    os.chdir(directory)  # every relative default now resolves inside this silo
+
+
+silo_app = typer.Typer(
+    help="Manage named silos -- your deployments, kept separate (each its own folder/state).",
+    no_args_is_help=True,
+)
+app.add_typer(silo_app, name="silo")
+
+
+@silo_app.command("add")
+def silo_add(
+    name: str = typer.Argument(..., help="A short name for this deployment, e.g. akeyless-use1."),
+    directory: str = typer.Argument(..., help="Its folder (holds .steadystate/ + the kubeconfig)."),
+) -> None:
+    """Register a deployment as a named silo, so you can `--silo <name>` instead of a long path.
+    Stores only the folder path (never secrets). Re-adding a name re-points it."""
+    from .silos import add_silo
+
+    target = Path(directory).expanduser()
+    if not target.is_dir():
+        typer.echo(f"not a directory: {directory}", err=True)
+        raise typer.Exit(1)
+    stored = add_silo(name, directory)
+    typer.echo(f"silo '{name}' -> {stored}")
+
+
+@silo_app.command("discover")
+def silo_discover(
+    directory: str = typer.Argument("", help="Parent folder to scan (default: current dir)."),
+) -> None:
+    """Auto-register every immediate subfolder that has a `.steadystate/` as a named silo (named by
+    the subfolder). From a `prod/` holding `web1/ web2/ runners1/` -- each with its own
+    `.steadystate/` -- names them all in one go. Re-running re-points to where they are now."""
+    from .silos import add_silo, discover_silos
+
+    found = discover_silos(directory)
+    if not found:
+        where = directory or "the current directory"
+        typer.echo(f"no silos found under {where} (no immediate subfolder has a .steadystate/).")
+        raise typer.Exit(1)
+    for name in sorted(found):
+        typer.echo(f"silo '{name}' -> {add_silo(name, found[name])}")
+    typer.echo(f"registered {len(found)} silo(s).")
+
+
+@silo_app.command("list")
+def silo_list() -> None:
+    """List the registered silos (name -> folder). Flags any whose folder has gone missing."""
+    from .silos import load_silos, silos_path
+
+    silos = load_silos()
+    if not silos:
+        typer.echo(f"no silos registered (registry: {silos_path()}).")
+        typer.echo("add one with:  steadystate silo add <name> <dir>")
+        return
+    typer.echo(f"{len(silos)} silo(s):")
+    for name in sorted(silos):
+        directory = silos[name]
+        mark = "" if Path(directory).is_dir() else "   (MISSING)"
+        typer.echo(f"  {name}  ->  {directory}{mark}")
+
+
+@silo_app.command("rm")
+def silo_remove(
+    name: str = typer.Argument(..., help="The silo name to drop from the registry."),
+) -> None:
+    """Forget a silo (removes only the registry entry -- never touches the folder or its data)."""
+    from .silos import remove_silo
+
+    if remove_silo(name):
+        typer.echo(f"removed silo '{name}'.")
+    else:
+        typer.echo(f"no silo named '{name}'.", err=True)
+        raise typer.Exit(1)
 
 
 def _drift_source(source: str, path: Path):
@@ -1567,7 +1663,9 @@ def mcp(
         )  # resolve every relative default against the wall folder, like a `cd` there
     if refresh:  # freshen the store before serving, so a connecting agent sees current state
         run_command(Command(PROBE, _local_actor(), refresh), str(state))
-    wall = label or (Path(directory).name if directory else "")
+    # the label self-identifies the silo: an explicit --label wins, else the --silo name (from the
+    # root callback), else the --dir basename. So `--silo akeyless-use1 mcp` labels itself.
+    wall = label or _ACTIVE_SILO or (Path(directory).name if directory else "")
     truthy = ("1", "true", "yes", "on")
     granted = write or os.environ.get("STEADYSTATE_MCP_WRITE", "").strip().lower() in truthy
     can_author = author or os.environ.get("STEADYSTATE_MCP_AUTHOR", "").strip().lower() in truthy
@@ -1938,6 +2036,7 @@ _DIALS: tuple[tuple[str, str, str], ...] = (
     ("STEADYSTATE_REACHABLE_TIMEOUT", "8s", "cluster reachability probe timeout (0 = no cap)"),
     ("STEADYSTATE_RESOLVE_AFTER", "30m", "grace before a gone finding resolves (0 = immediate)"),
     ("STEADYSTATE_PATCH_DIR", ".steadystate/patches", "where remediation patch files are written"),
+    ("STEADYSTATE_SILOS", "~/.steadystate/silos.json", "named-silo registry (`silo add` / --silo)"),
     ("STEADYSTATE_CHECKS", ".steadystate/checks.json", "custom-checks file (version-control this)"),
     ("STEADYSTATE_ENRICH_QUERY", "(none)", "PromQL bar for --enrich prometheus"),
 )

@@ -276,10 +276,10 @@ _HOW_TO = (
 
 
 def _server_instructions(state_path: str, label: str) -> str:
-    """The `initialize` instructions, made **stateful**: a header naming this wall, then the live
+    """The `initialize` instructions, made **stateful**: a header naming this silo, then the live
     summary (open findings, what's pending, how fresh the data is), then the how-to -- so an agent
     resumes already knowing the state, no tool round-trip. The summary is a cheap store read."""
-    who = f"steadystate -- wall: {label}" if label else "steadystate"
+    who = f"steadystate -- silo: {label}" if label else "steadystate"
     snapshot = run_command(Command(SUMMARY, _MCP_ACTOR), state_path).strip()
     header = (
         f"{who}\nCurrent state (call `summary` to refresh):\n{snapshot}\n\n" if snapshot else ""

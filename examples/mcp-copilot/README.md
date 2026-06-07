@@ -89,6 +89,24 @@ folder name). On connect, the server hands the agent a **live status line** — 
 open/pending, how fresh* — so it resumes without a "let me check" round-trip; add `--refresh
 <target>` to probe that summary *current* at connect (trades a few seconds of startup for freshness).
 
+> **Cleaner: name your silos once.** Instead of a long `--dir` path + `--label` per server,
+> register each deployment as a **named silo** and refer to it by name:
+> ```sh
+> steadystate silo add akeyless-use1 ~/ssai/akeyless/us-east-1
+> steadystate silo add squid-use1    ~/ssai/squid/us-east-1
+> steadystate silo list
+> # or, if your deployments are subfolders of one parent (each with a .steadystate/):
+> cd ~/ssai && steadystate silo discover     # registers each subfolder by name
+> ```
+> Then the config is just the name (it chdir's into the silo *and* self-labels):
+> ```json
+> "args": ["--silo", "akeyless-use1", "mcp"],            // read-only silo
+> "args": ["--silo", "squid-use1", "mcp", "--write"],    // a silo you trust to remediate
+> ```
+> `--silo` is a global option (it comes *before* `mcp`, like `git -C`). The registry lives at
+> `~/.steadystate/silos.json` and holds only folder paths — never secrets. Same isolation; less to
+> keep in sync.
+
 One `--dir` per wall — no `--state`/`STEADYSTATE_TARGETS`/`KUBECONFIG` to keep in sync. (If your
 `targets.json` references kubeconfigs by *absolute* path, they work regardless; by *relative* path,
 `--dir` resolves those too.) Prefer to pin paths explicitly instead? Pass absolute `--state` +
