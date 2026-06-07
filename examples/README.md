@@ -21,6 +21,7 @@ the scenarios reference them and add the environment-specific glue.
 | [mcp-copilot](./mcp-copilot/) | an MCP server per wall, driven by an agent | a kubeconfig per deployment+region, walled by db + registry |
 | [custom-checks](./custom-checks/) | declarative functional-health rules | "is it doing its job?" per app — k8s/docker/ansible, authored by talking |
 | [contained-agent](./contained-agent/) | an agent whose *only* tool is steadystate | the gates as a **real fence** — no shell, steadystate holds the creds (the sole-actuator setup) |
+| [brokered-creds](./brokered-creds/) | no static kubeconfig | a pre-launch wrapper brokers a **short-lived** kubeconfig from Akeyless/Vault → Rancher; the secret never lands |
 
 New to steadystate? Start on a **[bastion-host](./bastion-host/)** — run it on a jump box you
 already use, deploy nothing into the cluster, and probe the live clusters with `steadystate chat`.
