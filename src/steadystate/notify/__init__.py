@@ -18,6 +18,7 @@ from ..plugins import merged
 from .base import Surface
 from .console import ConsoleSurface
 from .discord import DiscordSurface
+from .github import GithubIssuesSurface
 from .grafana import GrafanaSurface
 from .pagerduty import PagerDutySurface
 from .prometheus import PrometheusSurface
@@ -39,6 +40,7 @@ _BUILTIN_SURFACES: dict[str, Callable[[], Surface]] = {
     "webhook": WebhookSurface,
     "pagerduty": PagerDutySurface,
     "servicenow": ServiceNowSurface,
+    "github": GithubIssuesSurface,
 }
 
 # Built-ins overlaid with discovered `steadystate.surfaces` entry points.
