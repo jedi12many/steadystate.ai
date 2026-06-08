@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -88,7 +89,7 @@ from .serialize import report_to_dict
 from .sources import CAPABILITIES, DRIFT_SOURCES, PATHLESS_SOURCES, build_drift_source
 from .sources.base import DriftSource, SourceError
 from .sources.k8s import HelmLiveSource, KustomizeLiveSource, capture_baseline
-from .state import PendingAction, StateStore, filter_findings
+from .state import OPEN, Finding, PendingAction, StateStore, filter_findings
 from .sweep import render_sweep, sweep_targets
 from .targets import (
     DEFAULT_TARGETS_FILE,
@@ -1106,6 +1107,105 @@ def analyze(
     from .inbound.server import _render_analyze
 
     typer.echo(_render_analyze(fingerprint, str(state)))
+
+
+class _WatchDone(Exception):  # noqa: N818 -- a control-flow signal, not an error
+    """Raised to break the watch loop on the first match (`--once`)."""
+
+
+def _new_matches(
+    findings: list[Finding], pattern: re.Pattern[str] | None, seen: set[str]
+) -> list[Finding]:
+    """The open findings not yet seen this watch session, matching ``pattern`` (or all). Marks EVERY
+    fresh one seen (so a non-matching one doesn't re-report either), returns the matching ones. Pure
+    given ``seen`` (which it mutates) -- the watch's 'what's new since last poll' decision."""
+    fresh: list[Finding] = []
+    for finding in findings:
+        if finding.status != OPEN or finding.fingerprint in seen:
+            continue
+        seen.add(finding.fingerprint)
+        if pattern is None or pattern.search(finding.last_title):
+            fresh.append(finding)
+    return fresh
+
+
+@app.command()
+def watch(
+    target: str = typer.Argument(..., help="A target name (STEADYSTATE_TARGETS) to watch live."),
+    for_pattern: str = typer.Option(
+        "", "--for", help="Only report findings whose title matches this (regex, case-insensitive)."
+    ),
+    timeout: str = typer.Option(
+        "5m", "--timeout", help="How long to watch: 5m | 30s | 1h | 0 (until Ctrl-C)."
+    ),
+    interval: str = typer.Option("20s", "--interval", help="How often to re-probe the target."),
+    once: bool = typer.Option(False, "--once", help="Stop at the first matching finding."),
+    deep: bool = typer.Option(
+        True, "--deep/--no-deep", help="Scan pod logs too -- catches a panic in the logs."
+    ),
+    state: Path = _STATE_OPTION,
+) -> None:
+    """Watch a target **live** for a bounded window (default **5m**) -- re-probe every `--interval`
+    and report the moment a finding appears that's NEW since the watch began (optionally only those
+    matching `--for`). The repro tool: trigger a transient failure, watch it land, then
+    `analyze <fp>` it. Bounded by design (`--timeout` / `--once` / Ctrl-C) -- a focused repro
+    helper, not a monitoring daemon. Records to state, so a catch is tracked + ready for
+    `show`/`analyze`. Exits non-zero if it caught something (a gate-friendly signal)."""
+    import time
+
+    from .inbound.server import _parse_duration, probe_report
+
+    every = _parse_duration(interval)
+    if every is None:
+        raise typer.BadParameter("--interval must be like 20s, 1m, 2m, ...")
+    unbounded = timeout.strip() in ("0", "")
+    limit = None if unbounded else _parse_duration(timeout)
+    if not unbounded and limit is None:
+        raise typer.BadParameter("--timeout must be like 5m, 30s, 1h, or 0 for no limit.")
+    deadline = None if limit is None else time.monotonic() + limit.total_seconds()
+    pattern = re.compile(for_pattern, re.IGNORECASE) if for_pattern else None
+    window = "until Ctrl-C" if unbounded else timeout
+    match_note = f", matching /{for_pattern}/" if pattern else ""
+    typer.echo(f"watching {target} every {interval} for {window}{match_note} -- Ctrl-C to stop")
+    seen: set[str] = set()
+    matched = 0
+    first = True
+    try:
+        while True:
+            try:
+                probe_report(target, str(state), scan_logs=deep)  # records findings to state
+            except LookupError as exc:  # unresolvable target -> a clean message, not a crash
+                typer.secho(str(exc), fg="red", err=True)
+                raise typer.Exit(2) from None
+            except Exception as exc:  # noqa: BLE001 -- a probe blip mustn't kill the watch
+                typer.secho(f"  (probe failed this poll: {exc})", fg="yellow", err=True)
+            else:
+                with _open_store(state) as store:
+                    findings = store.all_findings()
+                fresh = _new_matches(findings, pattern, seen)
+                if first:  # baseline the pre-existing findings -- we report only NEW ones
+                    first = False
+                else:
+                    for finding in fresh:
+                        matched += 1
+                        stamp = datetime.now(UTC).strftime("%H:%M:%S")
+                        typer.secho(
+                            f"[{stamp}] CAUGHT  {finding.last_title}  [{finding.last_severity}]",
+                            fg="yellow",
+                        )
+                        hint = f"          -> steadystate analyze {finding.fingerprint[:12]}"
+                        typer.secho(hint, fg="cyan")
+                        if once:
+                            raise _WatchDone
+            if deadline is not None and time.monotonic() >= deadline:
+                break
+            time.sleep(every.total_seconds())
+    except (KeyboardInterrupt, _WatchDone):
+        pass
+    tail = "" if matched else " -- all quiet"
+    typer.echo(f"\nwatched {target}: caught {matched} new finding(s){tail}")
+    if matched:
+        raise typer.Exit(1)
 
 
 @app.command()
