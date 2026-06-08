@@ -2400,6 +2400,19 @@ def doctor(
     console = Console()
     _render_audit(console, env, title="Configuration")
     _render_dials(console, env)
+    _render_intent(console)
+
+
+def _render_intent(console: Console) -> None:
+    """The authored-intent preflight: diagnose `checks.json` + `solutions.json` so an authored rule
+    that 'doesn't show up' has a clear cause -- they load SILENTLY (bad path / bad JSON / a bad
+    entry all vanish without a word), and this is where that becomes visible."""
+    from .probe.custom import diagnose_checks
+    from .probe.solutions import diagnose_solutions
+
+    console.print("\n[bold]Authored intent[/bold] (checks + runbook)")
+    for line in diagnose_checks() + diagnose_solutions():
+        console.print(f"  {line}")
 
 
 def _create_targets(
