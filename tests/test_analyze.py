@@ -115,3 +115,41 @@ def test_analyze_verb_renders_the_rca_for_a_recorded_finding(tmp_path, monkeypat
     # no LLM -> a clean, honest degrade (never a guess)
     monkeypatch.setattr(srv, "_nl_analyst", lambda: None)
     assert "analyze needs an LLM" in srv._render_analyze("a" * 64, db)
+
+
+# -- the close-the-loop: save -> show displays -> send to a surface ---------------
+
+
+def test_analyze_saves_the_rca_and_show_displays_it(tmp_path, monkeypatch):
+    import steadystate.inbound.server as srv
+
+    db = str(tmp_path / "s.db")
+    with StateStore(db) as store:
+        store.record(
+            {"a" * 64: ("high", "akeyless-gw is Erroring")},
+            datetime.now(UTC),
+            {"a" * 64: {"category": "Erroring", "trace": _PANIC}},
+        )
+
+    class _A:
+        def _complete(self, _s, _u, _c):
+            return "Root cause: nil hvclient.Client on a 0x0 receiver."
+
+    monkeypatch.setattr(srv, "_nl_analyst", lambda: _A())
+    srv._render_analyze("a" * 64, db)  # produces + SAVES the RCA
+    with StateStore(db) as store:
+        assert store.get_analysis("a" * 64) is not None  # persisted (upsert), survives the terminal
+    shown = srv._render_show("a" * 64, db)
+    assert "root-cause analysis" in shown and "nil hvclient.Client" in shown  # rides along in show
+
+
+def test_send_analysis_guards(tmp_path):
+    import steadystate.inbound.server as srv
+
+    db = str(tmp_path / "s.db")
+    with StateStore(db) as store:
+        store.record({"a" * 64: ("high", "x")}, datetime.now(UTC), {"category": "Erroring"})
+    assert "only `github`" in srv._send_analysis(
+        "a" * 64, db, "slack"
+    )  # only github carries an RCA
+    assert "analyze" in srv._send_analysis("a" * 64, db, "github")  # no saved RCA -> run analyze

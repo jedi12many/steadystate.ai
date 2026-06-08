@@ -187,6 +187,36 @@ class GithubIssuesSurface:
         except (urllib.error.URLError, OSError) as exc:
             logger.warning("GitHub issue close failed for #%s: %s", number, exc)
 
+    def post_rca(self, fingerprint: str, finding_title: str, rca: str) -> str:
+        """Send a finding's root-cause analysis to GitHub -- so a vendor/support handoff is one
+        command, with the grounded writeup attached. Dedups by the same fingerprint marker: an
+        existing steadystate issue for this finding gets the RCA as a **comment**; otherwise a new
+        issue is opened carrying it. Returns a human message (never raises -- best-effort)."""
+        if not self._configured():
+            return "github not configured -- set STEADYSTATE_GITHUB_TOKEN + _REPO."
+        section = f"## Root-cause analysis\n\n{rca}\n\n_Posted by steadystate `analyze`._"
+        try:
+            number = self._open_issues().get(fingerprint)
+            if number is not None:  # append the RCA to the finding's existing issue
+                self._request(
+                    "POST", f"/repos/{self.repo}/issues/{number}/comments", {"body": section}
+                )
+                return f"posted the RCA to issue #{number} ({self.repo})."
+            body = f"{section}\n\n<!-- steadystate-fp: {fingerprint} -->"
+            created = self._request(
+                "POST",
+                f"/repos/{self.repo}/issues",
+                {
+                    "title": f"[steadystate] RCA: {finding_title}"[:256],
+                    "body": body,
+                    "labels": [_LABEL],
+                },
+            )
+            num = created.get("number") if isinstance(created, dict) else "?"
+            return f"opened issue #{num} with the RCA ({self.repo})."
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            return f"github post failed: {exc}"
+
     def _open_issues(self) -> dict[str, int]:
         """``{fingerprint: issue_number}`` for OPEN ``steadystate``-labelled issues. PRs (which the
         issues API also returns) are filtered out; an issue without our marker is ignored."""

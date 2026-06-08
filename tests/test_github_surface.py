@@ -172,3 +172,35 @@ def test_unconfigured_is_a_quiet_no_op(monkeypatch):
     monkeypatch.setenv("STEADYSTATE_GITHUB_REPO", "acme/infra")
     # no token -> not configured -> emits nothing, never raises
     GithubIssuesSurface().emit(_Rep([_alert("x", Severity.HIGH, "a" * 64)]))
+
+
+# -- post_rca: send a finding's root-cause analysis (analyze --to github) ----------
+
+
+def test_post_rca_opens_an_issue_carrying_the_analysis(monkeypatch):
+    with _github(monkeypatch) as fake:
+        msg = GithubIssuesSurface().post_rca("a" * 64, "akeyless-gw Erroring", "Root cause: nil.")
+    issues = _posts_to_issues(fake)
+    assert len(issues) == 1 and "RCA: akeyless-gw Erroring" in issues[0]["title"]
+    assert "Root cause: nil." in issues[0]["body"]  # the RCA is in the issue
+    assert f"steadystate-fp: {'a' * 64}" in issues[0]["body"]  # keyed for dedup
+    assert "#101" in msg
+
+
+def test_post_rca_comments_on_an_existing_issue_for_the_finding(monkeypatch):
+    with _github(monkeypatch) as fake:
+        surface = GithubIssuesSurface()
+        surface.emit(_Rep([_alert("akeyless-gw down", Severity.HIGH, "a" * 64)]))  # opens the issue
+        before = len(_posts_to_issues(fake))
+        msg = surface.post_rca("a" * 64, "akeyless-gw down", "Root cause: nil ptr.")
+    assert before == 1 and len(_posts_to_issues(fake)) == 1  # no NEW issue -- it commented instead
+    comments = [c for c in fake.calls if c[0] == "POST" and c[1].endswith("/comments")]
+    assert comments and "Root cause: nil ptr." in comments[-1][2]["body"]
+    assert "#101" in msg
+
+
+def test_post_rca_unconfigured_is_a_clean_message(monkeypatch):
+    monkeypatch.delenv("STEADYSTATE_GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("STEADYSTATE_GITHUB_REPO", raising=False)
+    assert "not configured" in GithubIssuesSurface().post_rca("a" * 64, "x", "rca")
