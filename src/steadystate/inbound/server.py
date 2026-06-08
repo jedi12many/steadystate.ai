@@ -40,6 +40,7 @@ from ..onboarding import Status, capabilities
 from ..probe.custom import add_check, describe_check, load_checks, run_smoke_checks
 from ..probe.solutions import add_solution, describe_solution, load_solutions, solutions_for
 from ..reason.alert import Alert, Layer, Severity
+from ..reason.analyze import analyze_finding
 from ..reason.cost import roll_up, roll_up_by_period, scan_cost_line
 from ..reason.llm import LLMAnalyst
 from ..reason.report import Report
@@ -52,6 +53,7 @@ from .base import (
     ACTIONS_LIST,
     ADD_CHECK,
     ADD_SOLUTION,
+    ANALYZE,
     APPROVE,
     CHECKS,
     COST,
@@ -463,6 +465,30 @@ def _render_show(fingerprint: str, state_path: str, flags: frozenset[str] = froz
         lines.append("  -- known solution(s) (authored runbook) --")
         lines += [f"  {describe_solution(s)}" for s in matches]
     return "\n".join(lines)
+
+
+def _render_analyze(fingerprint: str, state_path: str) -> str:
+    """`analyze <fingerprint>`: the grounded root-cause analysis of a captured finding (a crash /
+    panic). The RCA a senior on-call would write -- root cause, the call chain, the smoking gun, the
+    trigger, the operational facts -- but **anchored to the evidence the probe captured** (the stack
+    trace, the restart, the retention) and told to cite it and never invent. Read-only; needs an LLM
+    (it *is* the analysis). The model reasons; steadystate captured the evidence + frames it."""
+    if not state_path or not Path(state_path).exists():
+        return "No findings yet -- run a `probe`/`scan` first, then `analyze <fingerprint>`."
+    with StateStore(state_path) as store:
+        finding, error = _lookup_finding(store, fingerprint)
+    if finding is None:
+        return error
+    analyst = _nl_analyst()
+    if analyst is None:
+        return (
+            "analyze needs an LLM (ANTHROPIC_API_KEY or a custom endpoint) -- it's a grounded RCA "
+            "over the captured evidence, not a guess. `show` gives the raw evidence; see `doctor`."
+        )
+    rca = analyze_finding(finding, analyst._complete)
+    if not rca:
+        return "the model returned no analysis -- try again, or `show` the captured evidence."
+    return f"root-cause analysis -- {finding.last_title}\n{'=' * 60}\n{rca}"
 
 
 def _lookup_finding(store: StateStore, token: str) -> tuple[Finding | None, str]:
@@ -1209,6 +1235,8 @@ def run_command(command: Command, state_path: str) -> str:
         return _render_findings(state_path, command.argument, command.flags)
     if command.verb == SHOW:
         return _render_show(command.argument, state_path, command.flags)
+    if command.verb == ANALYZE:
+        return _render_analyze(command.argument, state_path)
     if command.verb == SURFACES_LIST:
         return _render_surfaces()
     if command.verb == SEND:

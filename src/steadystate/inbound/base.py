@@ -50,6 +50,7 @@ POSTURE = "posture"
 METRICS = "metrics"
 FINDINGS = "findings"
 SHOW = "show"
+ANALYZE = "analyze"
 SURFACES_LIST = "surfaces"
 SEND = "send"
 FIX = "fix"
@@ -85,6 +86,12 @@ COMMANDS: dict[str, tuple[str, str]] = {
         "show <fingerprint> [json]",
         "show a finding's captured evidence -- the fields (namespace, cluster, pod count, the "
         "failing pod's last log) plus when it was first/last seen; `json` returns it as JSON",
+    ),
+    ANALYZE: (
+        "analyze <fingerprint>",
+        "grounded root-cause analysis of a captured crash/panic -- root cause, the call chain, the "
+        "smoking gun, the trigger, the operational facts -- anchored to the captured evidence (the "
+        "stack trace), told to cite it and never invent. Needs an LLM",
     ),
     HISTORY: ("history", "show the remediation audit log (newest first)"),
     HOLD: (
@@ -258,6 +265,7 @@ _TOOL_ARGS: dict[str, tuple[tuple[str, bool], ...]] = {
     COST: (("period", False),),  # day | week, optional
     FINDINGS: (("filter", False),),  # an optional status word and/or keyword to grep
     SHOW: (("fingerprint", True),),
+    ANALYZE: (("fingerprint", True),),
     HISTORY: (),
     HOLD: (),
     LEARN: (),
@@ -292,6 +300,7 @@ _TOOL_EFFECT: dict[str, str] = {
     COST: "read-only",
     FINDINGS: "read-only",
     SHOW: "read-only",
+    ANALYZE: "read-only",  # reads a finding + reasons (an LLM egress); never mutates infra/state
     HISTORY: "read-only",
     HOLD: "read-only",
     LEARN: "read-only",

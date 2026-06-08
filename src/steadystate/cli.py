@@ -1095,6 +1095,20 @@ def show(
 
 
 @app.command()
+def analyze(
+    fingerprint: str = typer.Argument(..., help="A finding's fingerprint (or a unique prefix)."),
+    state: Path = _STATE_OPTION,
+) -> None:
+    """Grounded **root-cause analysis** of a captured crash/panic finding -- the RCA a senior
+    on-call writes (root cause, call chain, the smoking gun, the trigger, the operational facts),
+    but **anchored to the evidence the probe captured** (the stack trace) and told to cite it and
+    never invent. Needs an LLM (it *is* the analysis; `show` is the raw evidence). Read-only."""
+    from .inbound.server import _render_analyze
+
+    typer.echo(_render_analyze(fingerprint, str(state)))
+
+
+@app.command()
 def cost(
     state: Path = _STATE_OPTION,
     window: str = typer.Option(

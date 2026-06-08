@@ -12,7 +12,7 @@ import json
 import logging
 import re
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from ..model import Provenance, Resource
 from ..reason.alert import Severity
@@ -255,20 +255,31 @@ _LOG_ERROR_RE = re.compile(
 @dataclass(frozen=True)
 class LogVerdict:
     """The outcome of scanning one pod's log tail: how many error lines, whether any was a
-    fatal-class signature, and a few sample lines (capped) for the evidence."""
+    fatal-class signature, a few sample lines (capped) for the evidence, and -- when a fatal
+    signature is hit -- the **trace block** after it (the stack frames / call chain), captured
+    so a later `analyze` can root-cause it even after the pod restarts and the logs roll."""
 
     error_count: int
     fatal: bool
     sample: list[str]
+    trace: list[str] = field(default_factory=list)
+
+
+_TRACE_LINES = 25  # how many lines of the post-fatal block to keep (a panic + a few frames)
 
 
 def scan_log_text(text: str, threshold: int) -> LogVerdict | None:
     """Scan a log tail for trouble. Returns a verdict when a FATAL-class signature appears (one is
-    enough) OR the error-line count reaches ``threshold``; else None (nothing actionable). Pure +
-    testable -- the detection rule, isolated from kubectl."""
+    enough) OR the error-line count reaches ``threshold``; else None (nothing actionable). On a
+    fatal hit it also captures the **block from the fatal line onward** (the stack trace / call
+    chain) -- the evidence root-cause analysis needs, which the matching-lines sample misses (a Go
+    panic's frames aren't 'error' lines). Pure + testable -- the detection rule, isolated from
+    kubectl."""
     fatal = False
     count = 0
     sample: list[str] = []
+    trace: list[str] = []
+    capturing = False
     for raw in text.splitlines():
         line = raw.strip()
         if not line:
@@ -279,8 +290,12 @@ def scan_log_text(text: str, threshold: int) -> LogVerdict | None:
             fatal = fatal or is_fatal
             if len(sample) < 5:
                 sample.append(line[:200])
+        if is_fatal:  # start the trace block at the first fatal signature
+            capturing = True
+        if capturing and len(trace) < _TRACE_LINES:
+            trace.append(line[:300])  # the fatal line + the following stack frames
     if fatal or count >= threshold:
-        return LogVerdict(error_count=count, fatal=fatal, sample=sample)
+        return LogVerdict(error_count=count, fatal=fatal, sample=sample, trace=trace)
     return None
 
 
@@ -428,6 +443,7 @@ class KubectlProbe:
         fatal = False
         sample: list[str] = []
         scanned: list[str] = []
+        trace: list[str] = []  # the stack-trace block from the first fatal pod -- for `analyze`
         for pod in pod_names:
             text = self._run_text(
                 self._kubectl("logs", pod, "-n", namespace, "--tail", str(self._scan_tail)),
@@ -441,6 +457,8 @@ class KubectlProbe:
                 continue
             total += verdict.error_count
             fatal = fatal or verdict.fatal
+            if verdict.trace and not trace:  # keep the first pod's full trace as evidence
+                trace = verdict.trace
             for line in verdict.sample:
                 if len(sample) < 5:
                     sample.append(line)
@@ -464,6 +482,8 @@ class KubectlProbe:
             evidence["cluster"] = self._context
         if sample:
             evidence["sample"] = " | ".join(sample[:3])
+        if trace:  # the captured stack-trace block -- the call chain `analyze` root-causes
+            evidence["trace"] = "\n".join(trace)
         return Symptom(
             identity=resource.identity,
             kind=resource.kind,
