@@ -441,6 +441,7 @@ def _render_show(fingerprint: str, state_path: str, flags: frozenset[str] = froz
         return _json_error(msg) if want_json else msg
     with StateStore(state_path) as store:
         finding, error = _lookup_finding(store, fingerprint)
+        analysis = store.get_analysis(finding.fingerprint) if finding is not None else None
     if finding is None:
         return _json_error(error) if want_json else error
     if want_json:
@@ -464,6 +465,10 @@ def _render_show(fingerprint: str, state_path: str, flags: frozenset[str] = froz
     if matches:
         lines.append("  -- known solution(s) (authored runbook) --")
         lines += [f"  {describe_solution(s)}" for s in matches]
+    if analysis is not None:  # a saved root-cause analysis (`analyze`) rides along
+        rca, when = analysis
+        lines.append(f"  -- root-cause analysis ({when[:19]}) --")
+        lines += [f"  {line}" for line in rca.splitlines()]
     return "\n".join(lines)
 
 
@@ -488,7 +493,30 @@ def _render_analyze(fingerprint: str, state_path: str) -> str:
     rca = analyze_finding(finding, analyst._complete)
     if not rca:
         return "the model returned no analysis -- try again, or `show` the captured evidence."
-    return f"root-cause analysis -- {finding.last_title}\n{'=' * 60}\n{rca}"
+    with StateStore(state_path) as store:  # persist it -- don't lose the RCA, or re-pay the model
+        store.save_analysis(finding.fingerprint, rca, datetime.now(UTC))
+    saved = f"\n\n(saved -- `show {finding.fingerprint[:12]}` shows it; `--to github` sends it)"
+    return f"root-cause analysis -- {finding.last_title}\n{'=' * 60}\n{rca}{saved}"
+
+
+def _send_analysis(fingerprint: str, state_path: str, surface: str) -> str:
+    """Send a finding's **saved** RCA to a surface -- the close-the-loop step (`analyze --to github`
+    opens/updates a GitHub issue carrying it, so notifying the vendor is one command). The RCA must
+    exist first (`analyze` saves it). Only `github` carries an RCA today."""
+    if surface != "github":
+        return f"--to {surface}: only `github` carries an RCA today."
+    if not state_path or not Path(state_path).exists():
+        return "no findings yet -- `analyze <fingerprint>` first."
+    with StateStore(state_path) as store:
+        finding, error = _lookup_finding(store, fingerprint)
+        analysis = store.get_analysis(finding.fingerprint) if finding is not None else None
+    if finding is None:
+        return error
+    if analysis is None:
+        return "no saved analysis for that finding -- run `analyze <fingerprint>` first."
+    from ..notify.github import GithubIssuesSurface
+
+    return GithubIssuesSurface().post_rca(finding.fingerprint, finding.last_title, analysis[0])
 
 
 def _lookup_finding(store: StateStore, token: str) -> tuple[Finding | None, str]:

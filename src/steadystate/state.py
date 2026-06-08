@@ -103,6 +103,16 @@ CREATE TABLE IF NOT EXISTS audit_log (
 )
 """
 
+# The grounded root-cause analyses `analyze` produces -- one per fingerprint (re-runnable ->
+# upsert), so an RCA persists (shows in `show`, can be sent to a surface), not lost to scrollback.
+_ANALYSES_SCHEMA = """
+CREATE TABLE IF NOT EXISTS analyses (
+    fingerprint    TEXT PRIMARY KEY,
+    rca            TEXT NOT NULL,
+    created_at     TEXT NOT NULL
+)
+"""
+
 # Pending-action lifecycle.
 PENDING = "pending"
 APPROVED = "approved"
@@ -221,6 +231,7 @@ class StateStore:
         self._conn.execute(_LLM_SCHEMA)
         self._conn.execute(_PENDING_SCHEMA)
         self._conn.execute(_AUDIT_SCHEMA)
+        self._conn.execute(_ANALYSES_SCHEMA)
         self._migrate()
 
     def _migrate(self) -> None:
@@ -585,6 +596,21 @@ class StateStore:
             "UPDATE pending_actions SET status = ?, actor = ? WHERE fingerprint = ?",
             (status, actor, fingerprint),
         )
+
+    def save_analysis(self, fingerprint: str, rca: str, now: datetime) -> None:
+        """Persist (upsert) the root-cause analysis for a finding -- one per fingerprint,
+        re-runnable, so the RCA survives the terminal and `show` displays it (don't re-pay)."""
+        self._conn.execute(
+            "INSERT OR REPLACE INTO analyses (fingerprint, rca, created_at) VALUES (?, ?, ?)",
+            (fingerprint, rca, _iso(now)),
+        )
+
+    def get_analysis(self, fingerprint: str) -> tuple[str, str] | None:
+        """The stored ``(rca, created_at)`` for a finding, or None when it hasn't been analyzed."""
+        row = self._conn.execute(
+            "SELECT rca, created_at FROM analyses WHERE fingerprint = ?", (fingerprint,)
+        ).fetchone()
+        return (row["rca"], row["created_at"]) if row is not None else None
 
     def claim_pending(
         self, fingerprint: str, from_status: str, to_status: str, actor: str | None = None

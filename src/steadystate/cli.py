@@ -1099,14 +1099,20 @@ def show(
 def analyze(
     fingerprint: str = typer.Argument(..., help="A finding's fingerprint (or a unique prefix)."),
     state: Path = _STATE_OPTION,
+    to: str = typer.Option(
+        "", "--to", help="After analyzing, send the RCA to a surface (`github` -> an issue)."
+    ),
 ) -> None:
     """Grounded **root-cause analysis** of a captured crash/panic finding -- the RCA a senior
     on-call writes (root cause, call chain, the smoking gun, the trigger, the operational facts),
     but **anchored to the evidence the probe captured** (the stack trace) and told to cite it and
-    never invent. Needs an LLM (it *is* the analysis; `show` is the raw evidence). Read-only."""
-    from .inbound.server import _render_analyze
+    never invent. Needs an LLM (it *is* the analysis; `show` is the raw evidence). The RCA is saved
+    (so `show` shows it); `--to github` opens/updates an issue carrying it -- the close-the-loop."""
+    from .inbound.server import _render_analyze, _send_analysis
 
     typer.echo(_render_analyze(fingerprint, str(state)))
+    if to.strip():
+        typer.echo(_send_analysis(fingerprint, str(state), to.strip().lower()))
 
 
 class _WatchDone(Exception):  # noqa: N818 -- a control-flow signal, not an error
