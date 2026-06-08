@@ -258,6 +258,40 @@ def load_checks(path: str = "") -> list[CustomCheck]:
     return [check for item in raw if (check := parse_check(item)) is not None]
 
 
+def diagnose_checks(path: str = "") -> list[str]:
+    """A human diagnosis of the checks file for `doctor` -- because `load_checks` SILENTLY drops
+    what it can't parse (a bad JSON file -> [], a bad entry -> skipped, a wrong path -> missing), so
+    authored check that just 'doesn't show up' gives no clue why. This turns each silent miss into a
+    line: where it looked, whether the file is there + parses, how many checks loaded, and WHICH
+    entries were skipped. Returns lines (the first names the resolved path)."""
+    resolved = resolve_checks_path(path)
+    lines = [f"checks file: {resolved}"]
+    target = Path(resolved)
+    if not target.exists():
+        looked = " or ".join(dict.fromkeys([COMMITTED_CHECKS_FILE, DEFAULT_CHECKS_FILE]))
+        lines.append(f"  not found (looked: {looked}). Set STEADYSTATE_CHECKS / --checks.")
+        return lines
+    try:
+        raw = json.loads(target.read_text())
+    except (OSError, ValueError) as exc:
+        lines.append(f"  INVALID JSON ({exc}) -- the WHOLE file is ignored. Fix the syntax.")
+        return lines
+    if not isinstance(raw, list):
+        lines.append("  not a JSON list -- it must be a [ ... ] of check objects.")
+        return lines
+    valid = 0
+    for i, item in enumerate(raw):
+        if parse_check(item) is not None:
+            valid += 1
+        else:
+            name = item.get("name", "?") if isinstance(item, dict) else "?"
+            lines.append(f"  check #{i} ('{name}'): SKIPPED -- doesn't match the vetted schema.")
+    lines.append(f"  {valid}/{len(raw)} check(s) valid + loaded.")
+    if valid < len(raw):
+        lines.append(f"  schema: {CHECK_SCHEMA_HINT}")
+    return lines
+
+
 # -- authoring: validate + store a check, and translate natural language into one -----------------
 
 # A compact description of the vetted schema -- prompts the LLM (`define_check`) and tells a caller

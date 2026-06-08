@@ -132,6 +132,40 @@ def load_solutions(path: str = "") -> list[Solution]:
     return [sol for item in raw if (sol := parse_solution(item)) is not None]
 
 
+def diagnose_solutions(path: str = "") -> list[str]:
+    """A human diagnosis of the runbook file for `doctor` -- like ``diagnose_checks``, because
+    ``load_solutions`` SILENTLY drops what it can't parse (bad JSON -> [], a bad entry -> skipped,
+    a wrong path -> not found). Turns each silent miss into a line: where it looked, whether the
+    file parses, how many solutions loaded, and WHICH entries were skipped (most commonly: a missing
+    ``author``, no matcher, or an uncompilable ``match`` regex)."""
+    resolved = resolve_solutions_path(path)
+    lines = [f"runbook (solutions) file: {resolved}"]
+    target = Path(resolved)
+    if not target.exists():
+        looked = " or ".join(dict.fromkeys([COMMITTED_SOLUTIONS_FILE, DEFAULT_SOLUTIONS_FILE]))
+        lines.append(f"  not found (looked: {looked}). Set STEADYSTATE_SOLUTIONS / --solutions.")
+        return lines
+    try:
+        raw = json.loads(target.read_text())
+    except (OSError, ValueError) as exc:
+        lines.append(f"  INVALID JSON ({exc}) -- the WHOLE file is ignored. Fix the syntax.")
+        return lines
+    if not isinstance(raw, list):
+        lines.append("  not a JSON list -- it must be a [ ... ] of solution objects.")
+        return lines
+    valid = 0
+    for i, item in enumerate(raw):
+        if parse_solution(item) is not None:
+            valid += 1
+        else:
+            name = item.get("name", "?") if isinstance(item, dict) else "?"
+            lines.append(f"  solution #{i} ('{name}'): SKIPPED -- doesn't match the schema.")
+    lines.append(f"  {valid}/{len(raw)} solution(s) valid + loaded.")
+    if valid < len(raw):
+        lines.append(f"  schema: {SOLUTION_SCHEMA_HINT}")
+    return lines
+
+
 def solutions_for(category: str, title: str, solutions: list[Solution]) -> list[Solution]:
     """The authored fixes that apply to a finding -- matched **strictly** by ``for`` (its category
     or a custom-check name, exact, case-insensitive) OR **fuzzily** by the ``match`` title regex.
