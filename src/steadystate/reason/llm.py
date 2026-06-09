@@ -34,11 +34,15 @@ from .cost import LlmCall
 # the default (None) sends without asking, so headless scans / the listener are unchanged.
 PromptGate = Callable[[str, str, str, str], bool]
 
-_DEFAULT_MODEL = os.environ.get("STEADYSTATE_MODEL", "claude-sonnet-4-6")
+# The built-in default model ids -- the single source the `doctor` dials table reads too, so the
+# default it shows can never skew from what's actually used.
+DEFAULT_MODEL = "claude-sonnet-4-6"
+DEFAULT_CHEAP_MODEL = "claude-haiku-4-5"
+_DEFAULT_MODEL = os.environ.get("STEADYSTATE_MODEL", DEFAULT_MODEL)
 # Cheap tier: high-frequency, low-judgment callers (intent routing -- picking one verb) don't need
 # the reasoning model that analysis/decisions use. Route them to a cheaper, faster model. Override
 # the tier model with STEADYSTATE_MODEL_CHEAP, or any one caller with STEADYSTATE_MODEL_<CALLER>.
-_CHEAP_MODEL = os.environ.get("STEADYSTATE_MODEL_CHEAP", "claude-haiku-4-5")
+_CHEAP_MODEL = os.environ.get("STEADYSTATE_MODEL_CHEAP", DEFAULT_CHEAP_MODEL)
 # Callers that only classify/route, not reason. `chat-nl` maps free text to a single vetted verb --
 # a classification, not a judgment -- so it runs on the cheap tier. analyze/decide/correlate keep
 # the default (reasoning) model: their output is the product, not a routing hop.
