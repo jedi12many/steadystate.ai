@@ -449,12 +449,31 @@ def _render_show(fingerprint: str, state_path: str, flags: frozenset[str] = froz
     return "\n".join(lines)
 
 
+def _refetch_logs(finding: Finding) -> str:
+    """Best-effort: re-fetch the finding's pod logs FRESH at analyze time (current + previous
+    container) so the model investigates the live picture, not just the scan-time snapshot. '' for a
+    non-k8s finding, a pod we can't name from the evidence, or any failure -- `analyze` then falls
+    back to the captured window. Read-only (`kubectl logs`), aimed at the finding's cluster."""
+    from .probe.kubectl import KubectlProbe
+
+    fields = _finding_fields(finding)
+    pod = (finding.details or {}).get("pods", "").split(",")[0].strip()  # the probe's pod list
+    if not fields.namespace or not pod:
+        return ""  # not a k8s workload finding (or no pod named) -> nothing to re-fetch
+    probe = KubectlProbe()
+    if fields.context:
+        probe.use_context(fields.context)
+    if fields.kubeconfig:
+        probe.use_kubeconfig(fields.kubeconfig)
+    return probe.logs_for_analysis(fields.namespace, pod)
+
+
 def _render_analyze(fingerprint: str, state_path: str) -> str:
-    """`analyze <fingerprint>`: the grounded root-cause analysis of a captured finding (a crash /
-    panic). The RCA a senior on-call would write -- root cause, the call chain, the smoking gun, the
-    trigger, the operational facts -- but **anchored to the evidence the probe captured** (the stack
-    trace, the restart, the retention) and told to cite it and never invent. Read-only; needs an LLM
-    (it *is* the analysis). The model reasons; steadystate captured the evidence + frames it."""
+    """`analyze <fingerprint>`: the root-cause analysis of a captured finding (a crash / panic). The
+    RCA a senior on-call would write -- root cause, the call chain, the smoking gun, the trigger,
+    operational facts. steadystate re-fetches the pod's logs LIVE (current + previous container) and
+    feeds the model the lead-up; the model investigates, quoting what it cites. Read-only; needs an
+    LLM (it *is* the analysis)."""
     if not state_path or not Path(state_path).exists():
         return "No findings yet -- run a `probe`/`scan` first, then `analyze <fingerprint>`."
     with StateStore(state_path) as store:
@@ -467,7 +486,8 @@ def _render_analyze(fingerprint: str, state_path: str) -> str:
             "analyze needs an LLM (ANTHROPIC_API_KEY or a custom endpoint) -- it's a grounded RCA "
             "over the captured evidence, not a guess. `show` gives the raw evidence; see `doctor`."
         )
-    rca = analyze_finding(finding, analyst._complete)
+    live = _refetch_logs(finding)  # fresh current + previous logs, best-effort -> investigate live
+    rca = analyze_finding(finding, analyst._complete, live_logs=live)
     if not rca:
         return "the model returned no analysis -- try again, or `show` the captured evidence."
     with StateStore(state_path) as store:  # persist it -- don't lose the RCA, or re-pay the model
