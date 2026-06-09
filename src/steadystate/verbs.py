@@ -64,6 +64,7 @@ from .inbound.base import (
     SURFACES_LIST,
     TARGETS,
     UNMUTE,
+    VOUCH,
     Command,
     render_help,
 )
@@ -71,7 +72,13 @@ from .metrics import fetch_metrics
 from .notify import SURFACES
 from .onboarding import Status, capabilities
 from .probe.custom import CheckResult, add_check, describe_check, load_checks, run_smoke_checks
-from .probe.solutions import add_solution, describe_solution, load_solutions, solutions_for
+from .probe.solutions import (
+    add_solution,
+    describe_solution,
+    load_solutions,
+    solutions_for,
+    vouch_solution,
+)
 from .reason.alert import Alert, Layer, Severity
 from .reason.analyze import analyze_finding
 from .reason.cost import roll_up, roll_up_by_period, scan_cost_line
@@ -914,7 +921,10 @@ def _render_solutions(solutions_path: str = "") -> str:
             "(problem -> command/playbook/reboot, signed by an author). It surfaces on a match."
         )
     body = "\n".join(f"  {describe_solution(s)}" for s in sols)
-    return f"{len(sols)} solution(s) -- the wall's runbook:\n{body}"
+    out = f"{len(sols)} solution(s) -- the wall's runbook:\n{body}"
+    if any(s.proposed for s in sols):
+        out += "\n  (DRAFT = authored live, not yet runnable -- `vouch <name>` to offer it.)"
+    return out
 
 
 def _render_smoke(checks_path: str = "") -> str:
@@ -1118,10 +1128,13 @@ def _add_check(payload: str, checks_path: str = "") -> str:
     return message
 
 
-def _add_solution(payload: str, author: str = "", solutions_path: str = "") -> str:
+def _add_solution(
+    payload: str, author: str = "", solutions_path: str = "", *, proposed: bool = True
+) -> str:
     """Validate a solution (a JSON object/string) and store it in the wall's runbook, stamping the
     ``author`` (an unsigned fix is rejected). Used by the `add-solution` verb an agent calls after
-    filling the schema. The schema + the required author are the gate on what's written."""
+    filling the schema. ``proposed`` defaults True: a live/agent-authored fix lands as a DRAFT
+    (surfaced, not runnable) until a human ``vouch``es it -- the CLI authoring path passes False."""
     if not payload.strip():
         return "add-solution needs a solution (a JSON object). See `solutions` / the schema."
     try:
@@ -1130,7 +1143,18 @@ def _add_solution(payload: str, author: str = "", solutions_path: str = "") -> s
         return "couldn't parse the solution -- it must be a JSON object matching the schema."
     if not isinstance(raw, dict):
         return "a solution must be a single JSON object."
-    _sol, message = add_solution(raw, author=author or "agent", path=solutions_path)
+    _sol, message = add_solution(
+        raw, author=author or "agent", path=solutions_path, proposed=proposed
+    )
+    return message
+
+
+def _vouch(name: str, actor: str = "", solutions_path: str = "") -> str:
+    """Promote a drafted solution to vouched (the human gate). Effectful runbook write -- exposed at
+    the write grant, so an `--author` agent can't vouch its own draft."""
+    if not name.strip():
+        return "vouch needs a solution name. See `solutions` for the drafts."
+    _ok, message = vouch_solution(name.strip(), actor=actor, path=solutions_path)
     return message
 
 
@@ -1302,6 +1326,8 @@ def run_command(command: Command, state_path: str) -> str:
         return _add_check(command.argument)
     if command.verb == ADD_SOLUTION:
         return _add_solution(command.argument, author=command.actor)
+    if command.verb == VOUCH:
+        return _vouch(command.argument, actor=command.actor)
     with StateStore(state_path) as store:
         if command.verb == APPROVE:
             fp, error = _resolve_pending(store, command.argument)

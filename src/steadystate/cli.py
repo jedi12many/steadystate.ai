@@ -1845,10 +1845,12 @@ def add_solution_cmd(
     """Add an authored fix to this wall's runbook from a JSON object -- a problem->fix entry
     (for/match + a command/playbook/reboot), stamped with --author and validated (an unsigned fix is
     rejected). Re-using a name updates it. Version-control the file (--solutions / STEADYSTATE_
-    SOLUTIONS). To author one in plain English instead, use `define-solution`."""
+    SOLUTIONS). To author one in plain English instead, use `define-solution`. Authored here (by
+    you, at the terminal) it's vouched immediately -- runnable on a match; an agent authoring over
+    MCP (`--author`) lands a DRAFT until a human `vouch`es it."""
     from .verbs import _add_solution
 
-    typer.echo(_add_solution(solution, author=author, solutions_path=solutions))
+    typer.echo(_add_solution(solution, author=author, solutions_path=solutions, proposed=False))
 
 
 @app.command("define-solution")
@@ -1877,11 +1879,26 @@ def define_solution_cmd(
             err=True,
         )
         raise typer.Exit(1)
-    sol, message = add_solution(raw, author=author, path=solutions)
+    sol, message = add_solution(raw, author=author, path=solutions, proposed=False)
     typer.echo(message)
     if sol is None:
         typer.echo(f"\n(the model proposed: {raw})", err=True)
         raise typer.Exit(1)
+
+
+@app.command()
+def vouch(
+    name: str = typer.Argument(..., help="The drafted solution's name (see `solutions`)."),
+    author: str = _AUTHOR_OPTION,
+    solutions: str = _SOLUTIONS_OPTION,
+) -> None:
+    """Vouch a DRAFTED solution -- the human gate that promotes a live/agent-authored fix to a
+    runnable one (then offered against a matching finding). An agent over MCP can draft a fix into
+    your runbook (at `--author`), but only a human -- you here, or the `--write` grant -- makes it
+    runnable. Trust attaches to the channel that vouches, not the author string in the JSON."""
+    from .verbs import _vouch
+
+    typer.echo(_vouch(name, actor=author, solutions_path=solutions))
 
 
 @app.command()

@@ -44,6 +44,7 @@ CHECKS = "checks"
 ADD_CHECK = "add-check"
 SOLUTIONS = "solutions"
 ADD_SOLUTION = "add-solution"
+VOUCH = "vouch"
 SMOKE = "smoke"
 HEALTH = "health"
 POSTURE = "posture"
@@ -138,8 +139,13 @@ COMMANDS: dict[str, tuple[str, str]] = {
     ADD_SOLUTION: (
         "add-solution",
         "add an authored fix to this wall's runbook from a JSON object -- a problem->fix entry "
-        "(for/match + a command/playbook/reboot), signed by an author. Surfaces against a matching "
-        "finding and can be approved to run; acting still passes the bound + audit",
+        "(for/match + a command/playbook/reboot), signed by an author. Authored live it lands a "
+        "DRAFT (surfaced, not runnable); a human `vouch`es it. Acting passes the bound + audit",
+    ),
+    VOUCH: (
+        "vouch <name>",
+        "vouch a DRAFTED solution by name -- the gate that promotes a live/agent-drafted fix "
+        "to a runnable one (offered against a matching finding). Writes the runbook; needs write",
     ),
     SURFACES_LIST: (
         "surfaces",
@@ -191,7 +197,7 @@ COMMANDS: dict[str, tuple[str, str]] = {
 }
 # Verbs that require an argument to mean anything (a fingerprint for mute, a target name for probe);
 # the rest take none or an optional one.
-_NEEDS_ARGUMENT = frozenset({PROBE, MUTE, UNMUTE, SHOW, FIX})
+_NEEDS_ARGUMENT = frozenset({PROBE, MUTE, UNMUTE, SHOW, FIX, VOUCH})
 # Verbs that need TWO arguments: `send <fingerprint> <surface>`, `run <action> <fingerprint>`,
 # `snooze <fingerprint> <duration>`. The second plain token is the *last* one, so a natural filler
 # word in the middle is ignored.
@@ -261,6 +267,7 @@ _TOOL_ARGS: dict[str, tuple[tuple[str, bool], ...]] = {
     SMOKE: (),
     ADD_CHECK: (("check", True),),  # one arg: the check as a JSON object/string
     ADD_SOLUTION: (("solution", True),),  # one arg: the solution as a JSON object/string
+    VOUCH: (("name", True),),  # one arg: the drafted solution's name
     PROBE: (("target", True),),  # a target name, or "all" for the fleet
     COST: (("period", False),),  # day | week, optional
     FINDINGS: (("filter", False),),  # an optional status word and/or keyword to grep
@@ -294,6 +301,7 @@ _TOOL_EFFECT: dict[str, str] = {
     SMOKE: "read-only",  # active (GET/HEAD probes) but idempotent -- reads, never mutates
     ADD_CHECK: "state-write",  # writes the wall's checks.json -- reversible config, no infra
     ADD_SOLUTION: "state-write",  # writes the wall's solutions.json -- reversible config, no infra
+    VOUCH: "state-write",  # flip a draft to vouched (runbook write) -- needs write, not author
     TARGETS: "read-only",
     PENDING: "read-only",
     PROBE: "read-only",  # scans + records findings, never acts on infra

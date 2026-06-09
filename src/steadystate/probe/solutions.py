@@ -68,6 +68,10 @@ class Solution:
     reversibility: str  # high | medium | low
     author: str  # who vouched for this fix -- the accountability
     added: str  # ISO date it was authored
+    proposed: bool = False  # a DRAFT: authored LIVE (e.g. by an agent at --author), not yet vouched
+    # by a human. A draft is surfaced (`show`/`solutions`) but NEVER offered as a runnable pending
+    # until `vouch`ed -- the self-declared fix isn't trusted on the author's word. A solution from a
+    # committed/hand-edited file (no `proposed` key) defaults vouched: a human put it there.
 
 
 def parse_solution(raw: dict) -> Solution | None:
@@ -114,6 +118,7 @@ def parse_solution(raw: dict) -> Solution | None:
         reversibility=reversibility,
         author=author,
         added=str(raw.get("added") or "").strip(),
+        proposed=bool(raw.get("proposed", False)),
     )
 
 
@@ -215,7 +220,10 @@ def describe_solution(sol: Solution) -> str:
     if sol.match:
         join = f"{join} ~/{sol.match}/" if join else f"~/{sol.match}/"
     bound = f"[{sol.impact}/{sol.reversibility}]"
-    return f"{sol.name} ({join}) -> {action} {bound} -- by {sol.author}"
+    tag = (
+        "DRAFT " if sol.proposed else ""
+    )  # a drafted fix is surfaced but not offered until vouched
+    return f"{tag}{sol.name} ({join}) -> {action} {bound} -- by {sol.author}"
 
 
 SOLUTION_SCHEMA_HINT = (
@@ -227,14 +235,23 @@ SOLUTION_SCHEMA_HINT = (
 )
 
 
-def add_solution(raw: dict, author: str = "", path: str = "") -> tuple[Solution | None, str]:
+def add_solution(
+    raw: dict, author: str = "", path: str = "", *, proposed: bool = True
+) -> tuple[Solution | None, str]:
     """Validate ``raw`` and, if valid, store it in the wall's solutions.json (replacing any of the
     same name). ``author`` (the caller) is stamped on the entry when set, and ``added`` defaults to
-    today -- so every stored fix carries who/when. Returns (solution, msg) or (None, why)."""
+    today -- so every stored fix carries who/when. ``proposed`` marks it a DRAFT (default for the
+    live/agent verb path): surfaced but not offered as runnable until a human ``vouch``es it -- the
+    writer stamps this, so a submitted value can't override it. The CLI authoring path passes
+    ``proposed=False`` (a human at the terminal vouches as they author). Returns (solution, msg)."""
     if author and not raw.get("author"):
         raw = {**raw, "author": author}
     if not raw.get("added"):
         raw = {**raw, "added": datetime.now(UTC).date().isoformat()}
+    raw = {
+        **raw,
+        "proposed": proposed,
+    }  # the writer stamps trust -- a submitted value never overrides
     sol = parse_solution(raw)
     if sol is None:
         return None, f"that didn't validate -- it must match the schema.\n{SOLUTION_SCHEMA_HINT}"
@@ -250,7 +267,37 @@ def add_solution(raw: dict, author: str = "", path: str = "") -> tuple[Solution 
     items.append(raw)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(items, indent=2))
-    return sol, f"solution '{sol.name}' added [{sol.kind}] by {sol.author} -- surfaces on a match."
+    tail = f"DRAFT -- `vouch {sol.name}` to offer it" if proposed else "surfaces on a match"
+    return sol, f"solution '{sol.name}' added [{sol.kind}] by {sol.author} -- {tail}."
+
+
+def vouch_solution(name: str, actor: str = "", path: str = "") -> tuple[bool, str]:
+    """Promote a DRAFTED solution to vouched -- the human gate that makes it offerable. Clears the
+    ``proposed`` flag on the entry (and records ``vouched_by``), so the next scan OFFERS it as a
+    runnable pending. Returns (found, message). An agent's draft never runs until a human (the write
+    grant, an SSO identity, or a commit) vouches for it -- trust attaches to the channel, not the
+    author string."""
+    target = Path(resolve_solutions_path(path))
+    if not target.exists():
+        return False, f"no runbook at {target} -- author one first with `add-solution`."
+    try:
+        items = json.loads(target.read_text())
+    except (OSError, ValueError):
+        return False, f"the runbook at {target} didn't parse."
+    if not isinstance(items, list):
+        return False, "the runbook isn't a list of solutions."
+    found = False
+    for it in items:
+        if isinstance(it, dict) and it.get("name") == name:
+            it["proposed"] = False
+            if actor:
+                it["vouched_by"] = actor
+            found = True
+    if not found:
+        return False, f"no solution named '{name}' in the runbook."
+    target.write_text(json.dumps(items, indent=2))
+    who = f" by {actor}" if actor else ""
+    return True, f"solution '{name}' vouched{who} -- now offered as a runnable fix on a match."
 
 
 _DEFINE_SYSTEM = (
