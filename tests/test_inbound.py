@@ -407,9 +407,7 @@ def test_probe_json_returns_the_report_shape(monkeypatch, tmp_path):
         "STEADYSTATE_TARGETS",
         _targets_file(tmp_path, {"prod": {"source": "argocd", "path": "/x", "label": "prod"}}),
     )
-    monkeypatch.setattr(
-        "steadystate.verbs.build_report", lambda *a, **k: _report_with_one_alert()
-    )
+    monkeypatch.setattr("steadystate.verbs.build_report", lambda *a, **k: _report_with_one_alert())
     doc = json.loads(run_command(_json_flag(PROBE, "prod"), ":memory:"))
     assert doc["summary"]["alerts"] == 1  # same shape as `scan --json`
     assert doc["alerts"][0]["title"] == "web is Degraded"
@@ -550,9 +548,7 @@ def test_run_command_probe_resolves_and_summarizes(monkeypatch, tmp_path):
         _targets_file(tmp_path, {"prod": {"source": "argocd", "path": "/x", "label": "prod"}}),
     )
     # Stub the engine: this test is about the wiring (resolve -> run -> summarize), not a real scan.
-    monkeypatch.setattr(
-        "steadystate.verbs.build_report", lambda *a, **k: _report_with_one_alert()
-    )
+    monkeypatch.setattr("steadystate.verbs.build_report", lambda *a, **k: _report_with_one_alert())
     msg = run_command(Command(PROBE, "amy", "prod"), ":memory:")
     assert "prod: 1 alert" in msg and "web is Degraded" in msg and "HIGH" in msg
     assert "0/3 pods available" in msg  # the description shows by default, not just the title + fps
@@ -797,9 +793,7 @@ def test_run_command_probe_verbose_shows_the_evidence(monkeypatch, tmp_path):
         "STEADYSTATE_TARGETS",
         _targets_file(tmp_path, {"prod": {"source": "terraform", "path": "/x", "label": "prod"}}),
     )
-    monkeypatch.setattr(
-        "steadystate.verbs.build_report", lambda *a, **k: Report(items=[alert])
-    )
+    monkeypatch.setattr("steadystate.verbs.build_report", lambda *a, **k: Report(items=[alert]))
     # without verbose: just title + fp
     plain = run_command(Command(PROBE, "amy", "prod"), ":memory:")
     assert "why:" not in plain
@@ -829,9 +823,7 @@ def test_run_command_probe_shows_the_fingerprint_to_act_on(monkeypatch, tmp_path
         "STEADYSTATE_TARGETS",
         _targets_file(tmp_path, {"prod": {"source": "terraform", "path": "/x", "label": "prod"}}),
     )
-    monkeypatch.setattr(
-        "steadystate.verbs.build_report", lambda *a, **k: Report(items=[alert])
-    )
+    monkeypatch.setattr("steadystate.verbs.build_report", lambda *a, **k: Report(items=[alert]))
     msg = run_command(Command(PROBE, "amy", "prod"), ":memory:")
     # the fingerprint is shown so a benign finding can be `mute`d
     assert f"fp {drift.fingerprint}" in msg
