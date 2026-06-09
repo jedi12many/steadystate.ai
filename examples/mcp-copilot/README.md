@@ -61,9 +61,11 @@ You'll get back the `initialize` handshake and this wall's `summary` — exactly
 Copilot CLI reads `~/.copilot/mcp-config.json` (top-level `mcpServers`, `"type": "local"` for a
 stdio server). **The one thing to get right:** Copilot launches the server from *its own* working
 directory, not your wall folder — so the cwd-relative defaults (`.steadystate/state.db`, targets,
-kubeconfigs) would miss. **`--dir <wall>` fixes that with a single absolute path** (it resolves
-everything as if you'd `cd`'d there). Add **one server per wall** — note the *trust differs per
-wall*:
+kubeconfigs, **and that wall's `steadystate/checks.json`**) would miss. **`--dir <wall>` fixes that
+with a single absolute path** (it resolves everything as if you'd `cd`'d there) — so each wall reads
+its **own** checks, just like its db and targets. (Don't set a global `STEADYSTATE_CHECKS`: it would
+override that and point *every* wall at one file.) Add **one server per wall** — note the *trust
+differs per wall*:
 
 ```json
 {
