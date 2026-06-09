@@ -1,6 +1,7 @@
-"""Grounded root-cause analysis: the probe captures the panic's trace block (the call chain, not
-just matching error lines), and `analyze` feeds ONLY that captured evidence to the model with a
-prompt that forbids inventing. The differentiator is the grounding -- so that's what these pin."""
+"""Root-cause analysis: the probe captures the LEAD-UP to the failure (the lines before the panic,
+where the cause lives -- not just the panic line and forward), and `analyze` feeds that before-event
+window to the model with an INVESTIGATOR prompt (reason, quote what you cite, label inferences) --
+not a transcriptionist one that forbids reasoning. These pin the capture window + the framing."""
 
 from __future__ import annotations
 
@@ -27,15 +28,16 @@ targets.ValidateTargetByType(...)
 # -- the probe captures the call chain, not just the matching lines --------------
 
 
-def test_scan_captures_the_trace_block_after_a_fatal_signature():
+def test_scan_captures_the_lead_up_plus_the_trace_block():
     verdict = scan_log_text(_PANIC, threshold=5)
     assert verdict is not None and verdict.fatal
     block = "\n".join(verdict.trace)
     # the frames an RCA needs -- which AREN'T 'error' lines, so the sample alone would miss them
     assert "panic:" in block and "Policy(0x0)" in block
     assert "client.go:63" in block and "targets.go:186" in block
-    # the trace starts at the panic, not the benign "worker starting" line before it
-    assert verdict.trace[0].startswith("panic:")
+    # the window now LEADS WITH the line before the panic -- the lead-up, where the cause lives
+    assert verdict.trace[0].startswith("2026-06-08 worker starting")
+    assert "worker starting" in block
 
 
 def test_no_fatal_no_trace():
@@ -65,10 +67,19 @@ def test_evidence_bundle_carries_the_fields_and_the_trace_verbatim():
     assert "Policy(0x0)" in bundle and "client.go:63" in bundle  # the trace, verbatim
 
 
-def test_the_rca_prompt_forbids_inventing_and_pins_to_the_evidence():
+def test_evidence_bundle_leads_with_the_before_event_log_window():
+    # the crashloop path captures a `log_window` (the --previous tail = the lead-up) -- the meat
+    bundle = _evidence_bundle(_finding({"workload": "gateway", "log_window": _PANIC}))
+    assert "leading up to the failure" in bundle.lower()  # under its own header
+    assert "worker starting" in bundle and "Policy(0x0)" in bundle  # the lead-up + the panic
+
+
+def test_the_rca_prompt_says_investigate_the_lead_up_and_stay_honest():
     system = _RCA_SYSTEM.lower()
-    assert "only the captured evidence" in system
-    assert "do not invent" in system and "never speculate" in system
+    assert "investigat" in system  # an investigator, not a transcriptionist
+    assert "before" in system and "lead-up" in system  # examine what happened before the failure
+    # still checkable: quote what you cite, label inferences -- honest, not gagged
+    assert "quote" in system and "infer" in system
 
 
 def test_analyze_feeds_only_the_captured_evidence_to_the_model():
@@ -83,7 +94,7 @@ def test_analyze_feeds_only_the_captured_evidence_to_the_model():
     assert "nil apiclient.Client" in out
     assert seen["caller"] == "analyze"
     assert "Policy(0x0)" in seen["user"] and "client.go:63" in seen["user"]  # the real trace
-    assert "do not invent" in seen["system"].lower()  # the grounding instruction rode along
+    assert "investigat" in seen["system"].lower()  # the investigator framing rode along
 
 
 def test_no_model_returns_none_so_the_caller_degrades_honestly():

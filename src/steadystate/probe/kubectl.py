@@ -266,38 +266,51 @@ class LogVerdict:
     trace: list[str] = field(default_factory=list)
 
 
-_TRACE_LINES = 25  # how many lines of the post-fatal block to keep (a panic + a few frames)
+_TRACE_LINES = 25  # how many lines from the fatal line onward to keep (the panic + a few frames)
+_PRE_LINES = (
+    40  # how many lines BEFORE the fatal to keep -- the LEAD-UP, where the cause usually is
+)
 
 
 def scan_log_text(text: str, threshold: int) -> LogVerdict | None:
     """Scan a log tail for trouble. Returns a verdict when a FATAL-class signature appears (one is
-    enough) OR the error-line count reaches ``threshold``; else None (nothing actionable). On a
-    fatal hit it also captures the **block from the fatal line onward** (the stack trace / call
-    chain) -- the evidence root-cause analysis needs, which the matching-lines sample misses (a Go
-    panic's frames aren't 'error' lines). Pure + testable -- the detection rule, isolated from
-    kubectl."""
+    enough) OR errors reach ``threshold``; else None (nothing actionable). On a fatal
+    hit it captures a WINDOW around it -- the ``_PRE_LINES`` of LEAD-UP *before* the fatal line (the
+    root cause is usually in what was happening before it failed, not the failure line itself) plus
+    the block after it (the stack trace / call chain). That before-event context is the evidence
+    `analyze` needs, which the matching-lines sample misses. Pure + testable."""
+    lines = [raw.strip() for raw in text.splitlines() if raw.strip()]
     fatal = False
     count = 0
     sample: list[str] = []
-    trace: list[str] = []
-    capturing = False
-    for raw in text.splitlines():
-        line = raw.strip()
-        if not line:
-            continue
+    fatal_idx = -1
+    for idx, line in enumerate(lines):
         is_fatal = bool(_LOG_FATAL_RE.search(line))
         if is_fatal or _LOG_ERROR_RE.search(line):
             count += 1
             fatal = fatal or is_fatal
             if len(sample) < 5:
                 sample.append(line[:200])
-        if is_fatal:  # start the trace block at the first fatal signature
-            capturing = True
-        if capturing and len(trace) < _TRACE_LINES:
-            trace.append(line[:300])  # the fatal line + the following stack frames
+        if is_fatal and fatal_idx < 0:  # anchor the window at the FIRST fatal signature
+            fatal_idx = idx
+    trace: list[str] = []
+    if fatal_idx >= 0:  # the lead-up + the fatal line + the following frames, in order
+        block = lines[max(0, fatal_idx - _PRE_LINES) : fatal_idx + _TRACE_LINES]
+        trace = [line[:300] for line in block]
     if fatal or count >= threshold:
         return LogVerdict(error_count=count, fatal=fatal, sample=sample, trace=trace)
     return None
+
+
+_LOG_WINDOW_LINES = 150  # the recent log tail kept as before-event context for `analyze`
+_LOG_WINDOW_CHARS = 8000  # ...bounded for the store + the model's context window
+
+
+def cap_log(text: str) -> str:
+    """Keep the TAIL of a log -- the lead-up is at the END of a `--previous` log -- bounded
+    for the store + the model's context. Drops blank lines; keeps the last lines/chars."""
+    lines = [ln for ln in text.splitlines() if ln.strip()][-_LOG_WINDOW_LINES:]
+    return "\n".join(lines)[-_LOG_WINDOW_CHARS:]
 
 
 class KubectlProbe:
@@ -388,8 +401,11 @@ class KubectlProbe:
     def _symptom(self, resource: Resource, namespace: str, sick: list[PodHealth]) -> Symptom:
         category, severity = category_and_severity(sick)
         worst = max(sick, key=lambda pod: pod.restarts)
-        tail = self._last_log_line(namespace, worst.name)
-        detail = f"{len(sick)} pod(s) {category}" + (f"; last log: {tail}" if tail else "")
+        logs = self._recent_logs(namespace, worst.name)  # the before-event tail, not just one line
+        last_line = logs.splitlines()[-1][:200] if logs else ""
+        detail = f"{len(sick)} pod(s) {category}" + (
+            f"; last log: {last_line}" if last_line else ""
+        )
         # Name the WHERE in the title -- it's the one field every surface shows (the chat probe
         # summary, the scan panel, and the remembered `findings` row, which stores only the title).
         # With a fleet you need the cluster: `<context>/<namespace>`, else just the namespace.
@@ -408,8 +424,10 @@ class KubectlProbe:
         }
         if self._context:
             evidence[EvidenceKeys.CLUSTER] = self._context
-        if tail:
-            evidence[EvidenceKeys.LAST_LOG] = tail
+        if last_line:
+            evidence[EvidenceKeys.LAST_LOG] = last_line
+        if logs:  # the before-event logs -- the meat `analyze` reads, not just the headline line
+            evidence[EvidenceKeys.LOG_WINDOW] = logs
         return Symptom(
             identity=resource.identity,
             kind=resource.kind,
@@ -603,11 +621,15 @@ class KubectlProbe:
             evidence=evidence,
         )
 
-    def _last_log_line(self, namespace: str, pod: str) -> str:
-        # Best-effort evidence: a failed `kubectl logs` is routine -- the `--previous` attempt has
-        # no previous container on most pods, and the pod may have been deleted between the
-        # `get pods` and now -- so failures stay quiet; the symptom still surfaces, just no tail.
-        tail = str(self.log_tail)
+    def _recent_logs(self, namespace: str, pod: str) -> str:
+        """The recent log TAIL of a failing pod -- the **`--previous`** (crashed) container's logs
+        when there is one (its tail IS the lead-up to the crash + the panic), else the current
+        container's. The before-event context `analyze` needs, captured now so it survives the pod
+        restarting and the logs rolling -- we used to keep only the last line, which starved the
+        analysis of the lead-up where the cause lives. Best-effort: a failed read stays quiet (the
+        symptom still surfaces, just no logs); the pod may be gone between the list and now.
+        Bounded by ``cap_log``."""
+        tail = str(self._scan_tail)  # generous -- the lead-up matters, not just the last line
         text = self._run_text(
             self._kubectl("logs", pod, "-n", namespace, "--tail", tail, "--previous"),
             best_effort=True,
@@ -616,8 +638,7 @@ class KubectlProbe:
             text = self._run_text(
                 self._kubectl("logs", pod, "-n", namespace, "--tail", tail), best_effort=True
             )
-        lines = [line for line in (text or "").splitlines() if line.strip()]
-        return lines[-1][:200] if lines else ""
+        return cap_log(text or "")
 
     def _run_text(self, argv: list[str], *, best_effort: bool = False) -> str:
         try:

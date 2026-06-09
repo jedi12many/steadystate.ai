@@ -10,6 +10,7 @@ from steadystate.probe.base import Symptom
 from steadystate.probe.kubectl import (
     KubectlProbe,
     PodHealth,
+    cap_log,
     category_and_severity,
     scan_log_text,
     unhealthy_pods,
@@ -118,7 +119,7 @@ def test_evicted_symptom_recommends_a_cleanup(monkeypatch):
     prober = KubectlProbe()
     prober.use_context("prod-cluster")
     monkeypatch.setattr(prober, "_all_pods", lambda: {"prod": {"items": [_evicted("web-1")]}})
-    monkeypatch.setattr(prober, "_last_log_line", lambda namespace, pod: "")
+    monkeypatch.setattr(prober, "_recent_logs", lambda namespace, pod: "")
     [sym] = prober.probe([_resource()])  # _resource() lives in namespace "prod"
     assert sym.category == "Evicted" and sym.severity is Severity.MEDIUM
     assert sym.recommended_action == (
@@ -237,7 +238,7 @@ def _probe(monkeypatch, pods: dict, log: str = "fatal: missing DB_URL"):
     prober = KubectlProbe()
     # `_resource()` lives in namespace "prod"; _all_pods returns pods grouped by namespace.
     monkeypatch.setattr(prober, "_all_pods", lambda: {"prod": pods})
-    monkeypatch.setattr(prober, "_last_log_line", lambda namespace, pod: log)
+    monkeypatch.setattr(prober, "_recent_logs", lambda namespace, pod: log)
     return prober
 
 
@@ -282,6 +283,27 @@ def test_symptom_carries_structured_evidence_for_the_raw_view(monkeypatch):
     # no context -> no cluster field (a single ambient cluster needs no qualifier)
     [ambient] = _probe(monkeypatch, pods).probe([_resource()])
     assert "cluster" not in ambient.evidence
+
+
+def test_a_crashloop_symptom_captures_the_before_event_log_window(monkeypatch):
+    # the fix: the crashloop path keeps the `--previous` tail (the LEAD-UP to the crash) as
+    # `log_window`, not just the last line -- the meat `analyze` reads. We used to store one line,
+    # which starved the analysis of the context where the cause actually lives.
+    leadup = "worker starting\nconnecting to the ca client\npanic: nil pointer dereference"
+    pods = {"items": [_pod("web-abc", waiting="CrashLoopBackOff", restarts=9)]}
+    [sym] = _probe(monkeypatch, pods, log=leadup).probe([_resource()])
+    assert sym.evidence["log_window"] == leadup  # the whole lead-up, captured for analyze
+    assert (
+        sym.evidence["last_log"] == "panic: nil pointer dereference"
+    )  # headline is still the last line
+
+
+def test_cap_log_keeps_the_tail_and_bounds_size():
+    # the lead-up to a crash is at the END of a `--previous` log, so cap_log keeps the TAIL.
+    text = "\n".join(f"line {i}" for i in range(500))
+    capped = cap_log(text)
+    assert capped.endswith("line 499")  # the most recent lines (the crash + its lead-up) are kept
+    assert "line 0" not in capped and len(capped.splitlines()) <= 150  # oldest dropped, bounded
 
 
 def test_probe_is_silent_on_a_healthy_workload(monkeypatch):
@@ -378,7 +400,7 @@ def test_scan_log_text_fatal_trips_once_errors_need_a_threshold():
 def _deep(monkeypatch, prober, pods, log_text):
     monkeypatch.setattr(prober, "_all_pods", lambda: {"prod": pods})
     monkeypatch.setattr(prober, "_run_text", lambda argv, best_effort=False: log_text)
-    monkeypatch.setattr(prober, "_last_log_line", lambda namespace, pod: "")
+    monkeypatch.setattr(prober, "_recent_logs", lambda namespace, pod: "")
     return prober
 
 
@@ -427,7 +449,7 @@ def test_deep_does_not_double_report_a_status_unhealthy_workload(monkeypatch):
     prober.enable_log_scan()
     crashing = _pod("web-abc", waiting="CrashLoopBackOff", restarts=9)
     monkeypatch.setattr(prober, "_all_pods", lambda: {"prod": {"items": [crashing]}})
-    monkeypatch.setattr(prober, "_last_log_line", lambda namespace, pod: "panic: boom")
+    monkeypatch.setattr(prober, "_recent_logs", lambda namespace, pod: "panic: boom")
     [sym] = prober.probe([_resource()])
     assert sym.category == "CrashLoopBackOff"  # status wins; no Erroring duplicate
 

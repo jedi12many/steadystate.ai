@@ -130,10 +130,11 @@ Acting is gated identically everywhere — terminal, chat, agent, CI:
 The *same* vetted command grammar, four ways in:
 
 - **Terminal** — `steadystate health` for the working/degraded/down verdict; `summary` for the
-  one-glance rollup; `findings` / `show` to inspect; **`analyze <fp>`** for a grounded root-cause
-  analysis of a crash/panic (the call chain + smoking gun, anchored to the captured stack trace, told
-  to cite it and never invent); **`watch <target>`** to catch a transient failure live while you
-  reproduce it (bounded, default 5m → then `analyze` it); `chat` for a local REPL.
+  one-glance rollup; `findings` / `show` to inspect; **`analyze <fp>`** for a root-cause analysis of a
+  crash/panic — we capture the **logs leading up to the failure** (the cause lives in the lead-up, not
+  the panic line) and let the model **investigate** them like an on-call engineer, quoting what it
+  cites and labelling inference so it stays checkable; **`watch <target>`** to catch a transient
+  failure live while you reproduce it (bounded, default 5m → then `analyze` it); `chat` for a local REPL.
 - **Chat** (Slack / Teams / Discord) — signed webhooks; `@steadystate probe <target>`, approve from a
   button. With an LLM, plain English works (*"why is web crashlooping?"*) — a read-only ask runs, an
   effectful one is echoed back to confirm. Chat is a trigger, never a bypass.
