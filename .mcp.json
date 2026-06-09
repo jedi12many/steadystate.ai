@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "steadystate": {
-      "command": "c:/Users/dilla/steadystate.ai/.venv/Scripts/steadystate.exe",
+      "command": "steadystate",
       "args": ["mcp", "--state", "./.steadystate/state.db"]
     }
   }

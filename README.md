@@ -1,16 +1,21 @@
 # steadystate.ai
 
-**The operational substrate for IT-Ops — whether a human or an agent drives it.** steadystate
-watches your *deployed* infrastructure (live, and in CI), tells you whether it's actually
-**working**, carries your team's **runbook**, and **closes the loop** — but only ever within a
-**bound you commit**. A deterministic, stdlib-only core; an optional LLM that advises and proposes but
-never decides.
+**The safe actuator for agentic IT-Ops.** Point an AI agent at your infrastructure and let it
+*operate* — see a crashloop, find the root cause, propose the fix, close the loop — **without handing
+it the keys.** steadystate is the substrate the agent drives: it holds the creds, knows your
+*declared* state, carries your team's **runbook**, and runs every action the agent proposes through a
+**deterministic gate**, within a **bound you commit**. The agent decides *what*; the gate decides
+*whether*.
 
-The job isn't "find drift." It's the two things an operator — or an agent acting as one — actually
-needs: **grounded truth** (what's declared, what's observed, *is it working*, what changed) and a
-**governed way to act** (a vetted catalog, an impact×reversibility bound, approval, an immutable
-audit). Rent your monitoring for the metrics; steadystate is the layer that knows your *desired*
-state and can safely return you to it.
+That trade is what makes it shippable. An LLM with a kubeconfig is a liability; an agent whose *only*
+actuator is steadystate is bounded by a vetted catalog, an impact×reversibility envelope, and an
+immutable audit — so you can actually let it act. The intelligence scales with the model; the safety
+doesn't depend on it. Drive it yourself from the terminal or CI, or point Claude/any agent at it over
+**MCP** — same verbs, same gate, four ways in.
+
+Underneath the agent is the grounded truth it reasons over: what's declared, what's observed, *is it
+working*, what changed — a deterministic, stdlib-only core. Rent your monitoring for the metrics;
+steadystate is the layer that knows your *desired* state and can safely return you to it.
 
 ## Install
 
@@ -21,6 +26,27 @@ pip install steadystate          # or: pipx install steadystate  (the CLI, isola
 steadystate is a **CLI you run from *inside* your IaC repo** — its config, runbook, and state are
 read CWD-relative, so the repo never imports it as a library. `--silo <name>` chdirs into a
 registered deployment (like `git -C`); the container image lives under [`deploy/`](./deploy/).
+
+## Quickstart — first value in a minute
+
+```bash
+pip install steadystate
+cd your-iac-repo
+steadystate scan --source terraform .    # what drifted, what's failing, why it matters
+steadystate ci                           # the same, as a merge gate: non-zero on a problem, opens a PR/issue
+```
+
+No Terraform handy? An **offline demo** (a captured plan + a runbook) runs with no cloud and no token:
+
+```bash
+git clone https://github.com/jedi12many/steadystate.ai && cd steadystate.ai
+./examples/demo/demo.sh
+```
+
+**Driving it from an agent?** `steadystate mcp` exposes the same verbs over MCP — read-only by
+default, the agent never gets a shell, steadystate holds the creds. Ask it *"is prod working?"* and it
+calls `health`, reads `summary`, and proposes a fix you approve — you never have to learn the verbs, it
+does. That's the front door; the rest of this README is the depth behind it.
 
 ## Two postures, one core
 
@@ -117,7 +143,7 @@ The *same* vetted command grammar, four ways in:
 Everything here runs with **no model**: fully deterministic, fully testable. It rides each tool's own
 machine-readable output (`terraform show -json`, `kubectl`, `helm`, …), never raw-file parsing.
 
-- **Sources** (`--source`) — `terraform · terraform-state · ansible · kubernetes · rancher · argocd ·
+- **Sources** (`--source`) — `terraform · terraform-state · ansible · k8s · rancher · argocd ·
   docker-compose · helm`, plus live variants. **`terraform-state`** diffs config-vs-state with
   `-refresh=false` — *no per-resource cloud refresh*, so a CI gate needs only state-bucket read, not
   broad cloud creds.
