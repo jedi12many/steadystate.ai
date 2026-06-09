@@ -32,8 +32,6 @@ from .act.decide import (
     record_proposals,
 )
 from .act.deliver import build_deliveries
-from .act.learn import ADOPT
-from .act.learn import learn as derive_lessons
 from .act.plan import can_run_unattended
 from .act.reflex import reflexes, run_hold
 from .act.solution_remedy import record_solution_remediations
@@ -1635,25 +1633,15 @@ def learn(state: Path = _STATE_OPTION) -> None:
       * ADOPT -- a category you keep fixing by hand that steadystate already has a reflex for:
         promote it (`STEADYSTATE_REFLEX_AUTO=<name>`) so `hold` reclaims it next time.
       * SELF-HEALS -- a category that keeps clearing on its own: a candidate to mute (stop paging).
+      * CAPTURE -- a category you keep fixing with ONE consistent command: the exact `add-solution`
+        to put it in your runbook (so next time it's offered as a one-approve remediation).
 
-    Read-only and a proposal: it never promotes a reflex or mutes anything -- you do, once you
-    agree. The strength of a lesson is how many times it would have been the right call."""
-    with _open_store(state) as store:
-        findings = store.all_findings()
-        acted = store.acted_fingerprints()
-    lessons = derive_lessons(findings, acted)
-    if not lessons:
-        typer.echo(
-            "nothing learned yet -- steadystate learns from findings that resolve on their own "
-            "(out-of-band). Run scans/sweeps over time so resolutions accumulate."
-        )
-        return
-    backing = sum(lesson.occurrences for lesson in lessons)
-    typer.echo(f"learned from {backing} out-of-band resolution(s) -- {len(lessons)} lesson(s):")
-    for lesson in lessons:
-        tag = "ADOPT" if lesson.kind == ADOPT else "SELF-HEAL"
-        typer.echo(f"  [{tag}] {lesson.category} x{lesson.occurrences} {lesson.scope}")
-        typer.echo(f"      {lesson.recommendation}")
+    Read-only and a proposal: it never promotes a reflex, mutes, or authors anything -- you do, once
+    you agree. The strength of a lesson is how often it would have been the right call. Shares the
+    one renderer with chat/MCP, so every surface shows the same lessons + the runbook drafts."""
+    from .verbs import _render_learn
+
+    typer.echo(_render_learn(str(state)))
 
 
 @app.command()
