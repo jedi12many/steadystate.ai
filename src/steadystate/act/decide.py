@@ -33,6 +33,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol, runtime_checkable
 
+from ..evidence import EvidenceKeys
 from ..probe.base import Symptom
 from ..state import PendingAction, StateStore
 from .base import RemediationResult
@@ -151,7 +152,9 @@ def _resource_fields(symptom: Symptom) -> tuple[str, str]:
     identity segment; namespace = the stored evidence, else the second-to-last segment."""
     parts = symptom.identity.split("/")
     name = parts[-1] if parts else ""
-    namespace = symptom.evidence.get("namespace") or (parts[-2] if len(parts) >= 2 else "")
+    namespace = symptom.evidence.get(EvidenceKeys.NAMESPACE) or (
+        parts[-2] if len(parts) >= 2 else ""
+    )
     return name, namespace
 
 
