@@ -7,7 +7,6 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 
-from steadystate.inbound.server import _render_show, _render_solutions
 from steadystate.probe.solutions import (
     add_solution,
     describe_solution,
@@ -16,6 +15,7 @@ from steadystate.probe.solutions import (
     solutions_for,
 )
 from steadystate.state import StateStore
+from steadystate.verbs import _render_show, _render_solutions
 
 
 def _entry(**over):
@@ -179,7 +179,7 @@ def test_solutions_for_alert_dedupes_and_is_empty_without_a_runbook():
 
 
 def test_add_solution_handler_stores_with_the_calling_author(tmp_path, monkeypatch):
-    from steadystate.inbound.server import _add_solution
+    from steadystate.verbs import _add_solution
 
     monkeypatch.setenv("STEADYSTATE_SOLUTIONS", str(tmp_path / "sol.json"))
     payload = json.dumps(

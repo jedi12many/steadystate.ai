@@ -8,8 +8,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from steadystate.inbound.base import SNOOZE, UNMUTE, command_from_text
-from steadystate.inbound.server import _parse_duration, run_command
 from steadystate.state import OPEN, SNOOZED, StateStore
+from steadystate.verbs import _parse_duration, run_command
 
 _NOW = datetime(2026, 6, 3, 12, 0, 0, tzinfo=UTC)
 

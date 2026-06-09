@@ -67,7 +67,7 @@ from .domains import default_domains, evaluate_posture_with, evaluate_with
 from .engine import build_report, collect_resources
 from .inbound import INBOUND, build_inbound
 from .inbound.base import PROBE, Command, command_from_text, tool_schema
-from .inbound.server import run_command, serve
+from .inbound.server import serve
 from .inbound.translate import (
     confident_command,
     nl_to_command,
@@ -99,6 +99,7 @@ from .targets import (
     save_targets,
     target_issues,
 )
+from .verbs import run_command
 
 DEFAULT_STATE_PATH = ".steadystate/state.db"
 
@@ -1089,7 +1090,7 @@ def show(
     (namespace, cluster, pod count, the failing pod's last log line, ...) plus first/last seen. The
     deterministic single-finding drill-down (no LLM -- that's `explain`); mirrors the chat/MCP
     `show` verb. Accepts a unique fingerprint prefix."""
-    from .inbound.server import _render_show
+    from .verbs import _render_show
 
     flags = frozenset({"json"}) if json_out else frozenset()
     typer.echo(_render_show(fingerprint, str(state), flags))
@@ -1108,7 +1109,7 @@ def analyze(
     but **anchored to the evidence the probe captured** (the stack trace) and told to cite it and
     never invent. Needs an LLM (it *is* the analysis; `show` is the raw evidence). The RCA is saved
     (so `show` shows it); `--to github` opens/updates an issue carrying it -- the close-the-loop."""
-    from .inbound.server import _render_analyze, _send_analysis
+    from .verbs import _render_analyze, _send_analysis
 
     typer.echo(_render_analyze(fingerprint, str(state)))
     if to.strip():
@@ -1159,7 +1160,7 @@ def watch(
     `show`/`analyze`. Exits non-zero if it caught something (a gate-friendly signal)."""
     import time
 
-    from .inbound.server import _parse_duration, probe_report
+    from .verbs import _parse_duration, probe_report
 
     every = _parse_duration(interval)
     if every is None:
@@ -1727,7 +1728,7 @@ def summary_status(state: Path = _STATE_OPTION) -> None:
     """A one-glance status: open findings by severity, what's pending your approval, the homeostat's
     posture, and the single worst thing right now -- the 'what do I look at first' rollup. Reads the
     last probe/sweep from the store (no fresh scan); mirrors the chat `summary` command."""
-    from .inbound.server import _render_summary
+    from .verbs import _render_summary
 
     typer.echo(_render_summary(str(state)))
 
@@ -1752,7 +1753,7 @@ def metrics() -> None:
     """The live metric readings from your monitoring (Prometheus / ...) for the queries you
     configured (`{name: query}` at STEADYSTATE_METRIC_QUERIES) -- the agent's metric context next to
     steadystate's findings. steadystate *rents* your monitoring; it doesn't reimplement it."""
-    from .inbound.server import _render_metrics
+    from .verbs import _render_metrics
 
     typer.echo(_render_metrics())
 
@@ -1762,7 +1763,7 @@ def posture() -> None:
     """The honest answer to 'am I bounded by steadystate's gates?' -- what it enforces on its own
     path (catalog + bound + audit), where that ends (it can't constrain an agent's *other* tools,
     e.g. a shell), and the sole-actuator setup that makes it a real fence -- no overclaim."""
-    from .inbound.server import _render_posture
+    from .verbs import _render_posture
 
     typer.echo(_render_posture())
 
@@ -1770,7 +1771,7 @@ def posture() -> None:
 @app.command()
 def checks(checks: str = _CHECKS_OPTION) -> None:
     """List the custom health checks (--checks / STEADYSTATE_CHECKS / .steadystate/checks.json)."""
-    from .inbound.server import _render_checks
+    from .verbs import _render_checks
 
     typer.echo(_render_checks(checks))
 
@@ -1780,7 +1781,7 @@ def solutions(solutions: str = _SOLUTIONS_OPTION) -> None:
     """List this wall's authored runbook -- the documented problem->fix entries (a command, a
     playbook, a reboot), each signed by an author. They surface against a matching finding in
     `show`. Read-only (--solutions / STEADYSTATE_SOLUTIONS / .steadystate/solutions.json)."""
-    from .inbound.server import _render_solutions
+    from .verbs import _render_solutions
 
     typer.echo(_render_solutions(solutions))
 
@@ -1798,7 +1799,7 @@ def health(
     to it and correlate the smoke result + live symptoms + the config drift that likely caused them.
     Active but read-only. Exits non-zero when the verdict isn't WORKING (for CI / a gate)."""
     from .health import WORKING
-    from .inbound.server import _render_health
+    from .verbs import _render_health
 
     out = _render_health(str(state), checks, workload)
     typer.echo(out)
@@ -1811,8 +1812,8 @@ def smoke(checks: str = _CHECKS_OPTION) -> None:
     """Run this wall's `http` smoke tests live and report PASS/FAIL each -- the affirmative
     'is it actually working?' answer (it exercises the endpoint), and an agent's close-the-loop
     verify after a fix. Active but read-only (GET/HEAD). Exits non-zero if any smoke test fails."""
-    from .inbound.server import _render_smoke
     from .probe.custom import run_smoke_checks
+    from .verbs import _render_smoke
 
     typer.echo(_render_smoke(checks))
     if any(not r.passed for r in run_smoke_checks(checks)):
@@ -1828,7 +1829,7 @@ def add_check_cmd(
     written to the checks file (re-defining a name updates it). Keep that file in version control
     (--checks / STEADYSTATE_CHECKS) so checks are intent, not local state. To author one in plain
     English instead, use `define-check`."""
-    from .inbound.server import _add_check
+    from .verbs import _add_check
 
     typer.echo(_add_check(check, checks))
 
@@ -1879,7 +1880,7 @@ def add_solution_cmd(
     (for/match + a command/playbook/reboot), stamped with --author and validated (an unsigned fix is
     rejected). Re-using a name updates it. Version-control the file (--solutions / STEADYSTATE_
     SOLUTIONS). To author one in plain English instead, use `define-solution`."""
-    from .inbound.server import _add_solution
+    from .verbs import _add_solution
 
     typer.echo(_add_solution(solution, author=author, solutions_path=solutions))
 
@@ -2260,7 +2261,7 @@ def probe(
     the listener runs."""
     state.parent.mkdir(parents=True, exist_ok=True)
     if json_out:  # the machine-readable form: build the report directly and dump it
-        from .inbound.server import probe_report
+        from .verbs import probe_report
 
         try:
             report = probe_report(target, str(state), scan_logs=deep)

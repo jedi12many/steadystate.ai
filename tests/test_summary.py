@@ -8,8 +8,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from steadystate.inbound.base import SUMMARY, Command
-from steadystate.inbound.server import _render_summary, run_command
 from steadystate.state import PendingAction, StateStore
+from steadystate.verbs import _render_summary, run_command
 
 _NOW = datetime(2026, 6, 5, tzinfo=UTC)
 

@@ -374,7 +374,7 @@ def test_add_check_and_checks_dispatch_through_run_command(tmp_path, monkeypatch
     # other verb. The wall is the cwd (.steadystate/checks.json).
     monkeypatch.chdir(tmp_path)
     from steadystate.inbound.base import ADD_CHECK, CHECKS, Command
-    from steadystate.inbound.server import run_command
+    from steadystate.verbs import run_command
 
     payload = json.dumps(_PROXY)
     assert "added" in run_command(Command(ADD_CHECK, "mcp", payload), ":memory:")
@@ -484,7 +484,7 @@ def test_run_smoke_checks_reports_a_pass_affirmatively_not_just_silence(monkeypa
 def test_smoke_verb_renders_failures_first_and_dispatches(monkeypatch):
     import steadystate.probe.custom as mod
     from steadystate.inbound.base import SMOKE, Command
-    from steadystate.inbound.server import _render_smoke, run_command
+    from steadystate.verbs import _render_smoke, run_command
 
     with _server(200, "all ok here") as good, _server(503, "down") as bad:
         monkeypatch.setattr(mod, "load_checks", lambda _p="": _two_http_checks(good, bad))
@@ -498,7 +498,7 @@ def test_smoke_verb_renders_failures_first_and_dispatches(monkeypatch):
 
 def test_smoke_with_no_checks_at_all_points_to_authoring_and_doctor(monkeypatch):
     import steadystate.probe.custom as mod
-    from steadystate.inbound.server import _render_smoke
+    from steadystate.verbs import _render_smoke
 
     monkeypatch.setattr(mod, "load_checks", lambda _p="": [])
     assert run_smoke_checks() == []
@@ -511,7 +511,7 @@ def test_smoke_with_only_non_http_checks_says_they_loaded(monkeypatch):
     # runs ONLY http -- so the old "no smoke tests defined" read as "steadystate can't see my file".
     # It must instead confirm the checks ARE loaded and explain smoke is http-only.
     import steadystate.probe.custom as mod
-    from steadystate.inbound.server import _render_smoke
+    from steadystate.verbs import _render_smoke
 
     proxy = parse_check(
         {
@@ -533,8 +533,8 @@ def test_smoke_with_only_non_http_checks_says_they_loaded(monkeypatch):
 
 def test_health_verdict_combines_smoke_and_impaired(monkeypatch, tmp_path):
     import steadystate.probe.custom as mod
-    from steadystate.inbound.server import _render_health
     from steadystate.state import StateStore
+    from steadystate.verbs import _render_health
 
     db = str(tmp_path / "s.db")
     # an impaired finding in the store (a live symptom)
@@ -570,8 +570,8 @@ def test_health_scopes_to_a_workload_and_correlates_smoke_symptom_drift(monkeypa
     from datetime import UTC, datetime
 
     import steadystate.probe.custom as mod
-    from steadystate.inbound.server import _render_health
     from steadystate.state import StateStore
+    from steadystate.verbs import _render_health
 
     db = str(tmp_path / "s.db")
     with StateStore(db) as store:

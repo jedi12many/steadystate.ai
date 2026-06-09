@@ -55,7 +55,7 @@ def test_wall_verdict_leads_with_smoke_then_impaired():
 
 def test_posture_states_both_what_it_bounds_and_what_it_cannot():
     from steadystate.inbound.base import POSTURE, Command
-    from steadystate.inbound.server import run_command
+    from steadystate.verbs import run_command
 
     out = run_command(Command(POSTURE, "mcp"), ":memory:")
     # what it DOES enforce on its own path

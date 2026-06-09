@@ -28,6 +28,7 @@ from .. import __version__
 from ..probe.custom import CHECK_SCHEMA_HINT
 from ..probe.solutions import SOLUTION_SCHEMA_HINT
 from ..state import StateStore, filter_findings
+from ..verbs import run_command
 from .base import (
     ADD_CHECK,
     ADD_SOLUTION,
@@ -39,7 +40,6 @@ from .base import (
     Command,
     tool_schema,
 )
-from .server import run_command
 
 # The MCP protocol revision we implement. We echo the client's requested version when it sends one
 # (best-effort forward-compatibility), falling back to this.

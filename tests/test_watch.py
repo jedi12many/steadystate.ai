@@ -68,7 +68,7 @@ def test_watch_catches_a_new_finding_and_points_at_analyze(tmp_path, monkeypatch
                     {"a" * 64: {"category": "Erroring"}},
                 )
 
-    monkeypatch.setattr("steadystate.inbound.server.probe_report", fake_probe)
+    monkeypatch.setattr("steadystate.verbs.probe_report", fake_probe)
     monkeypatch.setattr(time, "sleep", lambda *_a: None)  # no real waiting
     out = CliRunner().invoke(
         app, ["watch", "payments", "--once", "--interval", "1s", "--state", str(db)]
