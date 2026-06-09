@@ -436,7 +436,7 @@ def _auto_analyze(store, report, now, gate, *, limit: int = 5) -> int:
     one already analyzed -- don't re-pay the model); capped per scan to bound cost on a mass-crash;
     needs an LLM (gated by the SAME egress confirm as the scan). Best-effort: a failure never breaks
     the scan. Returns how many it analyzed."""
-    from .reason.analyze import analyze_finding
+    from .reason.analyze import analyze_finding, prior_incidents
 
     analyst = LLMAnalyst(gate=gate)
     if analyst._provider() == "none":
@@ -454,7 +454,8 @@ def _auto_analyze(store, report, now, gate, *, limit: int = 5) -> int:
             if finding is None or not _is_crash(finding) or store.get_analysis(fp):
                 continue
             with contextlib.suppress(Exception):  # a wedged model/db must never sink the scan
-                rca = analyze_finding(finding, analyst._complete)
+                prior = prior_incidents(store, finding)  # ground it in this fleet's earlier RCAs
+                rca = analyze_finding(finding, analyst._complete, prior=prior)
                 if rca:
                     store.save_analysis(fp, rca, now)
                     done += 1
