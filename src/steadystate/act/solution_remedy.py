@@ -117,7 +117,9 @@ def record_solution_remediations(
     for alert in report.alerts:
         for symptom in alert.symptoms:
             matches = solutions_for(symptom.category, symptom.title, sols)
-            runnable = next((s for s in matches if s.run), None)
+            # Only a VOUCHED solution is offered as a runnable pending; a DRAFT (proposed: authored
+            # live by an agent, not yet vouched) is surfaced in `show`, never offered as runnable.
+            runnable = next((s for s in matches if s.run and not s.proposed), None)
             if runnable is None:
                 continue
             command = _fill(runnable.run, symptom.evidence)

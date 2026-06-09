@@ -91,6 +91,11 @@ The other half of grounded truth is *what to do about it*. A **solution** is an 
 - **Authored or learned.** Write one (`add-solution`), describe it in plain English
   (`define-solution`), or let `learn` notice a fix you keep applying by hand and hand you the exact
   command to capture it. Each is **signed by an author** — the audit anchor.
+- **Drafted, then vouched.** A fix authored *live* — an agent over MCP at `--author` — lands as a
+  **draft**: surfaced (`solutions`/`show`) but **never offered as a runnable fix** until a human
+  `vouch`es it (the `--write` grant; the CLI authoring path vouches as you author). Trust attaches to
+  the **channel** — a commit, your terminal, the write grant — not the author string the JSON carries,
+  so an agent can draft into your runbook without being able to make its own draft runnable.
 - **Matched + surfaced.** When a finding matches (by category or a title regex), `show` names the
   documented fix and who vouched, a CI-opened **issue carries it**, and an agent over MCP sees the
   same — your runbook, right where the problem is.
