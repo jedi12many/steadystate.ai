@@ -174,25 +174,35 @@ def test_auto_off_by_default_everything_waits_for_approve(tmp_path, monkeypatch)
         assert len(store.all_pending()) == 1 and not store.audit_log()  # offered, not run
 
 
-def test_auto_applies_only_a_within_bound_solution(tmp_path, monkeypatch):
+def test_a_within_bound_command_solution_still_escalates_with_auto_on(tmp_path, monkeypatch):
+    # The HIGH cap (audit / issue #253): a command's self-declared low/reversible bound can't grant
+    # auto-apply -- an open command has no allow-pattern, so it ALWAYS waits for a human, even with
+    # STEADYSTATE_SOLUTION_AUTO on. (Before the cap, the low/high one auto-ran on the author's say.)
     monkeypatch.setenv("STEADYSTATE_SOLUTION_AUTO", "1")
     monkeypatch.setenv("STEADYSTATE_SOLUTIONS", _runbook(tmp_path, [_EVICTED, _MEDIUM]))
     report = _Report(_Alert(_sym("Evicted", "web Evicted")), _Alert(_sym("Hung", "gw hung")))
     with StateStore(":memory:") as store:
         record_solution_remediations(store, report, datetime.now(UTC))
-        pending = [p.drift_identity for p in store.all_pending()]
-        audit = [(a.actor, a.outcome, a.drift_identity) for a in store.audit_log()]
-    # the low/high one auto-ran (audited as auto); the medium one waits for a human
-    assert audit == [("auto", "applied", "reclaim-evicted (author: ops)")]
-    assert pending == ["needs-human (author: ops)"]
+        pending = sorted(p.drift_identity for p in store.all_pending())
+        audit = store.audit_log()
+    assert not audit  # NOTHING auto-ran -- both open commands escalated to a human
+    assert pending == ["needs-human (author: ops)", "reclaim-evicted (author: ops)"]
 
 
-def test_auto_does_not_re_run_an_already_acted_fingerprint(tmp_path, monkeypatch):
+_PLAYBOOK = {  # an open playbook -- also arbitrary, also never auto-eligible on its declared bound
+    "name": "run-the-book",
+    "for": "Stuck",
+    "solution": {"kind": "playbook", "run": "recover.yml"},
+    "impact": "low",
+    "reversibility": "high",
+    "author": "ops",
+}
+
+
+def test_an_open_playbook_also_never_auto_applies(tmp_path, monkeypatch):
     monkeypatch.setenv("STEADYSTATE_SOLUTION_AUTO", "1")
-    monkeypatch.setenv("STEADYSTATE_SOLUTIONS", _runbook(tmp_path, [_EVICTED]))
-    sym = _sym("Evicted", "web Evicted")
-    report = _Report(_Alert(sym))
+    monkeypatch.setenv("STEADYSTATE_SOLUTIONS", _runbook(tmp_path, [_PLAYBOOK]))
+    report = _Report(_Alert(_sym("Stuck", "gw stuck")))
     with StateStore(":memory:") as store:
-        record_solution_remediations(store, report, datetime.now(UTC))  # auto-applies once
-        record_solution_remediations(store, report, datetime.now(UTC))  # same symptom -> NOT re-run
-        assert len(store.audit_log()) == 1  # exactly one auto-apply, no loop
+        record_solution_remediations(store, report, datetime.now(UTC))
+        assert len(store.all_pending()) == 1 and not store.audit_log()  # offered, never auto-run

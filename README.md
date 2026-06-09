@@ -95,8 +95,10 @@ The other half of grounded truth is *what to do about it*. A **solution** is an 
   documented fix and who vouched, a CI-opened **issue carries it**, and an agent over MCP sees the
   same — your runbook, right where the problem is.
 - **Run through the gate.** A matched fix becomes a one-`approve` remediation, run as an argv (no
-  shell) and audited with author + approver. Opt in to **auto-apply** (`STEADYSTATE_SOLUTION_AUTO`)
-  and a *low-impact, reversible* one runs unattended — anything bigger always waits for a human.
+  shell) and audited with author + approver. An open `command`/`playbook` runs **only on a human
+  `approve`** — `STEADYSTATE_SOLUTION_AUTO` won't auto-run it on the author's *self-declared* bound
+  (that's the author's word, not a trusted envelope). A safe unattended path returns only for a
+  **vouched** solution — committed to `main`, or SSO-vouched in chat ([issue #253](https://github.com/jedi12many/steadystate.ai/issues/253)).
 
 ## Act — within a bound you *commit*
 
