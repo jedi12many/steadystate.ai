@@ -949,10 +949,11 @@ def _render_solutions(solutions_path: str = "") -> str:
 
 def _render_smoke(checks_path: str = "") -> str:
     """Run the wall's `http` smoke tests live and report PASS/FAIL each -- the affirmative
-    'is it actually working?' view. Active (GET/HEAD), read-only. [] of checks -> a clear note."""
+    'is it actually working?' view. Active (GET/HEAD), read-only. No http results -> a DIAGNOSING
+    note (smoke runs only `http` checks; a loaded non-http check would otherwise look invisible)."""
     results = run_smoke_checks(checks_path)
     if not results:
-        return "no smoke tests defined -- add an `http` check to actively verify a service."
+        return _smoke_empty_reason(checks_path)
     passed = sum(1 for r in results if r.passed)
     failed = len(results) - passed
     head = f"{len(results)} smoke test(s): {passed} pass" + (f", {failed} FAIL" if failed else "")
@@ -964,6 +965,28 @@ def _render_smoke(checks_path: str = "") -> str:
             line += f" -- {r.detail}"
         lines.append(line)
     return "\n".join(lines)
+
+
+def _smoke_empty_reason(checks_path: str = "") -> str:
+    """Why `smoke` found nothing to run -- because it runs ONLY `http` checks, so a checks.json full
+    of `kubectl-log`/`ansible-service`/... loads fine yet `smoke` shows nothing, which reads as
+    'steadystate can't see my file'. This names the resolved path + what it DID load: no checks at
+    all vs N loaded but none `http` (those run during `probe`/`scan`, not `smoke`)."""
+    from ..probe.custom import load_checks, resolve_checks_path
+
+    path = resolve_checks_path(checks_path)
+    loaded = load_checks(checks_path)
+    if not loaded:
+        return (
+            f"no checks loaded from {path} -- author one (`define-check` / `add-check`), or run "
+            "`doctor` to see if a wrong path / bad JSON is hiding it."
+        )
+    kinds = ", ".join(sorted({c.kind for c in loaded}))
+    return (
+        f"no `http` smoke tests to run -- but {len(loaded)} check(s) ARE loaded from {path} "
+        f"(kinds: {kinds}). `smoke` runs ONLY `http` checks; the others run during `probe`/`scan`. "
+        "Add an `http` check to actively smoke-test a service."
+    )
 
 
 def _names_workload(finding: Finding, workload: str) -> bool:

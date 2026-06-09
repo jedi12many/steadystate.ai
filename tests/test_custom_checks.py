@@ -496,13 +496,36 @@ def test_smoke_verb_renders_failures_first_and_dispatches(monkeypatch):
         assert "FAIL" in run_command(Command(SMOKE, "mcp"), ":memory:")
 
 
-def test_smoke_with_no_http_checks_is_a_clear_note(monkeypatch):
+def test_smoke_with_no_checks_at_all_points_to_authoring_and_doctor(monkeypatch):
     import steadystate.probe.custom as mod
     from steadystate.inbound.server import _render_smoke
 
     monkeypatch.setattr(mod, "load_checks", lambda _p="": [])
     assert run_smoke_checks() == []
-    assert "no smoke tests" in _render_smoke()
+    out = _render_smoke()
+    assert "no checks loaded" in out and "doctor" in out  # author one / diagnose, not a dead end
+
+
+def test_smoke_with_only_non_http_checks_says_they_loaded(monkeypatch):
+    # The real dogfood bug: a checks.json full of kubectl-log/ansible loads FINE, but `smoke`
+    # runs ONLY http -- so the old "no smoke tests defined" read as "steadystate can't see my file".
+    # It must instead confirm the checks ARE loaded and explain smoke is http-only.
+    import steadystate.probe.custom as mod
+    from steadystate.inbound.server import _render_smoke
+
+    squid = parse_check(
+        {
+            "name": "squid-up",
+            "read": {"kind": "ansible-service", "selector": "proxies", "service": "squid"},
+            "when": {"expect": "active"},
+            "emit": {"severity": "high", "title": "squid down"},
+        }
+    )
+    monkeypatch.setattr(mod, "load_checks", lambda _p="": [squid])
+    out = _render_smoke()
+    assert "1 check(s) ARE loaded" in out  # confirms steadystate SEES the file
+    assert "ansible-service" in out  # names the kinds present
+    assert "http" in out and "probe" in out  # smoke is http-only; the rest run via probe/scan
 
 
 # -- the `health` verdict: smoke (active) + impaired (passive) -> WORKING/DEGRADED/DOWN ----------
