@@ -48,6 +48,13 @@ _TRUTHY = frozenset({"1", "true", "yes", "on"})
 # widens its own blast radius.)
 _ARBITRARY_KINDS = frozenset({"command", "playbook"})
 
+# The operator's risk dial: turn OFF the #253 solution safety net. On, a DRAFT becomes offerable and
+# an open command becomes auto-eligible (still within the bound). The human is the final decider on
+# how much risk they accept -- deliberately loud + honestly named, off by default, surfaced in
+# `posture`, and every action it permits is audited as run-under-override. The catalog allow-pattern
+# still governs catalog actions; this only lifts the authored-solution gates.
+_NO_SAFETY_NET_ENV = "STEADYSTATE_NO_SAFETY_NET"
+
 _PLACEHOLDER = re.compile(r"\{(\w+)\}")  # {namespace} / {workload} -- filled from the finding
 
 # A solution's impact/reversibility -> the generic Envelope the bound reads (display now; the auto
@@ -78,12 +85,20 @@ def _solution_auto_enabled() -> bool:
     return (os.environ.get(_SOLUTION_AUTO_ENV) or "").strip().lower() in _TRUTHY
 
 
+def no_safety_net() -> bool:
+    """Whether the operator has turned OFF the #253 solution safety net (STEADYSTATE_NO_SAFETY_NET).
+    Off by default; on, a DRAFT is offerable and an open command is auto-eligible -- the operator
+    owns the risk. Surfaced in `posture`; the actions it permits are audited run-under-override."""
+    return (os.environ.get(_NO_SAFETY_NET_ENV) or "").strip().lower() in _TRUTHY
+
+
 def _auto_eligible(sol: Solution, policy: BoundPolicy) -> bool:
     """Whether a matched solution may run UNATTENDED. An open-content kind (`command`/`playbook`)
     ALWAYS escalates -- its `run` has no allow-pattern and its declared bound is the author's word,
     so the self-declared envelope can never grant auto-apply. Any other kind is gated on the bound
-    as before. The HIGH-severity cap from the June 2026 audit (issue #253)."""
-    if sol.kind in _ARBITRARY_KINDS:
+    as before. The HIGH-severity cap from the June 2026 audit (#253) -- unless the operator has
+    explicitly lifted the net (`no_safety_net`), then it's bound-gated like everything else."""
+    if sol.kind in _ARBITRARY_KINDS and not no_safety_net():
         return False
     return within_bounds(_envelope(sol), policy)
 
@@ -111,6 +126,7 @@ def record_solution_remediations(
     if not sols:
         return 0
     auto = _solution_auto_enabled() if auto is None else auto
+    net = no_safety_net()  # operator lifted the #253 gates -> drafts offerable, open commands auto
     policy = bound_from_env()
     already = store.acted_fingerprints() if auto else set()
     recorded = 0
@@ -118,8 +134,8 @@ def record_solution_remediations(
         for symptom in alert.symptoms:
             matches = solutions_for(symptom.category, symptom.title, sols)
             # Only a VOUCHED solution is offered as a runnable pending; a DRAFT (proposed: authored
-            # live by an agent, not yet vouched) is surfaced in `show`, never offered as runnable.
-            runnable = next((s for s in matches if s.run and not s.proposed), None)
+            # live, not yet vouched) is surfaced in `show`, never offered unless the net is lifted.
+            runnable = next((s for s in matches if s.run and (not s.proposed or net)), None)
             if runnable is None:
                 continue
             command = _fill(runnable.run, symptom.evidence)
@@ -133,19 +149,30 @@ def record_solution_remediations(
                 command=command,
             )
             if auto and symptom.fingerprint not in already and _auto_eligible(runnable, policy):
-                _auto_apply(store, action, runnable, now)
+                # mark the audit when lifting the net let this run (blocked otherwise)
+                via_override = net and (runnable.kind in _ARBITRARY_KINDS or runnable.proposed)
+                _auto_apply(store, action, runnable, now, via_override=via_override)
             else:
                 store.record_pending(action, now)
             recorded += 1
     return recorded
 
 
-def _auto_apply(store: StateStore, action: PendingAction, sol: Solution, now: datetime) -> None:
+def _auto_apply(
+    store: StateStore,
+    action: PendingAction,
+    sol: Solution,
+    now: datetime,
+    *,
+    via_override: bool = False,
+) -> None:
     """Run a within-bound matched solution unattended and audit it as ``auto`` -- the autonomy path,
-    reached only with the opt-in on AND the bound satisfied. Best-effort: a failure is audited, not
-    raised (a wedged command never sinks the scan)."""
+    reached only with the opt-in on AND the bound satisfied. ``via_override`` marks the audit when
+    a lifted safety net (`no_safety_net`) allowed it -- an action the #253 gates would otherwise
+    block. Best-effort: a failure is audited, not raised (a wedged command never sinks the scan)."""
     result = run_solution(action, sol)
     outcome = VERIFIED if result.verified else APPLIED if result.applied else FAILED
+    detail = f"[no-safety-net] {result.detail}" if via_override else result.detail
     store.record_audit(
         AuditEntry(
             fingerprint=action.fingerprint,
@@ -154,7 +181,7 @@ def _auto_apply(store: StateStore, action: PendingAction, sol: Solution, now: da
             actor="auto",
             decision=APPROVED,
             outcome=outcome,
-            detail=result.detail,
+            detail=detail,
         ),
         now,
     )

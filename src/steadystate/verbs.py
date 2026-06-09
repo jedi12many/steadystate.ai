@@ -28,7 +28,7 @@ from .act.execute import CATALOG_SOURCE
 from .act.learn import ADOPT, promotable_solutions
 from .act.learn import learn as derive_lessons
 from .act.reflex import reflex_recurrence, reflexes
-from .act.solution_remedy import record_solution_remediations
+from .act.solution_remedy import no_safety_net, record_solution_remediations
 from .classify import APPLICATION, finding_layer
 from .engine import build_report
 from .evidence import EvidenceKeys
@@ -1017,6 +1017,12 @@ def _render_posture() -> str:
         if decider_auto_enabled()
         else "manual -- a human approves each effectful action"
     )
+    net_line = (
+        "  - !! SAFETY NET OFF (STEADYSTATE_NO_SAFETY_NET): a DRAFT is offerable and an open "
+        "command is auto-eligible -- YOU own the risk; permitted actions audited [no-safety-net]."
+        if no_safety_net()
+        else "  - solution safety net ON: a DRAFT fix isn't runnable until a human vouches it."
+    )
     return "\n".join(
         [
             "steadystate -- what I bound, and what I don't (the honest answer):",
@@ -1027,6 +1033,7 @@ def _render_posture() -> str:
             "  - APPROVAL + an immutable AUDIT -- nothing effectful runs unseen;",
             "  - grant tiers: read-only (observe) -> --author (checks) -> --write (remediate);",
             f"  - decider right now: {grant}.",
+            net_line,
             "  On this path, I am a real boundary.",
             "",
             "But I am NOT a sandbox around you:",

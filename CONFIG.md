@@ -70,6 +70,7 @@ wall** to control blast radius.
 | Variable | Default | Effect |
 |---|---|---|
 | `STEADYSTATE_DECIDER_AUTO` | off | Let the LLM decider **act** autonomously — still only within the bound + the vetted catalog, and audited. |
+| `STEADYSTATE_NO_SAFETY_NET` | off | **The operator's risk dial — you own the consequences.** Lifts the #253 *solution* trust gates: a `proposed` **draft** becomes offerable, and an open `command`/`playbook` becomes auto-eligible (still within the bound). Off by default; deliberately loud; surfaced in `posture`; every action it permits is audited `[no-safety-net]`. The deterministic catalog allow-pattern still governs catalog actions — this only affects authored solutions. |
 | `STEADYSTATE_REFLEX_AUTO` | off | Let reflexes act autonomously on their known-safe categories (e.g. reclaim evicted pods). |
 | `STEADYSTATE_MCP_AUTHOR` | off | Expose the check-**authoring** verbs (`add-check`) over MCP **without** full write (= `mcp --author`) — an agent can write observe-only, schema-gated checks but can't `approve`/`fix`/`run` infra. The middle tier between read-only and `--write`. |
 | `STEADYSTATE_MCP_WRITE` | off | Expose the **effectful** verbs over MCP (identical to `steadystate mcp --write`) — `approve`/`fix`/`run`/mute/… infra remediation, gated + audited. |
