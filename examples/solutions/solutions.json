@@ -9,33 +9,33 @@
     },
     "impact": "low",
     "reversibility": "high",
-    "author": "jeff",
+    "author": "ops",
     "added": "2026-06-07"
   },
   {
-    "name": "reload-squid-config",
-    "for": "squid-config-drift",
-    "problem": "Squid's config drifted from declared; a reload applies it without a full restart.",
+    "name": "reload-proxy-config",
+    "for": "proxy-config-drift",
+    "problem": "The proxy's config drifted from declared; a reload applies it without a full restart.",
     "solution": {
       "kind": "playbook",
-      "run": "ansible-playbook reload-squid.yml -l {workload}"
+      "run": "ansible-playbook reload-proxy.yml -l {workload}"
     },
     "impact": "low",
     "reversibility": "high",
-    "author": "jeff",
+    "author": "ops",
     "added": "2026-06-07"
   },
   {
     "name": "reboot-hung-gateway",
     "match": "gateway.*(hung|not routing|memory climbing)",
-    "problem": "The Akeyless gateway hangs (stops routing, memory climbs). A reboot clears it; investigate after.",
+    "problem": "The gateway hangs (stops routing, memory climbs). A reboot clears it; investigate after.",
     "solution": {
       "kind": "reboot",
       "target": "{workload}"
     },
     "impact": "medium",
     "reversibility": "medium",
-    "author": "jeff",
+    "author": "ops",
     "added": "2026-06-07"
   }
 ]

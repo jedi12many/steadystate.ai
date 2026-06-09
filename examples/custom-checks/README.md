@@ -1,7 +1,7 @@
 # custom-checks — define what *healthy* means for your app
 
 **The situation:** generic probing tells you a pod is `Running`, a service is `active`, a container
-is up. But **running ≠ working** — a postfix pod can be `Running` and not routing a single message;
+is up. But **running ≠ working** — a mailer pod can be `Running` and not routing a single message;
 a "hot" region is the one actually *serving*, not just scheduled. You want steadystate to check the
 thing you actually care about: **is it doing its job?** — and to do it *per deployment*, since every
 app's "healthy" is different.
@@ -17,12 +17,12 @@ Two paths, by who's driving:
 
 ```sh
 # A human, in plain English -- steadystate's LLM fills the vetted schema, validates, stores:
-steadystate define-check "alert if postfix stops routing mail"
-steadystate define-check "warn if squid isn't running on a proxy host"
+steadystate define-check "alert if mailer stops routing mail"
+steadystate define-check "warn if the egress proxy isn't running"
 
 # An agent over MCP (Copilot/Claude) fills the schema itself and calls the add-check tool;
 # or you pass JSON directly:
-steadystate add-check '{"name":"postfix-routing","read":{"kind":"kubectl-log","selector":"app=postfix","namespace":"mail"},"when":{"pattern":"status=sent","expect":"present"},"emit":{"severity":"high","title":"postfix is not routing mail"}}'
+steadystate add-check '{"name":"mailer-routing","read":{"kind":"kubectl-log","selector":"app=mailer","namespace":"mail"},"when":{"pattern":"status=sent","expect":"present"},"emit":{"severity":"high","title":"mailer is not routing mail"}}'
 
 steadystate checks        # list what's defined
 ```
@@ -47,15 +47,15 @@ the complementary *"running, but working?"*.
 ```jsonc
 // .steadystate/checks.json (or your versioned file -- see step 4)
 [
-  { "name": "postfix-routing",
-    "read": { "kind": "kubectl-log", "selector": "app=postfix", "namespace": "mail" },
+  { "name": "mailer-routing",
+    "read": { "kind": "kubectl-log", "selector": "app=mailer", "namespace": "mail" },
     "when": { "pattern": "status=sent", "expect": "present" },
-    "emit": { "severity": "high", "title": "postfix is not routing mail" } },
+    "emit": { "severity": "high", "title": "mailer is not routing mail" } },
 
-  { "name": "squid-up",
-    "read": { "kind": "ansible-service", "selector": "proxies", "service": "squid" },
+  { "name": "proxy-up",
+    "read": { "kind": "ansible-service", "selector": "proxies", "service": "proxy" },
     "when": { "expect": "active" },
-    "emit": { "severity": "high", "title": "squid is not running on a proxy host" } },
+    "emit": { "severity": "high", "title": "the egress proxy is not running" } },
 
   { "name": "gateway-cold",
     "read": { "kind": "kubectl-cpu", "selector": "app=gateway", "namespace": "prod" },
@@ -72,7 +72,7 @@ MCP-connect) **leads with your apps and sets the platform aside**:
 ```
 $ steadystate summary
   1 open finding (1 high)  |  2 platform   (as of 4m ago)
-  worst: postfix is not routing mail  [high]
+  worst: mailer is not routing mail  [high]
 ```
 
 The Rancher/k8s plumbing (`coredns`, `svclb`, the `cattle-*` operators) is labeled `platform`, not

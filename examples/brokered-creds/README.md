@@ -1,7 +1,7 @@
 # brokered-creds — no static kubeconfig: broker a short-lived one at launch
 
 **The situation:** mature shops don't leave long-lived kubeconfigs lying on disk. The cluster
-credential lives in a secrets manager (**Akeyless**, **Vault**); a cluster manager (**Rancher**)
+credential lives in a secrets manager (**Vault**); a cluster manager (**Rancher**)
 mints a **short-lived** kubeconfig on demand. You want steadystate to operate the same way — pull the
 secret, mint a kubeconfig, use it, and never persist the standing credential.
 
@@ -15,13 +15,12 @@ and the **secret never lands on disk** — only the short-lived kubeconfig it de
 #!/usr/bin/env bash
 set -euo pipefail   # fail CLOSED -- never run steadystate with a half-brokered credential
 
-SILO="$HOME/ops/akeyless-use1"
+SILO="$HOME/ops/gateway-use1"
 RANCHER_URL="https://rancher.example.com"
 CLUSTER_ID="c-m-xxxxxxxx"
 
 # 1. fetch a short-lived Rancher API token from your secrets manager
-TOKEN="$(akeyless get-secret-value --name /rancher/api-token)"
-#   Vault:  TOKEN="$(vault kv get -field=token secret/rancher/api-token)"
+TOKEN="$(vault kv get -field=token secret/rancher/api-token)"
 
 # 2. exchange it for a FRESH kubeconfig -- Rancher mints it, scoped + time-limited
 curl -fsSL -X POST -H "Authorization: Bearer ${TOKEN}" \
@@ -36,8 +35,8 @@ unset TOKEN   # the secret is gone; only the short-lived kubeconfig remains
 
 # 3. go to work -- steadystate uses the kubeconfig in the silo (targets.json points at it
 #    by relative path, so the silo is self-contained)
-steadystate --silo akeyless-use1 probe all
-steadystate --silo akeyless-use1 health
+steadystate --silo gateway-use1 probe all
+steadystate --silo gateway-use1 health
 ```
 
 Run it from `cron` (or your scheduler) on a cadence shorter than the kubeconfig's lifetime, and every
@@ -51,7 +50,7 @@ scan operates on a freshly-brokered, short-lived credential — no standing kube
   it doesn't even *store* a long-lived one.
 - **The agent never sees *or* triggers the secret.** It calls `health` / `summary`; the brokering
   happened before the process started, outside the agent's reach. The sole-actuator posture is intact.
-- **Rent the vault, don't rebuild it.** Akeyless / Vault / Rancher do this already; the wrapper is
+- **Rent the vault, don't rebuild it.** Vault / Rancher do this already; the wrapper is
   just glue. steadystate stays out of the secrets-management business.
 
 ## Honest limits
@@ -75,6 +74,6 @@ scan operates on a freshly-brokered, short-lived credential — no standing kube
 | **Best for** | `cron` / scheduled probes (re-brokers each run); restart-on-schedule for a live server |
 | **Backstop** | least-privilege RBAC on what Rancher hands out |
 
-✅ No new steadystate code — it rents your existing Akeyless/Vault + Rancher. The credential is
+✅ No new steadystate code — it rents your existing Vault + Rancher. The credential is
 short-lived and never persisted; the agent never touches it. (If you later want a long-running server
 to re-broker on its own, that's the built-in *credential connector* seam — ask when you need it.)

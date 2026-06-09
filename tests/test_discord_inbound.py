@@ -32,7 +32,7 @@ from steadystate.inbound.discord import (
 from steadystate.inbound.server import dispatch
 
 
-def _command(decision: str, fingerprint: str, actor: str = "jeff") -> dict:
+def _command(decision: str, fingerprint: str, actor: str = "ops") -> dict:
     return {
         "type": 2,  # APPLICATION_COMMAND
         "data": {
@@ -49,7 +49,7 @@ def _command(decision: str, fingerprint: str, actor: str = "jeff") -> dict:
     }
 
 
-def _readonly_command(verb: str, actor: str = "jeff") -> dict:
+def _readonly_command(verb: str, actor: str = "ops") -> dict:
     # help / pending are arg-less subcommands -- no options under the subcommand.
     return {
         "type": 2,
@@ -62,26 +62,26 @@ def _readonly_command(verb: str, actor: str = "jeff") -> dict:
 
 
 def test_parse_approve_and_decline():
-    assert command_from_payload(_command("approve", "fp1")) == Command(APPROVE, "jeff", "fp1")
+    assert command_from_payload(_command("approve", "fp1")) == Command(APPROVE, "ops", "fp1")
     assert command_from_payload(_command("decline", "fp2", actor="amy")) == Command(
         DECLINE, "amy", "fp2"
     )
 
 
 def test_parse_mute_takes_its_fingerprint_option():
-    assert command_from_payload(_command("mute", "fp9")) == Command(MUTE, "jeff", "fp9")
+    assert command_from_payload(_command("mute", "fp9")) == Command(MUTE, "ops", "fp9")
 
 
 def test_parse_readonly_verbs_take_no_argument():
-    assert command_from_payload(_readonly_command("help")) == Command(HELP, "jeff")
+    assert command_from_payload(_readonly_command("help")) == Command(HELP, "ops")
     assert command_from_payload(_readonly_command("pending", "amy")) == Command(PENDING, "amy")
-    assert command_from_payload(_readonly_command("targets")) == Command(TARGETS, "jeff")
-    assert command_from_payload(_readonly_command("findings")) == Command(FINDINGS, "jeff")
-    assert command_from_payload(_readonly_command("history")) == Command(HISTORY, "jeff")
+    assert command_from_payload(_readonly_command("targets")) == Command(TARGETS, "ops")
+    assert command_from_payload(_readonly_command("findings")) == Command(FINDINGS, "ops")
+    assert command_from_payload(_readonly_command("history")) == Command(HISTORY, "ops")
 
 
 def test_parse_cost_with_and_without_its_period_option():
-    assert command_from_payload(_readonly_command("cost")) == Command(COST, "jeff")  # no period
+    assert command_from_payload(_readonly_command("cost")) == Command(COST, "ops")  # no period
     payload = {
         "type": 2,
         "data": {
@@ -94,9 +94,9 @@ def test_parse_cost_with_and_without_its_period_option():
                 }
             ],
         },
-        "member": {"user": {"username": "jeff"}},
+        "member": {"user": {"username": "ops"}},
     }
-    assert command_from_payload(payload) == Command(COST, "jeff", "week")
+    assert command_from_payload(payload) == Command(COST, "ops", "week")
 
 
 def test_defer_acks_a_command_with_a_deferred_response_and_skips_a_ping():
@@ -148,9 +148,9 @@ def test_parse_probe_takes_its_target_option():
                 }
             ],
         },
-        "member": {"user": {"username": "jeff"}},
+        "member": {"user": {"username": "ops"}},
     }
-    assert command_from_payload(payload) == Command(PROBE, "jeff", "prod-k8s")
+    assert command_from_payload(payload) == Command(PROBE, "ops", "prod-k8s")
 
 
 def test_parse_probe_boolean_flag_options_become_flags():
@@ -171,10 +171,10 @@ def test_parse_probe_boolean_flag_options_become_flags():
                 }
             ],
         },
-        "member": {"user": {"username": "jeff"}},
+        "member": {"user": {"username": "ops"}},
     }
     assert command_from_payload(payload) == Command(
-        PROBE, "jeff", "prod-k8s", flags=frozenset({"unmute", "verbose"})
+        PROBE, "ops", "prod-k8s", flags=frozenset({"unmute", "verbose"})
     )
 
 
@@ -216,7 +216,7 @@ def test_respond_is_a_type4_channel_message():
 
 def test_parse_decodes_the_json_body():
     got = DiscordInbound("deadbeef").parse(json.dumps(_command("approve", "fp9")))
-    assert got == Command(APPROVE, "jeff", "fp9")
+    assert got == Command(APPROVE, "ops", "fp9")
     assert DiscordInbound("deadbeef").parse("not json") is None
 
 

@@ -1,7 +1,7 @@
 # mcp-copilot — drive steadystate from GitHub Copilot CLI on a Mac (walled per deployment)
 
-**The situation:** you work from a Mac and already hold a **kubeconfig per deployment** — Akeyless
-gateway clusters in one folder, Squid egress in another, each with the access for *just* that thing.
+**The situation:** you work from a Mac and already hold a **kubeconfig per deployment** — a gateway
+cluster in one folder, an egress proxy in another, each with the access for *just* that thing.
 You want an agent — **GitHub Copilot CLI** — to ask steadystate what's drifting or on fire in each,
 and (where you allow it) to act — *without one client seeing everything at once.*
 
@@ -29,10 +29,10 @@ steadystate doctor                  # what's configured / missing
 One leaf folder per wall, holding only *that* wall's kubeconfig, targets, and db:
 
 ```sh
-mkdir -p ~/ssai/akeyless/us-east-1 ~/ssai/squid/us-east-1
-cp /path/to/akeyless-use1.kubeconfig ~/ssai/akeyless/us-east-1/kubeconfig
+mkdir -p ~/ops/gateway-use1 ~/ops/proxy-use1
+cp /path/to/gateway-use1.kubeconfig ~/ops/gateway-use1/kubeconfig
 
-cd ~/ssai/akeyless/us-east-1
+cd ~/ops/gateway-use1
 export KUBECONFIG=$PWD/kubeconfig
 # Discover INSIDE the leaf, so the registry is scoped to just this wall's clusters:
 steadystate discover --create        # -> ./.steadystate/targets.json (this wall only)
@@ -51,7 +51,7 @@ point it at the wall with **`--dir`** (more on that next):
 printf '%s\n' \
   '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{}}}' \
   '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"summary","arguments":{}}}' \
-  | steadystate mcp --dir ~/ssai/akeyless/us-east-1
+  | steadystate mcp --dir ~/ops/gateway-use1
 ```
 
 You'll get back the `initialize` handshake and this wall's `summary` — exactly what Copilot sees.
@@ -70,16 +70,16 @@ differs per wall*:
 ```json
 {
   "mcpServers": {
-    "ssai-akeyless-use1": {
+    "gateway-use1": {
       "type": "local",
       "command": "steadystate",
-      "args": ["mcp", "--dir", "/Users/you/ssai/akeyless/us-east-1", "--label", "akeyless-use1"],
+      "args": ["mcp", "--dir", "/Users/you/ops/gateway-use1", "--label", "gateway-use1"],
       "tools": ["summary", "findings", "show", "probe", "hold"]
     },
-    "ssai-squid-use1": {
+    "proxy-use1": {
       "type": "local",
       "command": "steadystate",
-      "args": ["mcp", "--dir", "/Users/you/ssai/squid/us-east-1", "--label", "squid-use1", "--write"],
+      "args": ["mcp", "--dir", "/Users/you/ops/proxy-use1", "--label", "proxy-use1", "--write"],
       "tools": ["*"]
     }
   }
@@ -94,16 +94,16 @@ open/pending, how fresh* — so it resumes without a "let me check" round-trip; 
 > **Cleaner: name your silos once.** Instead of a long `--dir` path + `--label` per server,
 > register each deployment as a **named silo** and refer to it by name:
 > ```sh
-> steadystate silo add akeyless-use1 ~/ssai/akeyless/us-east-1
-> steadystate silo add squid-use1    ~/ssai/squid/us-east-1
+> steadystate silo add gateway-use1 ~/ops/gateway-use1
+> steadystate silo add proxy-use1   ~/ops/proxy-use1
 > steadystate silo list
 > # or, if your deployments are subfolders of one parent (each with a .steadystate/):
-> cd ~/ssai && steadystate silo discover     # registers each subfolder by name
+> cd ~/ops && steadystate silo discover     # registers each subfolder by name
 > ```
 > Then the config is just the name (it chdir's into the silo *and* self-labels):
 > ```json
-> "args": ["--silo", "akeyless-use1", "mcp"],            // read-only silo
-> "args": ["--silo", "squid-use1", "mcp", "--write"],    // a silo you trust to remediate
+> "args": ["--silo", "gateway-use1", "mcp"],            // read-only silo
+> "args": ["--silo", "proxy-use1", "mcp", "--write"],   // a silo you trust to remediate
 > ```
 > `--silo` is a global option (it comes *before* `mcp`, like `git -C`). The registry lives at
 > `~/.steadystate/silos.json` and holds only folder paths — never secrets. Same isolation; less to
@@ -118,12 +118,12 @@ One `--dir` per wall — no `--state`/`STEADYSTATE_TARGETS`/`KUBECONFIG` to keep
 Three independent walls of defense, one per concern:
 
 - **Reach** — each server's `--dir` scopes it to *only* that deployment+region's targets + kubeconfig,
-  so a sweep or an agent in `ssai-akeyless-use1` can't enumerate or touch Squid, or `eu-west-1`.
-- **Grant tier** — three levels: read-only (default, `akeyless-use1`); **`--author`** lets an agent
+  so a sweep or an agent in `gateway-use1` can't enumerate or touch the proxy wall, or `eu-west-1`.
+- **Grant tier** — three levels: read-only (default, `gateway-use1`); **`--author`** lets an agent
   write custom checks (`add-check` — observe-only config, schema-gated) *without* touching infra;
-  **`--write`** (`squid-use1`) adds guardrailed `approve`/`fix`/`run`. So you can let Copilot help
+  **`--write`** (`proxy-use1`) adds guardrailed `approve`/`fix`/`run`. So you can let Copilot help
   *author* health checks on a wall without granting it remediation power.
-- **Tool allowlist** — Copilot's own `"tools"` field is a second gate: `akeyless-use1` exposes only
+- **Tool allowlist** — Copilot's own `"tools"` field is a second gate: `gateway-use1` exposes only
   read verbs even if you forget the write flag (and to call `add-check`, the list must include it).
 
 Prefer the wizard? `/mcp add` inside Copilot CLI walks the same fields (name → type STDIO →
@@ -134,10 +134,10 @@ command/args → env → tools); `Ctrl+S` saves and the server is live immediate
 In a Copilot CLI session, ask in plain English and watch it call the right wall's tools:
 
 ```
-> Using ssai-akeyless-use1, what's the worst thing in that fleet right now?
-        -> calls summary / findings / show on the akeyless/us-east-1 db only
+> Using gateway-use1, what's the worst thing in that fleet right now?
+        -> calls summary / findings / show on the gateway-use1 db only
 
-> In ssai-squid-use1, a pod is evicted — reclaim it.
+> In proxy-use1, a pod is evicted — reclaim it.
         -> calls approve/fix; runs through steadystate's bound + catalog, audited as `mcp`
 ```
 

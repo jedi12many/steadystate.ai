@@ -34,7 +34,7 @@ for the per-deployment walling). In Copilot's MCP config:
   "mcpServers": {
     "steadystate": {
       "command": "steadystate",
-      "args": ["--silo", "akeyless-use1", "mcp", "--author"]
+      "args": ["--silo", "gateway-use1", "mcp", "--author"]
       // read-only by default; --author lets it write checks + runbook solutions (not infra);
       // add --write only when you want it to approve/fix/run through the gate.
     }

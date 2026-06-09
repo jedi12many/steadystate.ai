@@ -160,7 +160,7 @@ app.add_typer(silo_app, name="silo")
 
 @silo_app.command("add")
 def silo_add(
-    name: str = typer.Argument(..., help="A short name for this deployment, e.g. akeyless-use1."),
+    name: str = typer.Argument(..., help="A short name for this deployment, e.g. gateway-use1."),
     directory: str = typer.Argument(..., help="Its folder (holds .steadystate/ + the kubeconfig)."),
 ) -> None:
     """Register a deployment as a named silo, so you can `--silo <name>` instead of a long path.
@@ -1840,7 +1840,7 @@ def define_check_cmd(
 ) -> None:
     """Author a custom health check by describing it -- the LLM fills the vetted schema, steadystate
     validates it (only a schema-valid, observe-only check is stored), and writes it to the checks
-    file. Needs an LLM configured (see `doctor`). e.g. "alert if squid stops on a proxy host"."""
+    file. Needs an LLM configured (see `doctor`). e.g. "alert if a service stops on a host"."""
     from .probe.custom import add_check, define_check
 
     analyst = LLMAnalyst()
@@ -1984,7 +1984,7 @@ def mcp(
     if refresh:  # freshen the store before serving, so a connecting agent sees current state
         run_command(Command(PROBE, _local_actor(), refresh), str(state))
     # the label self-identifies the silo: an explicit --label wins, else the --silo name (from the
-    # root callback), else the --dir basename. So `--silo akeyless-use1 mcp` labels itself.
+    # root callback), else the --dir basename. So `--silo gateway-use1 mcp` labels itself.
     wall = label or _ACTIVE_SILO or (Path(directory).name if directory else "")
     truthy = ("1", "true", "yes", "on")
     granted = write or os.environ.get("STEADYSTATE_MCP_WRITE", "").strip().lower() in truthy

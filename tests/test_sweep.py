@@ -210,14 +210,14 @@ def test_chat_probe_all_shows_finding_detail_and_honors_verbose(monkeypatch, tmp
     monkeypatch.setenv(TARGETS_ENV, str(tf))
     # the same workload crash-looping in two clusters -> one correlated "in 2 place(s)" finding.
     reports = {
-        "prod-cluster": _fire_report("prod-cluster/apps/Deployment/team-a/squid"),
-        "stg-cluster": _fire_report("stg-cluster/apps/Deployment/team-a/squid"),
+        "prod-cluster": _fire_report("prod-cluster/apps/Deployment/team-a/web"),
+        "stg-cluster": _fire_report("stg-cluster/apps/Deployment/team-a/web"),
     }
     monkeypatch.setattr(sweep, "build_report", _build_report(reports))
 
     out = run_command(command_from_text("probe all", "tester"), "")
-    assert "squid is CrashLoopBackOff in 2 place(s)" in out  # the correlated title
-    assert "instances of Deployment squid" in out  # the DESCRIPTION, not just the title
+    assert "web is CrashLoopBackOff in 2 place(s)" in out  # the correlated title
+    assert "instances of Deployment web" in out  # the DESCRIPTION, not just the title
     assert "fp " in out  # the fingerprint(s) -- so the finding stays muteable
     assert "1 pod" not in out  # the per-symptom evidence is verbose-only
 
@@ -331,10 +331,10 @@ def test_probe_creates_the_state_db_from_scratch(monkeypatch, tmp_path):
 def test_sweep_correlates_the_same_workload_across_clusters(monkeypatch):
     import steadystate.sweep as sweep
 
-    # squid crash-looping in two clusters (a bad image rolled out everywhere) -> ONE fleet issue.
+    # web crash-looping in two clusters (a bad image rolled out everywhere) -> ONE fleet issue.
     reports = {
-        "prod-cluster": _fire_report("prod-cluster/apps/Deployment/team-a/squid"),
-        "stg-cluster": _fire_report("stg-cluster/apps/Deployment/team-a/squid"),
+        "prod-cluster": _fire_report("prod-cluster/apps/Deployment/team-a/web"),
+        "stg-cluster": _fire_report("stg-cluster/apps/Deployment/team-a/web"),
     }
     monkeypatch.setattr(sweep, "build_report", _build_report(reports))
     targets = {
@@ -347,8 +347,8 @@ def test_sweep_correlates_the_same_workload_across_clusters(monkeypatch):
     # ...but the emitted/fleet report collapses them into ONE correlated alert.
     grouped = [a for a in result.report.alerts if not a.drifts and len(a.symptoms) > 1]
     assert len(grouped) == 1
-    assert grouped[0].title == "squid is CrashLoopBackOff in 2 place(s)"
+    assert grouped[0].title == "web is CrashLoopBackOff in 2 place(s)"
     assert len(grouped[0].symptoms) == 2  # both clusters' instances ride along
     digest = "\n".join(render_sweep(result))
     assert "correlated across the fleet" in digest
-    assert "squid is CrashLoopBackOff in 2 place(s)" in digest
+    assert "web is CrashLoopBackOff in 2 place(s)" in digest

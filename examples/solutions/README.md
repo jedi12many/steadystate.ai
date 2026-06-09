@@ -20,7 +20,7 @@ version-controlled file is the audit; surfacing the fix against a matching findi
   "solution": { "kind": "command",        // command | playbook | reboot | ... (open)
                 "run": "kubectl delete pods --field-selector=status.phase=Failed -n {namespace}" },
   "impact": "low", "reversibility": "high", // the bound -- a destructive fix still needs approval
-  "author": "jeff", "added": "2026-06-07"   // the audit anchor
+  "author": "ops", "added": "2026-06-07"   // the audit anchor
 }
 ```
 
@@ -48,16 +48,16 @@ Edit the JSON directly, or use the verbs — both stamp an `author` (an unsigned
 ```sh
 steadystate add-solution '{"name":"reclaim-evicted","for":"Evicted",
   "solution":{"kind":"command","run":"kubectl delete pods --field-selector=status.phase=Failed -n {namespace}"},
-  "impact":"low","reversibility":"high"}' --author jeff
+  "impact":"low","reversibility":"high"}' --author ops
 
-steadystate define-solution "for evicted pods, delete the Failed ones in that namespace" --author jeff
+steadystate define-solution "for evicted pods, delete the Failed ones in that namespace" --author ops
 ```
 
 An agent can author too: the **`--author` MCP tier** exposes `add-solution` (and `add-check`)
 *without* the full `--write` grant — so it can write to your runbook (schema-gated, signed) but
 **not** approve/fix/run your infrastructure.
 
-When a finding matches (e.g. an `Evicted` pod, or a title like "akeyless **gateway not routing**"),
+When a finding matches (e.g. an `Evicted` pod, or a title like "**gateway not routing**"),
 `show` surfaces the documented fix and its author. An agent driving steadystate over MCP sees the
 same thing — your runbook, right where the problem is.
 

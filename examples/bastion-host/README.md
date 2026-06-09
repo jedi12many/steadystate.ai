@@ -110,7 +110,7 @@ speak the listener's signed-webhook protocol; it uses this ssh path instead.)
 // ~/.copilot/mcp-config.json (Copilot CLI) — Claude Code's .mcp.json takes the same command/args.
 {
   "mcpServers": {
-    "ssai-prod": {
+    "prod-use1": {
       "type": "local",
       "command": "ssh",
       "args": ["-T", "ops@bastion.internal",

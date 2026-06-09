@@ -56,7 +56,7 @@ def _controller(pod: dict) -> tuple[str, str]:
 def _owner_belongs(name: str, kind: str, workload: str) -> bool:
     """Does a controller ``(name, kind)`` belong to ``workload``? A Deployment's pods are owned by a
     ReplicaSet ``<workload>-<pod-template-hash>`` (the hash is a single dash-free segment) -- so we
-    require that exact shape, which distinguishes ``squid`` from a sibling ``squid-proxy`` (whose RS
+    require that exact shape, which distinguishes ``web`` from a sibling ``web-proxy`` (whose RS
     leaves the suffix ``proxy-<hash>``, not a bare hash). Every other controller (StatefulSet,
     DaemonSet, Job) owns its pods *directly*, so the owner name IS the workload. Pure."""
     if kind == "ReplicaSet":
@@ -66,8 +66,8 @@ def _owner_belongs(name: str, kind: str, workload: str) -> bool:
 
 def _pod_belongs(pod: dict, workload: str) -> bool:
     """Whether ``pod`` is part of ``workload``. Precise when the pod has a controller owner (the
-    normal case -- match the ReplicaSet/StatefulSet/DaemonSet, so ``squid`` never claims
-    ``squid-proxy``'s pods); falls back to the legacy name-prefix match for a bare pod with no
+    normal case -- match the ReplicaSet/StatefulSet/DaemonSet, so ``web`` never claims
+    ``web-proxy``'s pods); falls back to the legacy name-prefix match for a bare pod with no
     controller. Pure."""
     name, kind = _controller(pod)
     if name:
@@ -91,7 +91,7 @@ def unhealthy_pods(pods: dict, workload: str) -> list[PodHealth]:
 
     A pod belongs to the workload via its controller ``ownerReference`` (the ReplicaSet for a
     Deployment, the StatefulSet/DaemonSet directly) -- so two deployments in one namespace with
-    overlapping names (``squid`` / ``squid-proxy``) never claim each other's pods; a bare pod with
+    overlapping names (``web`` / ``web-proxy``) never claim each other's pods; a bare pod with
     no controller falls back to the name-prefix match. Unhealthy = a container stuck in a known bad
     waiting state, or a Failed phase. The restart *count* is NOT a trigger: it's cumulative over the
     pod's life, so a pod that churned during a past deploy but is fine now would read as a false

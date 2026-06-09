@@ -34,7 +34,7 @@ def test_baseline_then_only_new_findings_report():
     _new_matches(base, None, seen)  # first poll = baseline; caller ignores the result
     assert seen == {"a" * 64, "b" * 64}
     # next poll: the same two + a NEW panic -> only the panic is fresh
-    later = [*base, _f("c" * 64, "akeyless-gw panic")]
+    later = [*base, _f("c" * 64, "payments-gw panic")]
     fresh = _new_matches(later, None, seen)
     assert [f.fingerprint for f in fresh] == ["c" * 64]
 
@@ -63,7 +63,7 @@ def test_watch_catches_a_new_finding_and_points_at_analyze(tmp_path, monkeypatch
         if polls["n"] == 2:  # the panic shows up AFTER the baseline poll
             with StateStore(str(db)) as store:
                 store.record(
-                    {"a" * 64: ("high", "akeyless-gw panic Erroring")},
+                    {"a" * 64: ("high", "payments-gw panic Erroring")},
                     datetime.now(UTC),
                     {"a" * 64: {"category": "Erroring"}},
                 )
@@ -71,10 +71,10 @@ def test_watch_catches_a_new_finding_and_points_at_analyze(tmp_path, monkeypatch
     monkeypatch.setattr("steadystate.inbound.server.probe_report", fake_probe)
     monkeypatch.setattr(time, "sleep", lambda *_a: None)  # no real waiting
     out = CliRunner().invoke(
-        app, ["watch", "akeyless", "--once", "--interval", "1s", "--state", str(db)]
+        app, ["watch", "payments", "--once", "--interval", "1s", "--state", str(db)]
     )
     assert out.exit_code == 1  # caught something -> non-zero (gate-friendly)
-    assert "CAUGHT" in out.stdout and "akeyless-gw panic" in out.stdout
+    assert "CAUGHT" in out.stdout and "payments-gw panic" in out.stdout
     assert "analyze a" in out.stdout  # the one-copy-paste hint to root-cause it
 
 

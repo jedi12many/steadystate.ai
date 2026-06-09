@@ -122,8 +122,8 @@ machine-readable output (`terraform show -json`, `kubectl`, `helm`, …), never 
   `-refresh=false` — *no per-resource cloud refresh*, so a CI gate needs only state-bucket read, not
   broad cloud creds.
 - **Drift** vs **malfunction** (`--probe`) — config diverged vs failing-right-now, folded when both.
-- **Custom checks** — declare what *healthy* means for **your** app (*is postfix routing mail? is
-  squid up?*) as a vetted, read-only rule that emits a finding and **never runs code**; author by
+- **Custom checks** — declare what *healthy* means for **your** app (*is the mailer routing mail? is
+  the proxy up?*) as a vetted, read-only rule that emits a finding and **never runs code**; author by
   talking (`define-check`) or let an agent fill the schema (`add-check`).
 - **Domain packs + live compliance** — security (AWS · GCP · Azure → ATT&CK), Docker CIS, k8s Pod
   Security; a CIS/STIG live-posture scan, honest about what's checkable live.

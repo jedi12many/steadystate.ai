@@ -992,7 +992,7 @@ def _smoke_empty_reason(checks_path: str = "") -> str:
 def _names_workload(finding: Finding, workload: str) -> bool:
     """Whether a finding belongs to ``workload`` -- by its structured ``workload`` field (a Symptom
     carries it) or, failing that, by the name appearing in its title. A forgiving substring match,
-    so `health gateway` catches `akeyless-gateway`."""
+    so `health gateway` catches `payments-gateway`."""
     w = workload.lower()
     wl = (finding.details or {}).get("workload", "").lower()
     if wl:

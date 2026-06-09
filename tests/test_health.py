@@ -18,7 +18,7 @@ from steadystate.health import (
 def test_a_live_symptom_with_evidence_is_impaired():
     # a probe failure / failed custom check records structured evidence and no `change`
     assert (
-        finding_disposition({"category": "CrashLoopBackOff", "namespace": "akeyless"}) == IMPAIRED
+        finding_disposition({"category": "CrashLoopBackOff", "namespace": "payments"}) == IMPAIRED
     )
     assert (
         finding_disposition({"found": "False", "matched_pods": "3"}) == IMPAIRED

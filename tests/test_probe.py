@@ -163,15 +163,15 @@ def _owned_pod(
 
 
 def test_overlapping_names_do_not_claim_each_others_pods():
-    # Two deployments in ONE namespace: squid and squid-proxy. Their pods are named by their own
-    # ReplicaSets (squid-<hash> / squid-proxy-<hash>). Matching on the controller, squid must NOT
-    # claim squid-proxy's pod (whose owner suffix is `proxy-<hash>`, not a bare hash).
+    # Two deployments in ONE namespace: web and web-proxy. Their pods are named by their own
+    # ReplicaSets (web-<hash> / web-proxy-<hash>). Matching on the controller, web must NOT
+    # claim web-proxy's pod (whose owner suffix is `proxy-<hash>`, not a bare hash).
     pods = _pods(
-        _owned_pod("squid-7d8f9-aa", "squid-7d8f9"),
-        _owned_pod("squid-proxy-1a2b3-bb", "squid-proxy-1a2b3"),
+        _owned_pod("web-7d8f9-aa", "web-7d8f9"),
+        _owned_pod("web-proxy-1a2b3-bb", "web-proxy-1a2b3"),
     )
-    assert [p.name for p in unhealthy_pods(pods, "squid")] == ["squid-7d8f9-aa"]
-    assert [p.name for p in unhealthy_pods(pods, "squid-proxy")] == ["squid-proxy-1a2b3-bb"]
+    assert [p.name for p in unhealthy_pods(pods, "web")] == ["web-7d8f9-aa"]
+    assert [p.name for p in unhealthy_pods(pods, "web-proxy")] == ["web-proxy-1a2b3-bb"]
 
 
 def test_statefulset_pod_owner_is_the_workload_directly():
@@ -186,8 +186,8 @@ def test_statefulset_pod_owner_is_the_workload_directly():
 
 def test_bare_pod_without_a_controller_falls_back_to_name_prefix():
     # No ownerReferences -> the legacy name-prefix match still applies (unchanged behavior).
-    pods = _pods(_pod("squid-x", waiting="CrashLoopBackOff"))
-    assert [p.name for p in unhealthy_pods(pods, "squid")] == ["squid-x"]
+    pods = _pods(_pod("web-x", waiting="CrashLoopBackOff"))
+    assert [p.name for p in unhealthy_pods(pods, "web")] == ["web-x"]
 
 
 def test_aggregates_restarts_across_containers_as_evidence():
@@ -253,7 +253,7 @@ def test_probe_produces_a_symptom_for_an_unhealthy_declared_workload(monkeypatch
 def test_symptom_title_names_the_namespace_and_cluster(monkeypatch):
     # The title is the one field every surface shows (chat probe, scan panel, the remembered
     # `findings` row), so it must say WHERE -- namespace, and the cluster too on a fleet -- else a
-    # `squid is CrashLoopBackOff` over many clusters/namespaces is unactionable.
+    # `web is CrashLoopBackOff` over many clusters/namespaces is unactionable.
     pods = {"items": [_pod("web-abc", waiting="CrashLoopBackOff", restarts=9)]}
 
     ambient = _probe(monkeypatch, pods)

@@ -22,13 +22,13 @@ operator at the natural next verb (a panic → `analyze`; a fix they keep doing 
 ## One server = one wall — don't fan out across deployments
 
 Each steadystate MCP server **is one deployment** (one silo/wall — its own state, targets, checks,
-and creds). If several are connected (e.g. `akeyless-gw` and `global-egress`), they are **different
-applications**, not interchangeable:
+and creds). If several are connected (e.g. a `gateway` server and a `proxy` server), they are
+**different applications**, not interchangeable:
 
 - When the operator asks about **deployment X**, use **only X's server/tools**. "Smoke-test the
-  Akeyless gateways" means the `akeyless-gw` server — **not** also `global-egress`.
+  gateways" means the `gateway` server — **not** also `proxy`.
 - **Don't fan out** across walls (running every server's tool "in parallel") unless the operator
-  explicitly asks about *all* of them. A tool's server name (e.g. `akeyless-gw-smoke`) tells you
+  explicitly asks about *all* of them. A tool's server name (e.g. `gateway-smoke`) tells you
   which wall it touches — match it to what was asked.
 - Each server's `initialize` says which wall it is; trust that. The wall keeps one server from
   *seeing* another's data, but picking the *right* wall for the question is yours to get right.

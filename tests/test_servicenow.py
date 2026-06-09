@@ -103,16 +103,16 @@ def test_severity_maps_to_urgency():
 
 def test_a_correlated_group_is_one_incident_keyed_by_its_group_fingerprint():
     symptom = Symptom(
-        identity="prod/apps/Deployment/ns/squid",
+        identity="prod/apps/Deployment/ns/web",
         kind="Deployment",
         category="CrashLoopBackOff",
         severity=Severity.HIGH,
-        title="squid is CrashLoopBackOff",
+        title="web is CrashLoopBackOff",
         detail="x",
         provenance=Provenance(source="kubernetes", address="x"),
     )
     grouped = Alert(
-        title="squid is CrashLoopBackOff in 2 place(s)",
+        title="web is CrashLoopBackOff in 2 place(s)",
         severity=Severity.HIGH,
         drifts=[],
         why_it_matters="grouped",
@@ -149,7 +149,7 @@ def test_emit_updates_the_open_incident_instead_of_duplicating(monkeypatch):
 # -- auto-close: resolve an incident when its finding clears --------------------
 
 
-def _resolved(fingerprint: str = "f" * 64, title: str = "squid cleared"):
+def _resolved(fingerprint: str = "f" * 64, title: str = "web cleared"):
     from steadystate.reconcile_state import ResolvedFinding
 
     return ResolvedFinding(fingerprint=fingerprint, title=title)

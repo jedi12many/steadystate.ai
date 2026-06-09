@@ -48,9 +48,9 @@ _MCP_ACTOR = "mcp"  # who the audit log credits an MCP-driven action to
 
 # A worked example for the add-check tool -- an agent fills `check` from this + the schema hint.
 _ADD_CHECK_EXAMPLE = (
-    '{"name": "postfix-routing", "read": {"kind": "kubectl-log", "selector": "app=postfix", '
+    '{"name": "mailer-routing", "read": {"kind": "kubectl-log", "selector": "app=mailer", '
     '"namespace": "mail"}, "when": {"pattern": "status=sent", "expect": "present"}, '
-    '"emit": {"severity": "high", "title": "postfix is not routing mail"}}'
+    '"emit": {"severity": "high", "title": "the mailer is not routing mail"}}'
 )
 
 # A worked example for the add-solution tool -- an agent fills `solution` from this + the hint.

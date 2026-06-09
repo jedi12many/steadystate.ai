@@ -59,17 +59,17 @@ def test_alert_to_dict_carries_reasoning_action_keys_and_before_after():
 
 def test_alert_to_dict_merges_symptom_evidence_and_group_fingerprint():
     symptom = Symptom(
-        identity="prod/apps/Deployment/ns/squid",
+        identity="prod/apps/Deployment/ns/web",
         kind="Deployment",
         category="CrashLoopBackOff",
         severity=Severity.HIGH,
-        title="squid is CrashLoopBackOff",
+        title="web is CrashLoopBackOff",
         detail="x",
         provenance=Provenance(source="kubernetes", address="x"),
         evidence={"namespace": "ns", "last_log": "boom"},
     )
     alert = Alert(
-        title="squid is CrashLoopBackOff in 2 place(s)",
+        title="web is CrashLoopBackOff in 2 place(s)",
         severity=Severity.HIGH,
         drifts=[],
         why_it_matters="grouped",

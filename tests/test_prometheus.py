@@ -139,7 +139,7 @@ def test_emit_pushes_once(monkeypatch):
 
 
 def test_emit_push_puts_to_job_endpoint(monkeypatch):
-    surface = PrometheusSurface(pushgateway_url="http://pushgw.test:9091/", job="ssai")
+    surface = PrometheusSurface(pushgateway_url="http://pushgw.test:9091/", job="steadystate")
 
     seen: dict[str, object] = {}
 
@@ -163,7 +163,7 @@ def test_emit_push_puts_to_job_endpoint(monkeypatch):
     monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
 
     surface.emit(Report(items=[_case()]))
-    assert seen["url"] == "http://pushgw.test:9091/metrics/job/ssai"
+    assert seen["url"] == "http://pushgw.test:9091/metrics/job/steadystate"
     assert seen["method"] == "PUT"  # PUT replaces the job group
     assert isinstance(seen["data"], bytes) and seen["data"]
     assert str(seen["content_type"]).startswith("text/plain")

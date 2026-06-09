@@ -56,7 +56,7 @@ _EVICTED = {
     "solution": {"kind": "command", "run": "python -c \"print('ok')\""},
     "impact": "low",
     "reversibility": "high",
-    "author": "jeff",
+    "author": "ops",
 }
 
 
@@ -71,7 +71,7 @@ def test_offers_a_runnable_match_and_skips_reboot_only(tmp_path, monkeypatch):
                     "name": "reboot-gw",
                     "for": "Hung",
                     "solution": {"kind": "reboot", "target": "gw"},
-                    "author": "jeff",
+                    "author": "ops",
                 },
             ],
         ),
@@ -82,7 +82,7 @@ def test_offers_a_runnable_match_and_skips_reboot_only(tmp_path, monkeypatch):
         pending = store.all_pending()
     assert n == 1  # only the runnable Evicted match
     assert pending[0].source == SOLUTION_SOURCE
-    assert pending[0].drift_identity == "reclaim-evicted (author: jeff)"  # author carried for audit
+    assert pending[0].drift_identity == "reclaim-evicted (author: ops)"  # author carried for audit
 
 
 def test_placeholders_fill_from_evidence_and_an_unfilled_one_is_not_offered(tmp_path, monkeypatch):
@@ -95,7 +95,7 @@ def test_placeholders_fill_from_evidence_and_an_unfilled_one_is_not_offered(tmp_
                     "name": "scoped",
                     "for": "Evicted",
                     "solution": {"kind": "command", "run": "kubectl delete pod -n {namespace}"},
-                    "author": "jeff",
+                    "author": "ops",
                 }
             ],
         ),
@@ -119,7 +119,7 @@ def test_approve_runs_the_command_and_audits_author_and_approver(tmp_path, monke
     assert result is not None and result.applied and "ok" in msg
     entry = audit[-1]
     assert entry.actor == "dana" and entry.outcome == "applied"  # who approved
-    assert entry.drift_identity == "reclaim-evicted (author: jeff)"  # who authored, in the trail
+    assert entry.drift_identity == "reclaim-evicted (author: ops)"  # who authored, in the trail
 
 
 def test_run_solution_reports_a_nonzero_command_without_raising():
@@ -127,7 +127,7 @@ def test_run_solution_reports_a_nonzero_command_without_raising():
         fingerprint="f" * 64,
         source=SOLUTION_SOURCE,
         path="",
-        drift_identity="boom (author: jeff)",
+        drift_identity="boom (author: ops)",
         command='python -c "import sys; sys.exit(3)"',
     )
     result = run_solution(action)
@@ -139,7 +139,7 @@ def test_run_solution_reports_a_missing_binary_without_raising():
         fingerprint="f" * 64,
         source=SOLUTION_SOURCE,
         path="",
-        drift_identity="x (author: jeff)",
+        drift_identity="x (author: ops)",
         command="definitely-not-a-real-binary-xyz --do-it",
     )
     result = run_solution(action)
@@ -148,7 +148,7 @@ def test_run_solution_reports_a_missing_binary_without_raising():
 
 def test_solution_named_resolves_the_bound_for_the_plan(tmp_path, monkeypatch):
     monkeypatch.setenv("STEADYSTATE_SOLUTIONS", _runbook(tmp_path, [_EVICTED]))
-    sol = solution_named("reclaim-evicted (author: jeff)")
+    sol = solution_named("reclaim-evicted (author: ops)")
     assert sol is not None and sol.impact == "low" and sol.reversibility == "high"
     assert solution_named("nonexistent (author: x)") is None
 
@@ -161,7 +161,7 @@ _MEDIUM = {  # medium/medium -> above the autonomous ceiling -> never auto-runs
     "solution": {"kind": "command", "run": "python -c \"print('hi')\""},
     "impact": "medium",
     "reversibility": "medium",
-    "author": "jeff",
+    "author": "ops",
 }
 
 
@@ -183,8 +183,8 @@ def test_auto_applies_only_a_within_bound_solution(tmp_path, monkeypatch):
         pending = [p.drift_identity for p in store.all_pending()]
         audit = [(a.actor, a.outcome, a.drift_identity) for a in store.audit_log()]
     # the low/high one auto-ran (audited as auto); the medium one waits for a human
-    assert audit == [("auto", "applied", "reclaim-evicted (author: jeff)")]
-    assert pending == ["needs-human (author: jeff)"]
+    assert audit == [("auto", "applied", "reclaim-evicted (author: ops)")]
+    assert pending == ["needs-human (author: ops)"]
 
 
 def test_auto_does_not_re_run_an_already_acted_fingerprint(tmp_path, monkeypatch):

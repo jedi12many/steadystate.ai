@@ -34,14 +34,14 @@ _SEVERITY_RANK = {Severity.LOW: 0, Severity.MEDIUM: 1, Severity.HIGH: 2, Severit
 
 def _workload_name(identity: str) -> str:
     """The bare workload/resource name -- the last `/`- or `.`-segment
-    (``prod-cluster/apps/Deployment/team-a/squid`` -> ``squid``). Pure."""
+    (``prod-cluster/apps/Deployment/team-a/web`` -> ``web``). Pure."""
     return identity.rsplit("/", 1)[-1].rsplit(".", 1)[-1]
 
 
 def _place(identity: str) -> str:
     """Where a workload lives -- the identity with the workload name (last `/`-segment) stripped --
     so the same name in different namespaces *or clusters* counts as different places
-    (``prod-cluster/apps/Deployment/team-a/squid`` -> ``prod-cluster/apps/Deployment/team-a``).
+    (``prod-cluster/apps/Deployment/team-a/web`` -> ``prod-cluster/apps/Deployment/team-a``).
     Pure."""
     head, sep, _name = identity.rpartition("/")
     return head if sep else identity
@@ -388,7 +388,7 @@ class Pipeline:
             (signals if below_bar else symptom_alerts).append(alert)
         standalone_symptoms = self._diagnose(drift_alerts, symptom_alerts)
         # The same workload failing the same way across namespaces folds into one Alert -- so a bad
-        # image crashlooping every team's `squid` is one issue to handle, not one per namespace.
+        # image crashlooping every team's `web` is one issue to handle, not one per namespace.
         standalone_symptoms = group_symptom_alerts(standalone_symptoms)
 
         return Report(

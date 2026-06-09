@@ -30,10 +30,10 @@ steadystate is the *sole actuator*: the one and only way this agent can touch yo
 Put the deployment's kubeconfig in a silo folder; register it by name (the agent never sees the file):
 
 ```sh
-mkdir -p ~/ops/akeyless-use1/.steadystate
-cp /path/to/akeyless-use1.kubeconfig ~/ops/akeyless-use1/.steadystate/kubeconfig
+mkdir -p ~/ops/gateway-use1/.steadystate
+cp /path/to/gateway-use1.kubeconfig ~/ops/gateway-use1/.steadystate/kubeconfig
 # point targets.json at that kubeconfig by relative path (so the silo is self-contained)
-steadystate silo add akeyless-use1 ~/ops/akeyless-use1
+steadystate silo add gateway-use1 ~/ops/gateway-use1
 ```
 
 **Scope the kubeconfig's own RBAC to least privilege** — this is the *hard* limit (see step 5).
@@ -47,9 +47,9 @@ you list. `claude_desktop_config.json`:
 ```json
 {
   "mcpServers": {
-    "steadystate-akeyless-use1": {
+    "steadystate-gateway-use1": {
       "command": "steadystate",
-      "args": ["--silo", "akeyless-use1", "mcp"]
+      "args": ["--silo", "gateway-use1", "mcp"]
     }
   }
 }
@@ -64,9 +64,9 @@ headless API harness whose only tool is this server is equally contained.)
 The same config, with the grant that matches your trust for *this* deployment:
 
 ```json
-"args": ["--silo", "akeyless-use1", "mcp"]              // read-only: observe + diagnose only
-"args": ["--silo", "akeyless-use1", "mcp", "--author"]  // + write custom health checks (no infra)
-"args": ["--silo", "akeyless-use1", "mcp", "--write"]   // + approve/fix/run, gated by bound + audit
+"args": ["--silo", "gateway-use1", "mcp"]              // read-only: observe + diagnose only
+"args": ["--silo", "gateway-use1", "mcp", "--author"]  // + write custom health checks (no infra)
+"args": ["--silo", "gateway-use1", "mcp", "--write"]   // + approve/fix/run, gated by bound + audit
 ```
 
 Even at `--write`, every effectful action still runs the **catalog + impact×reversibility bound +

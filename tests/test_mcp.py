@@ -181,19 +181,19 @@ def test_add_check_tool_carries_the_schema_and_accepts_a_structured_object():
     assert (
         "kubectl-log" in check_arg["description"] and "ansible-service" in check_arg["description"]
     )
-    assert "postfix-routing" in check_arg["description"]  # a worked example, inline
+    assert "mailer-routing" in check_arg["description"]  # a worked example, inline
     # the agent fills `check` as an object -> serialized to a JSON arg for the handler
     obj = {
-        "name": "squid-up",
-        "read": {"kind": "ansible-service", "selector": "proxies", "service": "squid"},
+        "name": "web-up",
+        "read": {"kind": "ansible-service", "selector": "proxies", "service": "web"},
         "when": {"expect": "active"},
-        "emit": {"severity": "high", "title": "squid down"},
+        "emit": {"severity": "high", "title": "web down"},
     }
     cmd = command_from_tool_call("add-check", {"check": obj})
-    assert cmd is not None and json.loads(cmd.argument)["name"] == "squid-up"
+    assert cmd is not None and json.loads(cmd.argument)["name"] == "web-up"
     # a JSON string still works (backward compatible)
     cmd2 = command_from_tool_call("add-check", {"check": json.dumps(obj)})
-    assert cmd2 is not None and json.loads(cmd2.argument)["name"] == "squid-up"
+    assert cmd2 is not None and json.loads(cmd2.argument)["name"] == "web-up"
 
 
 # -- resources: state an agent can pull into context ----------------------------
@@ -321,10 +321,10 @@ def test_mcp_label_defaults_to_the_dir_basename_and_explicit_wins(tmp_path, monk
         "steadystate.inbound.mcp.serve_stdio",
         lambda *a, **k: seen.update(k),
     )
-    wall = tmp_path / "akeyless-use1"
+    wall = tmp_path / "payments-use1"
     wall.mkdir()
     CliRunner().invoke(app, ["mcp", "--dir", str(wall)])
-    assert seen["label"] == "akeyless-use1"  # defaults to the wall folder name
+    assert seen["label"] == "payments-use1"  # defaults to the wall folder name
     CliRunner().invoke(app, ["mcp", "--dir", str(wall), "--label", "custom"])
     assert seen["label"] == "custom"  # an explicit --label wins
     # --author grants the authoring tier without full --write
@@ -352,10 +352,10 @@ def test_mcp_refresh_probes_before_serving(monkeypatch):
 
 def test_initialize_carries_the_silo_label_and_live_state(tmp_path):
     db = _db_with_findings(tmp_path)  # one high CrashLoopBackOff finding
-    out = handle_request(_req("initialize", {}), db, write=False, label="akeyless-use1")["result"]
-    assert out["serverInfo"]["title"] == "steadystate (akeyless-use1)"  # the silo self-identifies
+    out = handle_request(_req("initialize", {}), db, write=False, label="payments-use1")["result"]
+    assert out["serverInfo"]["title"] == "steadystate (payments-use1)"  # the silo self-identifies
     instr = out["instructions"]
-    assert "silo: akeyless-use1" in instr
+    assert "silo: payments-use1" in instr
     # the live summary is embedded, so a connecting agent resumes WITHOUT a tool round-trip
     assert "impaired" in instr and "CrashLoopBackOff" in instr
 
@@ -379,8 +379,8 @@ def test_startup_report_shows_the_resolved_wall_context(tmp_path, monkeypatch):
         json.dumps(
             [
                 {
-                    "name": "squid",
-                    "read": {"kind": "ansible-service", "selector": "p", "service": "squid"},
+                    "name": "web",
+                    "read": {"kind": "ansible-service", "selector": "p", "service": "web"},
                     "when": {"expect": "active"},
                     "emit": {"severity": "high", "title": "down"},
                 }
@@ -389,8 +389,8 @@ def test_startup_report_shows_the_resolved_wall_context(tmp_path, monkeypatch):
     )
     monkeypatch.delenv("STEADYSTATE_CHECKS", raising=False)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-secret-value-do-not-print")
-    out = "\n".join(startup_report("state.db", write=False, author=True, label="akeyless-use1"))
-    assert "wall: akeyless-use1" in out and "grant: author" in out
+    out = "\n".join(startup_report("state.db", write=False, author=True, label="payments-use1"))
+    assert "wall: payments-use1" in out and "grant: author" in out
     assert "steadystate/checks.json" in out and "(1 loaded)" in out  # the resolved path + count
     assert "STEADYSTATE_CHECKS=(unset)" in out  # the per-silo gotcha is visible at a glance
     assert "ANTHROPIC_API_KEY=set" in out and "sk-secret-value" not in out  # presence, never value
@@ -409,8 +409,8 @@ def test_startup_report_surfaces_a_global_checks_override(tmp_path, monkeypatch)
 def test_server_instructions_scope_to_the_wall_and_warn_against_fanning_out():
     from steadystate.inbound.mcp import _server_instructions
 
-    out = _server_instructions(":memory:", "akeyless-gw")  # an empty in-memory store is enough
-    assert "akeyless-gw** wall" in out  # self-identifies the wall
+    out = _server_instructions(":memory:", "payments-gw")  # an empty in-memory store is enough
+    assert "payments-gw** wall" in out  # self-identifies the wall
     assert "don't fan out" in out and "explicitly asks about all" in out  # the scoping rule
     # an unnamed single server has no other walls to confuse -> no scoping paragraph
     bare = _server_instructions(":memory:", "")

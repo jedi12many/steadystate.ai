@@ -211,11 +211,11 @@ def test_approve_writes_an_audit_entry(tmp_path):
     db = _suggest_scan(tmp_path)
     with StateStore(db) as store:
         fp = store.all_pending()[0].fingerprint
-    _runner().invoke(app, ["approve", fp, "--actor", "jeff", "--state", str(db)])
+    _runner().invoke(app, ["approve", fp, "--actor", "ops", "--state", str(db)])
     with StateStore(db) as store:
         rows = store.audit_log()
     assert len(rows) == 1
-    assert rows[0].actor == "jeff" and rows[0].decision == APPROVED
+    assert rows[0].actor == "ops" and rows[0].decision == APPROVED
     assert rows[0].drift_identity == "aws_s3_bucket.logs"
 
 
@@ -250,10 +250,10 @@ def test_history_command_renders_an_entry(tmp_path):
     db = _suggest_scan(tmp_path)
     with StateStore(db) as store:
         fp = store.all_pending()[0].fingerprint
-    _runner().invoke(app, ["approve", fp, "--actor", "jeff", "--state", str(db)])
+    _runner().invoke(app, ["approve", fp, "--actor", "ops", "--state", str(db)])
     result = _runner().invoke(app, ["history", "--state", str(db)])
     assert result.exit_code == 0
-    assert "jeff" in result.stdout and "aws_s3_bucket.logs" in result.stdout
+    assert "ops" in result.stdout and "aws_s3_bucket.logs" in result.stdout
 
 
 def test_history_empty_is_clean(tmp_path):
