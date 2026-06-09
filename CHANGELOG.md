@@ -8,6 +8,10 @@ change between releases until 1.0.0. Releases are published as GitHub Releases.
 
 ## [Unreleased]
 
+### Security
+
+- **A solution's self-declared bound no longer grants auto-apply (issue #253, audit HIGH).** `STEADYSTATE_SOLUTION_AUTO` used to auto-run a matched solution whose authored `impact`/`reversibility` fell within the autonomous ceiling -- but a solution's `run` is an open command with no allow-pattern, and that bound is the *author's word*, not a trusted envelope. So an open `command`/`playbook` is now **never** auto-eligible on its declared bound: it always escalates to a human `approve`, even with auto on. The deterministic gate (catalog allow-pattern) still governs every effectful run; this closes the path where a destructive command authored `low`/`high` could run unattended. A safe unattended path returns only for a *vouched* solution (committed to `main`, or SSO-vouched in chat) -- the next phases of #253.
+
 ### Added
 
 - **The MCP server announces what it resolved on startup, and tells the agent to stay on its wall.** Two dogfood fixes for driving steadystate from an agent: **(1) a startup report to stderr** (never stdout -- that stays pure JSON-RPC) the moment `steadystate mcp` starts -- the grant tier, the cwd, and the *actual files it's reading* (state.db, targets, checks, solutions, config) with how many loaded, plus the path-affecting env (`STEADYSTATE_CHECKS` set/unset is right there). So *"why can't it see my checks?"* is answered at a glance, in the client's MCP logs. Plus a clean lifecycle: stops on EOF (client closed stdin) **or Ctrl-C**, with a `stopped` line, no traceback. **(2) Wall-scoping in the `initialize` instructions** -- each server now says *"this is the **&lt;wall&gt;** wall; its tools act on &lt;wall&gt; ONLY; don't fan out across walls unless asked about all of them."* Fixes an agent (e.g. Copilot) running *every* connected server's tool for a single-deployment question -- the safety wall always held (one server can't see another's data), but the *targeting* was wrong. Reinforced in the [`copilot-ss`](examples/copilot-ss/AGENTS.md) operating agreement ("one server = one wall").

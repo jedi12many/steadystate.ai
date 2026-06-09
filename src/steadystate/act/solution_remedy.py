@@ -26,7 +26,7 @@ from datetime import datetime
 from ..probe.solutions import Solution, load_solutions, solutions_for
 from ..state import APPLIED, APPROVED, FAILED, VERIFIED, AuditEntry, PendingAction, StateStore
 from .base import RemediationResult
-from .bounds import Envelope, Impact, Reversibility, bound_from_env, within_bounds
+from .bounds import BoundPolicy, Envelope, Impact, Reversibility, bound_from_env, within_bounds
 from .plan import RemediationPlan, Risk
 
 # The sentinel ``source`` marking a PendingAction as an authored-solution command (apply_pending
@@ -39,6 +39,14 @@ SOLUTION_SOURCE = "solution"
 # explicit trust decision, never enabled as a side effect of turning on drift auto-apply.
 _SOLUTION_AUTO_ENV = "STEADYSTATE_SOLUTION_AUTO"
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
+
+# Open-content kinds: the `run` is an arbitrary operator-authored command with NO allow-pattern. A
+# solution's declared impact/reversibility is the AUTHOR's word, not a trusted envelope -- so these
+# can never auto-apply on that word alone. They ALWAYS escalate to a human approve, no matter the
+# bound they claim. (A safe auto path returns once a solution is vouched through a trusted channel
+# -- committed to main, or SSO-vouched in chat -- see issue #253; the self-declared envelope never
+# widens its own blast radius.)
+_ARBITRARY_KINDS = frozenset({"command", "playbook"})
 
 _PLACEHOLDER = re.compile(r"\{(\w+)\}")  # {namespace} / {workload} -- filled from the finding
 
@@ -70,6 +78,16 @@ def _solution_auto_enabled() -> bool:
     return (os.environ.get(_SOLUTION_AUTO_ENV) or "").strip().lower() in _TRUTHY
 
 
+def _auto_eligible(sol: Solution, policy: BoundPolicy) -> bool:
+    """Whether a matched solution may run UNATTENDED. An open-content kind (`command`/`playbook`)
+    ALWAYS escalates -- its `run` has no allow-pattern and its declared bound is the author's word,
+    so the self-declared envelope can never grant auto-apply. Any other kind is gated on the bound
+    as before. The HIGH-severity cap from the June 2026 audit (issue #253)."""
+    if sol.kind in _ARBITRARY_KINDS:
+        return False
+    return within_bounds(_envelope(sol), policy)
+
+
 def record_solution_remediations(
     store: StateStore,
     report,
@@ -83,12 +101,12 @@ def record_solution_remediations(
     <fp>` runs it. The author rides in ``drift_identity`` -> the audit. A solution with no `run`, or
     whose placeholders don't fill, is skipped (surfaced in `show`, not offered).
 
-    With ``auto`` (default: ``STEADYSTATE_SOLUTION_AUTO``) AND the solution's bound within the
-    autonomous ceiling (`within_bounds` -- only low-impact + reversible; `STEADYSTATE_BOUND` widens
-    it like everywhere else), it's RUN immediately and audited as ``auto`` instead of offered -- but
-    only once per fingerprint (already-acted ones are left, so a persisting symptom never loops). A
-    reboot / anything not low-and-reversible always falls through to the pending offer. Returns the
-    count offered-or-auto-applied."""
+    With ``auto`` (default: ``STEADYSTATE_SOLUTION_AUTO``) AND the solution AUTO-ELIGIBLE
+    (`_auto_eligible`), it's RUN immediately and audited as ``auto`` instead of offered -- once per
+    fingerprint (already-acted ones are left, so a persisting symptom never loops). But an
+    open-content `command`/`playbook` is NEVER auto-eligible on its self-declared bound -- it always
+    escalates to a human (the audit's HIGH cap, issue #253); everything else falls through to the
+    pending offer. Returns the count offered-or-auto-applied."""
     sols = solutions if solutions is not None else load_solutions()
     if not sols:
         return 0
@@ -112,11 +130,7 @@ def record_solution_remediations(
                 drift_identity=f"{runnable.name} (author: {runnable.author})",
                 command=command,
             )
-            if (
-                auto
-                and symptom.fingerprint not in already
-                and within_bounds(_envelope(runnable), policy)
-            ):
+            if auto and symptom.fingerprint not in already and _auto_eligible(runnable, policy):
                 _auto_apply(store, action, runnable, now)
             else:
                 store.record_pending(action, now)
