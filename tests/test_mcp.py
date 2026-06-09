@@ -407,13 +407,11 @@ def test_startup_report_surfaces_a_global_checks_override(tmp_path, monkeypatch)
 
 
 def test_server_instructions_scope_to_the_wall_and_warn_against_fanning_out():
-    import tempfile
-
     from steadystate.inbound.mcp import _server_instructions
 
-    out = _server_instructions(tempfile.mktemp(suffix=".db"), "akeyless-gw")
+    out = _server_instructions(":memory:", "akeyless-gw")  # an empty in-memory store is enough
     assert "akeyless-gw** wall" in out  # self-identifies the wall
     assert "don't fan out" in out and "explicitly asks about all" in out  # the scoping rule
     # an unnamed single server has no other walls to confuse -> no scoping paragraph
-    bare = _server_instructions(tempfile.mktemp(suffix=".db"), "")
+    bare = _server_instructions(":memory:", "")
     assert "wall:" not in bare and "fan out" not in bare
