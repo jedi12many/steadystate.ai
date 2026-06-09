@@ -80,7 +80,7 @@ from .probe import PROBE_CAPABILITIES, PROBES
 from .reason.cost import roll_up, roll_up_by_period, scan_cost_line
 from .reason.enrich import ENRICHERS
 from .reason.explain import explain_finding, explain_state, finding_facts
-from .reason.llm import LLMAnalyst
+from .reason.llm import DEFAULT_CHEAP_MODEL, DEFAULT_MODEL, LLMAnalyst
 from .reason.pipeline import CORRELATORS
 from .reconcile_state import reconcile
 from .serialize import report_to_dict
@@ -366,6 +366,25 @@ def _auto_apply(store: StateStore, fingerprints: list[str]) -> None:
 def _targets_file() -> Path:
     """Targets registry path: STEADYSTATE_TARGETS if set, else .steadystate/targets.json."""
     return Path(os.environ.get(TARGETS_ENV) or DEFAULT_TARGETS_FILE)
+
+
+def _load_registry() -> tuple[Path, dict[str, Target]]:
+    """Load the targets registry, or print the right note and exit -- the shared preamble the fleet
+    commands (targets/sweep/hold/propose) all open with. No file or an empty registry: a note + exit
+    0; a malformed file: an error + exit 1 (a tooling failure is never a silent 'clean')."""
+    target_file = _targets_file()
+    if not target_file.exists():
+        typer.echo(f"no targets file ({target_file}). Create one with `discover --create`.")
+        raise typer.Exit(0)
+    try:
+        registry = load_targets(target_file)
+    except (OSError, ValueError) as exc:
+        typer.echo(f"targets file {target_file} is malformed: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    if not registry:
+        typer.echo(f"{target_file} has no targets.")
+        raise typer.Exit(0)
+    return target_file, registry
 
 
 def _resolve_target(name: str) -> Target:
@@ -1317,18 +1336,7 @@ def targets(
 
     This is the registry `discover --create` writes, `scan --target` runs, and the chat listener
     resolves -- so `targets` lets you see and validate it from the CLI without opening the JSON."""
-    target_file = _targets_file()
-    if not target_file.exists():
-        typer.echo(f"no targets file ({target_file}). Create one with `discover --create`.")
-        return
-    try:
-        registry = load_targets(target_file)
-    except (OSError, ValueError) as exc:
-        typer.echo(f"targets file {target_file} is malformed: {exc}", err=True)
-        raise typer.Exit(1) from exc
-    if not registry:
-        typer.echo(f"{target_file} has no targets.")
-        return
+    target_file, registry = _load_registry()
     known_sources = set(DRIFT_SOURCES)
     known_probes = {"auto", "none", *PROBES}
     typer.echo(f"{len(registry)} target(s) in {target_file}:")
@@ -1389,18 +1397,7 @@ def sweep(
     which clusters are on fire, which are clear, and what recovered since the last sweep. One
     cluster being unreachable is reported inline, never sinks the rest. `--to` additionally pushes
     the fires to alert surfaces, so a cron sweep pages out (no inbound endpoint needed)."""
-    target_file = _targets_file()
-    if not target_file.exists():
-        typer.echo(f"no targets file ({target_file}). Create one with `discover --create`.")
-        return
-    try:
-        registry = load_targets(target_file)
-    except (OSError, ValueError) as exc:
-        typer.echo(f"targets file {target_file} is malformed: {exc}", err=True)
-        raise typer.Exit(1) from exc
-    if not registry:
-        typer.echo(f"{target_file} has no targets.")
-        return
+    _, registry = _load_registry()
     # Resolve surfaces before the (slow) sweep, so a bad --to fails fast with a clean BadParameter.
     surfaces = _surfaces([n.strip() for n in to.split(",") if n.strip()])
     result = sweep_targets(registry, state, datetime.now(UTC), stateless=stateless, scan_logs=deep)
@@ -1442,18 +1439,7 @@ def hold(
 
     Reflexes ship at `propose` (dry-run): out of the box this holds nothing. Promote one you've
     watched be right with `STEADYSTATE_REFLEX_AUTO=reclaim-evicted`, then `hold --apply`."""
-    target_file = _targets_file()
-    if not target_file.exists():
-        typer.echo(f"no targets file ({target_file}). Create one with `discover --create`.")
-        return
-    try:
-        registry = load_targets(target_file)
-    except (OSError, ValueError) as exc:
-        typer.echo(f"targets file {target_file} is malformed: {exc}", err=True)
-        raise typer.Exit(1) from exc
-    if not registry:
-        typer.echo(f"{target_file} has no targets.")
-        return
+    _, registry = _load_registry()
     now = datetime.now(UTC)
     result = sweep_targets(registry, str(state), now, scan_logs=deep)
     with _open_store(state) as store:
@@ -1537,18 +1523,7 @@ def propose(
     guardrail (audited as `decider`) -- autonomy is granted like a new admin's access, not earned by
     a track record; the bound + catalog allow-list is the guardrail, your DR plan the backstop.
     Either way, out-of-bound proposals stay advisory -- a human runs those via break-glass."""
-    target_file = _targets_file()
-    if not target_file.exists():
-        typer.echo(f"no targets file ({target_file}). Create one with `discover --create`.")
-        return
-    try:
-        registry = load_targets(target_file)
-    except (OSError, ValueError) as exc:
-        typer.echo(f"targets file {target_file} is malformed: {exc}", err=True)
-        raise typer.Exit(1) from exc
-    if not registry:
-        typer.echo(f"{target_file} has no targets.")
-        return
+    _, registry = _load_registry()
     result = sweep_targets(registry, str(state), datetime.now(UTC), scan_logs=deep)
     with _open_store(state) as store:
         if llm:
@@ -2343,8 +2318,8 @@ _DIALS: tuple[tuple[str, str, str], ...] = (
     ("STEADYSTATE_LLM_ENABLED", "on", "LLM kill switch (false/0/no/off disables all calls)"),
     ("STEADYSTATE_LLM_PROVIDER", "auto", "force anthropic | openai"),
     ("STEADYSTATE_LLM_TIMEOUT", "30", "per-call timeout (seconds)"),
-    ("STEADYSTATE_MODEL", "claude-sonnet-4-6", "default model"),
-    ("STEADYSTATE_MODEL_CHEAP", "claude-haiku-4-5", "cheap tier (routing callers, e.g. chat-nl)"),
+    ("STEADYSTATE_MODEL", DEFAULT_MODEL, "default model"),
+    ("STEADYSTATE_MODEL_CHEAP", DEFAULT_CHEAP_MODEL, "cheap tier (routing callers, e.g. chat-nl)"),
     ("STEADYSTATE_REACHABLE_TIMEOUT", "8s", "cluster reachability probe timeout (0 = no cap)"),
     ("STEADYSTATE_RESOLVE_AFTER", "30m", "grace before a gone finding resolves (0 = immediate)"),
     ("STEADYSTATE_PATCH_DIR", ".steadystate/patches", "where remediation patch files are written"),
