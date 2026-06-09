@@ -309,12 +309,12 @@ def test_run_command_show_evidence_and_timestamps(tmp_path):
     fp = "a" * 64
     with StateStore(db) as store:
         store.record(
-            {fp: ("high", "squid is CrashLoopBackOff in prod-cluster/team-a")},
+            {fp: ("high", "web is CrashLoopBackOff in prod-cluster/team-a")},
             datetime(2026, 6, 2, 14, 30, tzinfo=UTC),
             {fp: {"namespace": "team-a", "cluster": "prod-cluster", "last_log": "missing DB_URL"}},
         )
     msg = run_command(Command(SHOW, "amy", fp[:10]), db)  # a prefix resolves
-    assert "squid is CrashLoopBackOff in prod-cluster/team-a" in msg
+    assert "web is CrashLoopBackOff in prod-cluster/team-a" in msg
     assert "missing DB_URL" in msg  # the captured error
     assert "namespace" in msg and "team-a" in msg
     assert "2026-06-02T14:30" in msg  # first/last seen -- the window the operator asked about
@@ -340,7 +340,7 @@ def test_show_and_findings_json_return_structured_data(tmp_path):
     fp = "a" * 64
     with StateStore(db) as store:
         store.record(
-            {fp: ("high", "squid is CrashLoopBackOff in prod/team-a")},
+            {fp: ("high", "web is CrashLoopBackOff in prod/team-a")},
             datetime(2026, 6, 2, 14, 30, tzinfo=UTC),
             {fp: {"namespace": "team-a", "last_log": "boom"}},
         )
@@ -441,7 +441,7 @@ def test_surfaces_lists_targets_and_marks_configured(monkeypatch):
 def _record(db: str, fp: str) -> None:
     with StateStore(db) as store:
         store.record(
-            {fp: ("high", "squid is CrashLoopBackOff in prod/team-a")},
+            {fp: ("high", "web is CrashLoopBackOff in prod/team-a")},
             datetime(2026, 6, 2, 14, 30, tzinfo=UTC),
             {fp: {"namespace": "team-a", "last_log": "missing DB_URL"}},
         )
@@ -467,7 +467,7 @@ def test_send_dispatches_a_finding_to_a_configured_surface(monkeypatch, tmp_path
     assert "Sent" in msg and "fake" in msg
     assert len(sent) == 1
     alert = sent[0].alerts[0]
-    assert alert.title == "squid is CrashLoopBackOff in prod/team-a"
+    assert alert.title == "web is CrashLoopBackOff in prod/team-a"
     assert alert.correlation_fingerprint == fp  # carries the fp so a surface can dedup on it
     assert "missing DB_URL" in alert.why_it_matters  # the evidence rides along
 
@@ -582,26 +582,26 @@ def test_summarize_shows_the_description_by_default_and_evidence_when_verbose():
     from steadystate.probe.base import Symptom
 
     symptom = Symptom(
-        identity="apps/Deployment/prod/squid",
+        identity="apps/Deployment/prod/web",
         kind="Deployment",
         category="CrashLoopBackOff",
         severity=Severity.HIGH,
-        title="squid is CrashLoopBackOff",
+        title="web is CrashLoopBackOff",
         detail="2 pod(s) CrashLoopBackOff; last log: fatal: missing DB_URL",
-        provenance=Provenance(source="kubernetes", address="apps/Deployment/prod/squid"),
+        provenance=Provenance(source="kubernetes", address="apps/Deployment/prod/web"),
     )
     alert = Alert(
-        title="squid is CrashLoopBackOff in 2 place(s)",
+        title="web is CrashLoopBackOff in 2 place(s)",
         severity=Severity.HIGH,
         drifts=[],
-        why_it_matters="2 instances of Deployment squid are CrashLoopBackOff across: prod, stg.",
+        why_it_matters="2 instances of Deployment web are CrashLoopBackOff across: prod, stg.",
         layer=Layer.ALERT,
         symptoms=[symptom],
         recommended_action="kubectl rollout restart",
     )
     default = _summarize("prod", [alert])
-    assert "squid is CrashLoopBackOff in 2 place(s)" in default
-    assert "2 instances of Deployment squid are CrashLoopBackOff" in default  # the description
+    assert "web is CrashLoopBackOff in 2 place(s)" in default
+    assert "2 instances of Deployment web are CrashLoopBackOff" in default  # the description
     assert "fix: kubectl rollout restart" in default
     assert "fp " in default  # fingerprints still listed
     verbose = _summarize("prod", [alert], verbose=True)
@@ -612,7 +612,7 @@ def test_summarize_shows_a_correlated_groups_mute_all_key():
     from steadystate.inbound.server import _summarize
 
     alert = Alert(
-        title="squid is CrashLoopBackOff in 2 place(s)",
+        title="web is CrashLoopBackOff in 2 place(s)",
         severity=Severity.HIGH,
         drifts=[],
         why_it_matters="2 instances across: prod, stg.",

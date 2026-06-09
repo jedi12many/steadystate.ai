@@ -156,23 +156,23 @@ def test_evaluate_custom_checks_is_a_no_op_without_a_checks_file(tmp_path):
 
 # -- the kubectl-log kind: functional health ('running, but doing its job?') ----
 
-_POSTFIX = {
-    "name": "postfix-routing",
-    "read": {"kind": "kubectl-log", "selector": "app=postfix", "namespace": "mail"},
+_MAILER = {
+    "name": "mailer-routing",
+    "read": {"kind": "kubectl-log", "selector": "app=mailer", "namespace": "mail"},
     "when": {"pattern": "status=sent", "expect": "present"},
-    "emit": {"severity": "high", "title": "postfix is not routing mail"},
+    "emit": {"severity": "high", "title": "mailer is not routing mail"},
 }
 
 
 def test_a_log_check_parses_with_its_pattern_and_a_valid_regex_is_required():
-    check = parse_check(_POSTFIX)
+    check = parse_check(_MAILER)
     assert check is not None and check.pattern == "status=sent" and check.expect == "present"
     assert check.tail == 200  # default tail
     assert (
-        parse_check({**_POSTFIX, "when": {"pattern": "x", "expect": "maybe"}}) is None
+        parse_check({**_MAILER, "when": {"pattern": "x", "expect": "maybe"}}) is None
     )  # bad expect
-    assert parse_check({**_POSTFIX, "when": {"pattern": "[unclosed", "expect": "present"}}) is None
-    assert parse_check({**_POSTFIX, "when": {"expect": "present"}}) is None  # no pattern
+    assert parse_check({**_MAILER, "when": {"pattern": "[unclosed", "expect": "present"}}) is None
+    assert parse_check({**_MAILER, "when": {"expect": "present"}}) is None  # no pattern
 
 
 def _log_evaluator(check: dict, logs: str | None, monkeypatch) -> CustomCheckEvaluator:
@@ -185,29 +185,29 @@ def _log_evaluator(check: dict, logs: str | None, monkeypatch) -> CustomCheckEva
 
 
 def test_present_check_fires_when_the_success_signal_is_missing(monkeypatch):
-    # 'is postfix routing?' -> expect status=sent PRESENT; if it's not in the logs, fire.
+    # 'is mailer routing?' -> expect status=sent PRESENT; if it's not in the logs, fire.
     quiet = _log_evaluator(
-        _POSTFIX, "postfix/postfix: connect from relay\npostfix: waiting", monkeypatch
+        _MAILER, "mailer/mailer: connect from relay\nmailer: waiting", monkeypatch
     )
     syms = quiet.evaluate()
-    assert len(syms) == 1 and syms[0].title == "postfix is not routing mail"
-    assert syms[0].evidence["found"] == "False" and syms[0].category == "postfix-routing"
+    assert len(syms) == 1 and syms[0].title == "mailer is not routing mail"
+    assert syms[0].evidence["found"] == "False" and syms[0].category == "mailer-routing"
     # ...and when it IS routing (the signal is present), no finding.
-    routing = _log_evaluator(_POSTFIX, "postfix/qmgr: status=sent (250 ok)", monkeypatch)
+    routing = _log_evaluator(_MAILER, "mailer/qmgr: status=sent (250 ok)", monkeypatch)
     assert routing.evaluate() == []
 
 
 def test_absent_check_fires_when_an_error_pattern_appears(monkeypatch):
-    err = {**_POSTFIX, "when": {"pattern": "fatal|panic", "expect": "absent"}}
-    seen = _log_evaluator(err, "postfix/master: fatal: cannot bind to port 25", monkeypatch)
+    err = {**_MAILER, "when": {"pattern": "fatal|panic", "expect": "absent"}}
+    seen = _log_evaluator(err, "mailer/master: fatal: cannot bind to port 25", monkeypatch)
     assert len(seen.evaluate()) == 1  # the error is present -> fire
-    clean = _log_evaluator(err, "postfix/qmgr: all good", monkeypatch)
+    clean = _log_evaluator(err, "mailer/qmgr: all good", monkeypatch)
     assert clean.evaluate() == []  # no error -> no finding
 
 
 def test_logs_unavailable_is_no_finding_not_a_false_alarm(monkeypatch):
     # a *down* app is the generic prober's job; a log read we couldn't take must not fire.
-    assert _log_evaluator(_POSTFIX, None, monkeypatch).evaluate() == []
+    assert _log_evaluator(_MAILER, None, monkeypatch).evaluate() == []
 
 
 # -- docker-log: the same functional health over a container's logs -------------
@@ -256,21 +256,21 @@ def test_docker_unavailable_is_no_finding(monkeypatch):
 
 # -- ansible-service: is a host/VM service in the expected state? (vetted read, no command) -------
 
-_SQUID = {
-    "name": "squid-up",
-    "read": {"kind": "ansible-service", "selector": "proxies", "service": "squid"},
+_PROXY = {
+    "name": "proxy-up",
+    "read": {"kind": "ansible-service", "selector": "proxies", "service": "proxy"},
     "when": {"expect": "active"},
-    "emit": {"severity": "high", "title": "squid is not running on a proxy host"},
+    "emit": {"severity": "high", "title": "proxy is not running on a proxy host"},
 }
 
 
 def test_ansible_service_parses_and_rejects_a_command_or_wrong_expect():
-    check = parse_check(_SQUID)
-    assert check is not None and check.service == "squid" and check.expect == "active"
+    check = parse_check(_PROXY)
+    assert check is not None and check.service == "proxy" and check.expect == "active"
     assert check.selector == "proxies" and check.namespace == ""  # host pattern, no namespace
-    assert parse_check({**_SQUID, "when": {"expect": "present"}}) is None  # log expect, not service
+    assert parse_check({**_PROXY, "when": {"expect": "present"}}) is None  # log expect, not service
     # no `command` kind exists -- arbitrary command execution is deliberately not in the schema
-    cmd = {**_SQUID, "read": {"kind": "ansible-command", "selector": "all", "service": "x"}}
+    cmd = {**_PROXY, "read": {"kind": "ansible-command", "selector": "all", "service": "x"}}
     assert parse_check(cmd) is None
 
 
@@ -285,23 +285,23 @@ def _ansible_evaluator(check: dict, states, monkeypatch) -> AnsibleCheckEvaluato
 
 def test_ansible_service_fires_when_a_host_is_not_in_the_expected_state(monkeypatch):
     states = {
-        "p1": {"squid.service": {"state": "running"}},
-        "p2": {"squid.service": {"state": "stopped"}},  # the offender
+        "p1": {"proxy.service": {"state": "running"}},
+        "p2": {"proxy.service": {"state": "stopped"}},  # the offender
     }
-    syms = _ansible_evaluator(_SQUID, states, monkeypatch).evaluate()
+    syms = _ansible_evaluator(_PROXY, states, monkeypatch).evaluate()
     assert len(syms) == 1 and "1/2 host(s)" in syms[0].detail and "p2" in syms[0].detail
-    assert syms[0].evidence["service"] == "squid" and syms[0].provenance.source == "custom-check"
+    assert syms[0].evidence["service"] == "proxy" and syms[0].provenance.source == "custom-check"
     # all hosts running (incl. the `active` synonym) -> clean
     ok = {
-        "p1": {"squid.service": {"state": "running"}},
-        "p2": {"squid.service": {"state": "active"}},
+        "p1": {"proxy.service": {"state": "running"}},
+        "p2": {"proxy.service": {"state": "active"}},
     }
-    assert _ansible_evaluator(_SQUID, ok, monkeypatch).evaluate() == []
+    assert _ansible_evaluator(_PROXY, ok, monkeypatch).evaluate() == []
 
 
 def test_ansible_unavailable_or_no_hosts_is_no_finding(monkeypatch):
-    assert _ansible_evaluator(_SQUID, None, monkeypatch).evaluate() == []  # ansible couldn't run
-    assert _ansible_evaluator(_SQUID, {}, monkeypatch).evaluate() == []  # no hosts matched
+    assert _ansible_evaluator(_PROXY, None, monkeypatch).evaluate() == []  # ansible couldn't run
+    assert _ansible_evaluator(_PROXY, {}, monkeypatch).evaluate() == []  # no hosts matched
 
 
 # -- authoring: validate + store (the gate), and natural-language -> check -------
@@ -309,11 +309,11 @@ def test_ansible_unavailable_or_no_hosts_is_no_finding(monkeypatch):
 
 def test_add_check_validates_stores_and_replaces_by_name(tmp_path):
     cp = str(tmp_path / "checks.json")
-    check, msg = add_check(_SQUID, cp)
+    check, msg = add_check(_PROXY, cp)
     assert check is not None and "added" in msg
-    assert [c.name for c in load_checks(cp)] == ["squid-up"]
+    assert [c.name for c in load_checks(cp)] == ["proxy-up"]
     # re-defining the same name UPDATES it (no duplicate) -- idempotent authoring
-    add_check({**_SQUID, "emit": {"severity": "medium", "title": "squid down (v2)"}}, cp)
+    add_check({**_PROXY, "emit": {"severity": "medium", "title": "proxy down (v2)"}}, cp)
     loaded = load_checks(cp)
     assert len(loaded) == 1 and loaded[0].severity.value == "medium"
 
@@ -363,9 +363,9 @@ def test_checks_path_resolves_explicit_then_env_then_default(tmp_path, monkeypat
     # add_check + load_checks honor the env-pointed file with no explicit path
     versioned = str(tmp_path / "team-checks.json")
     monkeypatch.setenv("STEADYSTATE_CHECKS", versioned)
-    add_check(_SQUID)
+    add_check(_PROXY)
     assert (tmp_path / "team-checks.json").exists()
-    assert [c.name for c in load_checks()] == ["squid-up"]
+    assert [c.name for c in load_checks()] == ["proxy-up"]
 
 
 def test_add_check_and_checks_dispatch_through_run_command(tmp_path, monkeypatch):
@@ -376,10 +376,10 @@ def test_add_check_and_checks_dispatch_through_run_command(tmp_path, monkeypatch
     from steadystate.inbound.base import ADD_CHECK, CHECKS, Command
     from steadystate.inbound.server import run_command
 
-    payload = json.dumps(_SQUID)
+    payload = json.dumps(_PROXY)
     assert "added" in run_command(Command(ADD_CHECK, "mcp", payload), ":memory:")
     listed = run_command(Command(CHECKS, "mcp"), ":memory:")
-    assert "squid-up" in listed and "ansible-service" in listed
+    assert "proxy-up" in listed and "ansible-service" in listed
     # a malformed payload is refused, not stored
     assert "parse" in run_command(Command(ADD_CHECK, "mcp", "{not json"), ":memory:").lower()
 
@@ -513,15 +513,15 @@ def test_smoke_with_only_non_http_checks_says_they_loaded(monkeypatch):
     import steadystate.probe.custom as mod
     from steadystate.inbound.server import _render_smoke
 
-    squid = parse_check(
+    proxy = parse_check(
         {
-            "name": "squid-up",
-            "read": {"kind": "ansible-service", "selector": "proxies", "service": "squid"},
+            "name": "proxy-up",
+            "read": {"kind": "ansible-service", "selector": "proxies", "service": "proxy"},
             "when": {"expect": "active"},
-            "emit": {"severity": "high", "title": "squid down"},
+            "emit": {"severity": "high", "title": "proxy down"},
         }
     )
-    monkeypatch.setattr(mod, "load_checks", lambda _p="": [squid])
+    monkeypatch.setattr(mod, "load_checks", lambda _p="": [proxy])
     out = _render_smoke()
     assert "1 check(s) ARE loaded" in out  # confirms steadystate SEES the file
     assert "ansible-service" in out  # names the kinds present
@@ -544,7 +544,7 @@ def test_health_verdict_combines_smoke_and_impaired(monkeypatch, tmp_path):
         store.record(
             {"a" * 64: ("high", "gw 5xx spike")},
             datetime.now(UTC),
-            {"a" * 64: {"category": "Unhealthy", "namespace": "akeyless"}},
+            {"a" * 64: {"category": "Unhealthy", "namespace": "payments"}},
         )
 
     with _server(200, "all ok here") as good:  # smoke passes, but a symptom is open -> DEGRADED
@@ -577,28 +577,28 @@ def test_health_scopes_to_a_workload_and_correlates_smoke_symptom_drift(monkeypa
     with StateStore(db) as store:
         store.record(
             {
-                "a" * 64: ("high", "akeyless-gateway 5xx spike"),
-                "b" * 64: ("high", "akeyless-gateway image drifted"),
+                "a" * 64: ("high", "payments-gateway 5xx spike"),
+                "b" * 64: ("high", "payments-gateway image drifted"),
                 "c" * 64: ("medium", "db slow query"),  # an UNRELATED workload
             },
             datetime.now(UTC),
             {
-                "a" * 64: {"category": "Unhealthy", "workload": "akeyless-gateway"},  # symptom
+                "a" * 64: {"category": "Unhealthy", "workload": "payments-gateway"},  # symptom
                 "b" * 64: {
                     "change": "MODIFIED",
                     "kind": "deployment",
-                    "workload": "akeyless-gateway",
+                    "workload": "payments-gateway",
                 },
                 "c" * 64: {"category": "Slow", "workload": "db"},
             },
         )
     with _server(503, "down") as gw:
         check = parse_check(
-            {**_SMOKE, "name": "akeyless-gateway-smoke", "read": {"kind": "http", "url": gw}}
+            {**_SMOKE, "name": "payments-gateway-smoke", "read": {"kind": "http", "url": gw}}
         )
         monkeypatch.setattr(mod, "load_checks", lambda _p="": [check])
-        out = _render_health(db, workload="akeyless-gateway")
-    assert out.startswith("DOWN") and "akeyless-gateway" in out
+        out = _render_health(db, workload="payments-gateway")
+    assert out.startswith("DOWN") and "payments-gateway" in out
     assert "smoke FAIL" in out and "5xx spike" in out  # the active probe + the live symptom
     assert "likely cause" in out and "image drifted" in out  # correlated to the config drift
     assert "db slow query" not in out  # the unrelated workload is scoped out

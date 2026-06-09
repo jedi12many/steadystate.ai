@@ -133,7 +133,7 @@ COMMANDS: dict[str, tuple[str, str]] = {
         "add-check",
         "define a custom health check from a JSON object -- validated against the vetted schema "
         "(read kind + condition + emit), then stored in this wall. Authors observe-only checks; "
-        "never code. e.g. is postfix routing mail, is squid running, is a pod's CPU too low",
+        "never code. e.g. is the mailer routing mail, is the proxy running, is a pod's CPU too low",
     ),
     ADD_SOLUTION: (
         "add-solution",

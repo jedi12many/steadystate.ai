@@ -158,18 +158,18 @@ def test_correlation_fingerprint_is_recorded_then_resolves_when_the_group_collap
 
     def _sym(place: str) -> Symptom:
         return Symptom(
-            identity=f"{place}/apps/Deployment/ns/squid",
+            identity=f"{place}/apps/Deployment/ns/web",
             kind="Deployment",
             category="CrashLoopBackOff",
             severity=Severity.HIGH,
-            title=f"squid is CrashLoopBackOff in {place}",
+            title=f"web is CrashLoopBackOff in {place}",
             detail="2 pod(s)",
             provenance=Provenance(source="kubernetes", address=place),
         )
 
     def _grouped(*places: str) -> Report:
         alert = Alert(
-            title=f"squid is CrashLoopBackOff in {len(places)} place(s)",
+            title=f"web is CrashLoopBackOff in {len(places)} place(s)",
             severity=Severity.HIGH,
             drifts=[],
             why_it_matters="grouped",

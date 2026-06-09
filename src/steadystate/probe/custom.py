@@ -11,7 +11,7 @@ reads); the reading and comparing are steadystate's. A check can only ever OBSER
 
 Read kinds: ``kubectl-cpu`` / ``kubectl-mem`` -- the live CPU/memory of the pods matching a label
 selector (metrics API), aggregated and compared to a threshold; ``kubectl-log`` -- a regex that
-should be *present* (a success signal, e.g. postfix's ``status=sent``) or *absent* (an error) in the
+should be *present* (a success signal, e.g. ``status=sent``) or *absent* (an error) in the
 pods' recent logs, i.e. "running, but doing its job?"; and ``docker-log`` -- the same, over the logs
 of the containers matching a ``docker ps`` filter (functional health for compose);
 ``ansible-service`` -- is a unit ``active``/``inactive`` across a host pattern; and ``http`` -- a
@@ -113,7 +113,7 @@ class CustomCheck:
     expect: str = ""  # present/absent (log) | active/inactive (service)
     tail: int = 200  # lines of recent log per pod/container to read
     # service (ansible-service): the unit name, in its expected state across the host pattern
-    service: str = ""  # e.g. "postfix" (".service" suffix optional)
+    service: str = ""  # e.g. "mailer" (".service" suffix optional)
     # http (smoke test): exercise an endpoint and assert the response
     url: str = ""  # the http(s) endpoint to probe (the target; http checks carry no selector)
     method: str = "GET"  # GET | HEAD only -- safe, idempotent; a smoke test reads, never mutates
@@ -563,8 +563,8 @@ class CustomCheckEvaluator:
 class DockerCheckEvaluator:
     """Runs the wall's ``docker-log`` checks against the local docker engine -- a thin, read-only
     ``docker`` caller. No context/kubeconfig (docker is the host's engine); the check's ``selector``
-    is a ``docker ps --filter`` expression (e.g. ``name=postfix`` or
-    ``label=com.docker.compose.service=postfix``). Same condition + Symptom shape as kubectl-log."""
+    is a ``docker ps --filter`` expression (e.g. ``name=mailer`` or
+    ``label=com.docker.compose.service=mailer``). Same condition + Symptom shape as kubectl-log."""
 
     def __init__(self, *, checks_path: str = DEFAULT_CHECKS_FILE, timeout: float = 10.0) -> None:
         self._checks_path = checks_path

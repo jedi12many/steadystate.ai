@@ -10,16 +10,16 @@ from steadystate.probe.custom import diagnose_checks
 from steadystate.probe.solutions import diagnose_solutions
 
 _GOOD_CHECK = {
-    "name": "squid-up",
-    "read": {"kind": "kubectl-log", "selector": "app=squid", "namespace": "proxy"},
+    "name": "proxy-up",
+    "read": {"kind": "kubectl-log", "selector": "app=proxy", "namespace": "proxy"},
     "when": {"pattern": "ready", "expect": "present"},
-    "emit": {"severity": "high", "title": "squid down"},
+    "emit": {"severity": "high", "title": "proxy down"},
 }
 _GOOD_SOLUTION = {
     "name": "reclaim",
     "for": "Evicted",
     "solution": {"kind": "command", "run": "kubectl delete pods"},
-    "author": "jeff",
+    "author": "ops",
 }
 
 

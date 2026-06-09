@@ -27,7 +27,7 @@ def _entry(
         fingerprint="fp1",
         source="terraform",
         drift_identity="aws_s3_bucket.logs",
-        actor="jeff",
+        actor="ops",
         decision=decision,
         outcome=outcome,
         environment=env,
@@ -42,7 +42,7 @@ def test_record_and_read_audit_newest_first():
     rows = store.audit_log()
     assert [r.outcome for r in rows] == [NOOP, VERIFIED]  # newest first
     assert rows[0].at == _t(2).isoformat()
-    assert rows[0].actor == "jeff" and rows[0].drift_identity == "aws_s3_bucket.logs"
+    assert rows[0].actor == "ops" and rows[0].drift_identity == "aws_s3_bucket.logs"
 
 
 def test_audit_is_append_only():

@@ -22,14 +22,14 @@ def _registry(monkeypatch, tmp_path):
 
 def test_add_resolve_remove_round_trip(monkeypatch, tmp_path):
     _registry(monkeypatch, tmp_path)
-    d1 = tmp_path / "akeyless-use1"
+    d1 = tmp_path / "payments-use1"
     d1.mkdir()
-    stored = add_silo("akeyless-use1", str(d1))
+    stored = add_silo("payments-use1", str(d1))
     assert stored == str(d1.resolve())  # stored absolute, so it resolves from anywhere
-    assert resolve_silo("akeyless-use1") == str(d1.resolve())
+    assert resolve_silo("payments-use1") == str(d1.resolve())
     assert resolve_silo("nope") is None
-    assert remove_silo("akeyless-use1") is True and resolve_silo("akeyless-use1") is None
-    assert remove_silo("akeyless-use1") is False  # already gone
+    assert remove_silo("payments-use1") is True and resolve_silo("payments-use1") is None
+    assert remove_silo("payments-use1") is False  # already gone
 
 
 def test_load_tolerates_a_missing_or_malformed_registry(monkeypatch, tmp_path):
@@ -96,13 +96,13 @@ def test_silo_discover_registers_them_all(monkeypatch, tmp_path):
 
 def test_silo_option_chdirs_into_the_named_silo(monkeypatch, tmp_path):
     _registry(monkeypatch, tmp_path)
-    silo_dir = tmp_path / "akeyless-use1"
+    silo_dir = tmp_path / "payments-use1"
     silo_dir.mkdir()
-    add_silo("akeyless-use1", str(silo_dir))
+    add_silo("payments-use1", str(silo_dir))
     seen: dict = {}
     monkeypatch.setattr("os.chdir", lambda p: seen.__setitem__("chdir", str(p)))
     # `summary` runs read-only; we only care that the callback chdir'd into the silo first
-    CliRunner().invoke(app, ["--silo", "akeyless-use1", "summary"])
+    CliRunner().invoke(app, ["--silo", "payments-use1", "summary"])
     assert seen["chdir"] == str(silo_dir.resolve())
 
 
@@ -114,11 +114,11 @@ def test_unknown_silo_is_a_clean_error(monkeypatch, tmp_path):
 
 def test_mcp_label_defaults_to_the_silo_name(monkeypatch, tmp_path):
     _registry(monkeypatch, tmp_path)
-    silo_dir = tmp_path / "squid-euw1"
+    silo_dir = tmp_path / "web-euw1"
     silo_dir.mkdir()
-    add_silo("squid-euw1", str(silo_dir))
+    add_silo("web-euw1", str(silo_dir))
     monkeypatch.setattr("os.chdir", lambda p: None)
     captured: dict = {}
     monkeypatch.setattr("steadystate.inbound.mcp.serve_stdio", lambda *a, **k: captured.update(k))
-    CliRunner().invoke(app, ["--silo", "squid-euw1", "mcp"])
-    assert captured["label"] == "squid-euw1"  # the silo self-identifies, no --label needed
+    CliRunner().invoke(app, ["--silo", "web-euw1", "mcp"])
+    assert captured["label"] == "web-euw1"  # the silo self-identifies, no --label needed

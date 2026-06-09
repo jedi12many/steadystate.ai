@@ -107,14 +107,14 @@ def test_diagnosis_keeps_both_fingerprints_for_memory():
 
 
 def _sq(ns: str, category: str = "CrashLoopBackOff"):
-    return _symptom(identity=f"apps/Deployment/{ns}/squid", category=category)
+    return _symptom(identity=f"apps/Deployment/{ns}/web", category=category)
 
 
 def test_same_app_same_error_across_namespaces_groups_into_one_alert():
-    # `squid` crash-looping in three namespaces (a bad image everywhere) is ONE issue, not three.
+    # `web` crash-looping in three namespaces (a bad image everywhere) is ONE issue, not three.
     report = _pipeline().run([], symptoms=[_sq("team-a"), _sq("team-b"), _sq("team-c")])
     [alert] = report.alerts
-    assert alert.title == "squid is CrashLoopBackOff in 3 place(s)"
+    assert alert.title == "web is CrashLoopBackOff in 3 place(s)"
     assert len(alert.symptoms) == 3  # each instance rides along (memory tracks each)
     assert all(ns in alert.why_it_matters for ns in ("team-a", "team-b", "team-c"))
 
@@ -146,7 +146,7 @@ def test_a_single_uncorrelated_alert_has_no_correlation_fingerprint():
 
 
 def test_different_workloads_or_failure_modes_do_not_group():
-    # different name (squid vs redis) -> separate; same name different category -> separate.
+    # different name (web vs redis) -> separate; same name different category -> separate.
     report = _pipeline().run(
         [],
         symptoms=[
@@ -159,9 +159,9 @@ def test_different_workloads_or_failure_modes_do_not_group():
 
 
 def test_diagnosis_takes_precedence_then_the_rest_group():
-    # team-a/squid has a co-located drift (diagnosed into it); team-b + team-c squid group alone.
+    # team-a/web has a co-located drift (diagnosed into it); team-b + team-c web group alone.
     report = _pipeline().run(
-        [_drift(identity="apps/Deployment/team-a/squid")],
+        [_drift(identity="apps/Deployment/team-a/web")],
         symptoms=[_sq("team-a"), _sq("team-b"), _sq("team-c")],
     )
     assert len(report.alerts) == 2

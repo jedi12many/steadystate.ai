@@ -114,7 +114,7 @@ def test_issue_carries_the_matched_runbook_fix(tmp_path, monkeypatch):
                     "name": "reclaim-evicted",
                     "match": "evicted",
                     "solution": {"kind": "command", "run": "kubectl delete pods --field=..."},
-                    "author": "jeff",
+                    "author": "ops",
                 }
             ]
         )
@@ -122,7 +122,7 @@ def test_issue_carries_the_matched_runbook_fix(tmp_path, monkeypatch):
     monkeypatch.setenv("STEADYSTATE_SOLUTIONS", str(sp))
     body = format_issue(_alert("web pods Evicted", Severity.HIGH, "a" * 64))["body"]
     assert "Known fix (from your runbook)" in body
-    assert "kubectl delete pods" in body and "reclaim-evicted" in body and "by jeff" in body
+    assert "kubectl delete pods" in body and "reclaim-evicted" in body and "by ops" in body
 
 
 # -- the lifecycle --------------------------------------------------------------
@@ -179,9 +179,9 @@ def test_unconfigured_is_a_quiet_no_op(monkeypatch):
 
 def test_post_rca_opens_an_issue_carrying_the_analysis(monkeypatch):
     with _github(monkeypatch) as fake:
-        msg = GithubIssuesSurface().post_rca("a" * 64, "akeyless-gw Erroring", "Root cause: nil.")
+        msg = GithubIssuesSurface().post_rca("a" * 64, "gateway Erroring", "Root cause: nil.")
     issues = _posts_to_issues(fake)
-    assert len(issues) == 1 and "RCA: akeyless-gw Erroring" in issues[0]["title"]
+    assert len(issues) == 1 and "RCA: gateway Erroring" in issues[0]["title"]
     assert "Root cause: nil." in issues[0]["body"]  # the RCA is in the issue
     assert f"steadystate-fp: {'a' * 64}" in issues[0]["body"]  # keyed for dedup
     assert "#101" in msg
@@ -190,9 +190,9 @@ def test_post_rca_opens_an_issue_carrying_the_analysis(monkeypatch):
 def test_post_rca_comments_on_an_existing_issue_for_the_finding(monkeypatch):
     with _github(monkeypatch) as fake:
         surface = GithubIssuesSurface()
-        surface.emit(_Rep([_alert("akeyless-gw down", Severity.HIGH, "a" * 64)]))  # opens the issue
+        surface.emit(_Rep([_alert("gateway down", Severity.HIGH, "a" * 64)]))  # opens the issue
         before = len(_posts_to_issues(fake))
-        msg = surface.post_rca("a" * 64, "akeyless-gw down", "Root cause: nil ptr.")
+        msg = surface.post_rca("a" * 64, "gateway down", "Root cause: nil ptr.")
     assert before == 1 and len(_posts_to_issues(fake)) == 1  # no NEW issue -- it commented instead
     comments = [c for c in fake.calls if c[0] == "POST" and c[1].endswith("/comments")]
     assert comments and "Root cause: nil ptr." in comments[-1][2]["body"]

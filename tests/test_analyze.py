@@ -15,10 +15,10 @@ _PANIC = """\
 panic: runtime error: invalid memory address or nil pointer dereference
 [signal SIGSEGV: segmentation violation code=0x1 addr=0x0]
 goroutine 42 [running]:
-hvclient.(*Client).Policy(0x0)
-\t/app/hvclient/client.go:63 +0x2c
-globalsign/atlas.NewClient(...)
-\t/app/atlas.go:35
+apiclient.(*Client).Policy(0x0)
+\t/app/apiclient/client.go:63 +0x2c
+vendor/caclient.NewClient(...)
+\t/app/caclient.go:35
 targets.ValidateTargetByType(...)
 \t/app/targets.go:186
 """
@@ -52,16 +52,16 @@ def _finding(details: dict) -> Finding:
         first_seen=now,
         last_seen=now,
         last_severity="high",
-        last_title="akeyless-gw is Erroring in prod",
+        last_title="gateway is Erroring in prod",
         status="open",
         details=details,
     )
 
 
 def test_evidence_bundle_carries_the_fields_and_the_trace_verbatim():
-    bundle = _evidence_bundle(_finding({"workload": "akeyless-gw", "trace": _PANIC}))
-    assert "akeyless-gw is Erroring in prod" in bundle  # the headline
-    assert "workload: akeyless-gw" in bundle  # a structured field
+    bundle = _evidence_bundle(_finding({"workload": "gateway", "trace": _PANIC}))
+    assert "gateway is Erroring in prod" in bundle  # the headline
+    assert "workload: gateway" in bundle  # a structured field
     assert "Policy(0x0)" in bundle and "client.go:63" in bundle  # the trace, verbatim
 
 
@@ -76,11 +76,11 @@ def test_analyze_feeds_only_the_captured_evidence_to_the_model():
 
     def fake_complete(system: str, user: str, caller: str):
         seen["system"], seen["user"], seen["caller"] = system, user, caller
-        return "Root cause: nil hvclient.Client; .Policy() called on a 0x0 receiver."
+        return "Root cause: nil apiclient.Client; .Policy() called on a 0x0 receiver."
 
-    finding = _finding({"workload": "akeyless-gw", "trace": _PANIC})
+    finding = _finding({"workload": "gateway", "trace": _PANIC})
     out = analyze_finding(finding, fake_complete)
-    assert "nil hvclient.Client" in out
+    assert "nil apiclient.Client" in out
     assert seen["caller"] == "analyze"
     assert "Policy(0x0)" in seen["user"] and "client.go:63" in seen["user"]  # the real trace
     assert "do not invent" in seen["system"].lower()  # the grounding instruction rode along
@@ -99,19 +99,19 @@ def test_analyze_verb_renders_the_rca_for_a_recorded_finding(tmp_path, monkeypat
     db = str(tmp_path / "s.db")
     with StateStore(db) as store:
         store.record(
-            {"a" * 64: ("high", "akeyless-gw is Erroring in prod")},
+            {"a" * 64: ("high", "gateway is Erroring in prod")},
             datetime.now(UTC),
-            {"a" * 64: {"category": "Erroring", "workload": "akeyless-gw", "trace": _PANIC}},
+            {"a" * 64: {"category": "Erroring", "workload": "gateway", "trace": _PANIC}},
         )
 
     class _Analyst:
         def _complete(self, _system, user, _caller):
             assert "Policy(0x0)" in user  # grounded in the captured trace
-            return "Root cause: nil pointer on the GlobalSign Atlas client."
+            return "Root cause: nil pointer on the vendor CA client."
 
     monkeypatch.setattr(srv, "_nl_analyst", lambda: _Analyst())
     out = srv._render_analyze("a" * 64, db)
-    assert "root-cause analysis" in out and "nil pointer on the GlobalSign Atlas client" in out
+    assert "root-cause analysis" in out and "nil pointer on the vendor CA client" in out
     # no LLM -> a clean, honest degrade (never a guess)
     monkeypatch.setattr(srv, "_nl_analyst", lambda: None)
     assert "analyze needs an LLM" in srv._render_analyze("a" * 64, db)
@@ -126,21 +126,21 @@ def test_analyze_saves_the_rca_and_show_displays_it(tmp_path, monkeypatch):
     db = str(tmp_path / "s.db")
     with StateStore(db) as store:
         store.record(
-            {"a" * 64: ("high", "akeyless-gw is Erroring")},
+            {"a" * 64: ("high", "gateway is Erroring")},
             datetime.now(UTC),
             {"a" * 64: {"category": "Erroring", "trace": _PANIC}},
         )
 
     class _A:
         def _complete(self, _s, _u, _c):
-            return "Root cause: nil hvclient.Client on a 0x0 receiver."
+            return "Root cause: nil apiclient.Client on a 0x0 receiver."
 
     monkeypatch.setattr(srv, "_nl_analyst", lambda: _A())
     srv._render_analyze("a" * 64, db)  # produces + SAVES the RCA
     with StateStore(db) as store:
         assert store.get_analysis("a" * 64) is not None  # persisted (upsert), survives the terminal
     shown = srv._render_show("a" * 64, db)
-    assert "root-cause analysis" in shown and "nil hvclient.Client" in shown  # rides along in show
+    assert "root-cause analysis" in shown and "nil apiclient.Client" in shown  # rides along in show
 
 
 def test_send_analysis_guards(tmp_path):

@@ -26,7 +26,7 @@ def test_platform_name_heuristic_catches_components_without_a_namespace():
     assert is_platform(workload="coredns")
     assert is_platform(workload="svclb-traefik-3f7211ed")  # prefix match
     assert is_platform(workload="cattle-cluster-agent")
-    assert not is_platform(workload="postfix")
+    assert not is_platform(workload="mailer")
     assert not is_platform(workload="web")
 
 
@@ -51,9 +51,9 @@ def test_unknown_defaults_to_application_so_a_real_finding_is_never_hidden():
 
 
 def test_the_per_wall_override_is_additive(monkeypatch):
-    monkeypatch.setenv("STEADYSTATE_PLATFORM_NAMESPACES", "akeyless-system, my-operator")
+    monkeypatch.setenv("STEADYSTATE_PLATFORM_NAMESPACES", "secrets-system, my-operator")
     ns = platform_namespaces()
-    assert "akeyless-system" in ns and "my-operator" in ns  # your additions
+    assert "secrets-system" in ns and "my-operator" in ns  # your additions
     assert "kube-system" in ns  # ...and the built-ins are still covered
-    assert is_platform(namespace="akeyless-system")
+    assert is_platform(namespace="secrets-system")
     assert not is_platform(namespace="demo")  # an app namespace is still an app

@@ -26,7 +26,7 @@ def _entry(**over):
         "solution": {"kind": "command", "run": "kubectl delete pods --field-selector=... -n {ns}"},
         "impact": "low",
         "reversibility": "high",
-        "author": "jeff",
+        "author": "ops",
     }
     base.update(over)
     return base
@@ -71,7 +71,7 @@ def test_match_is_strict_by_category_or_fuzzy_by_title_regex():
         return [s.name for s in solutions_for(cat, title, sols)]
 
     assert names("Evicted", "pod web Evicted") == ["reclaim-evicted"]  # strict, by category
-    assert names("", "akeyless gateway not routing") == ["reboot-gw"]  # fuzzy, by title regex
+    assert names("", "payments gateway not routing") == ["reboot-gw"]  # fuzzy, by title regex
     assert names("Healthy", "all is well") == []  # no hit
 
 
@@ -124,7 +124,7 @@ def test_show_surfaces_a_matched_solution_with_its_author(tmp_path, monkeypatch)
             {"a" * 64: {"category": "Evicted", "namespace": "default"}},
         )
     out = _render_show("a" * 64, db)
-    assert "known solution" in out and "reclaim-evicted" in out and "by jeff" in out
+    assert "known solution" in out and "reclaim-evicted" in out and "by ops" in out
 
 
 def test_solutions_view_lists_the_runbook(tmp_path, monkeypatch):
@@ -138,7 +138,7 @@ def test_solutions_view_lists_the_runbook(tmp_path, monkeypatch):
 def test_describe_solution_shows_action_join_bound_and_author():
     line = describe_solution(parse_solution(_entry()))
     assert "reclaim-evicted" in line and "for=Evicted" in line and "[low/high]" in line
-    assert "by jeff" in line
+    assert "by ops" in line
 
 
 # -- solutions_for_alert: matching a runbook fix to an alert (for surfaces) --------

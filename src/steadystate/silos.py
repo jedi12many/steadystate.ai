@@ -1,9 +1,9 @@
 """Named silos -- a registry of your deployments, kept separate.
 
-Running from a laptop against several deployments (Akeyless us-east-1, Squid eu-west-1, ...), each
+Running from a laptop against several deployments (a gateway, a proxy, in different regions), each
 is its own *silo*: a folder with its own ``.steadystate/`` (state.db, targets, checks) and its own
 kubeconfig, walled off so nothing leaks across them. The isolation has always worked by folder; this
-just lets you **name** each silo once and refer to it by name -- ``--silo akeyless-use1`` instead of
+just lets you **name** each silo once and refer to it by name -- ``--silo gateway-use1`` instead of
 a long ``--dir`` path. The registry is a small JSON map (name -> absolute folder) at
 ``~/.steadystate/silos.json`` (override with ``STEADYSTATE_SILOS``); it holds only paths, never
 secrets.

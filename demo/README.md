@@ -110,7 +110,7 @@ steadystate history --state .steadystate/demo.db          # the append-only audi
 terraform apply -target=<ssh-rule> -auto-approve
 ```
 
-Validated on the `ssai-sandbox` GCP project: both exposures detected, the bucket reconciled and
+Validated on a sandbox GCP project: both exposures detected, the bucket reconciled and
 **verified** against live infrastructure, the firewall closed.
 
 ---

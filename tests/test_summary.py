@@ -70,17 +70,17 @@ def test_summary_leads_with_your_apps_and_sets_platform_aside(tmp_path):
     with StateStore(db) as store:
         store.record(
             {
-                "a" * 64: ("high", "postfix not routing mail"),
+                "a" * 64: ("high", "mailer not routing mail"),
                 "b" * 64: ("medium", "workload 'coredns' adds Linux capabilities"),
                 "c" * 64: ("high", "workload 'svclb-traefik-3f72' adds NET_ADMIN"),
             },
             _NOW,
-            {"a" * 64: {"namespace": "mail", "workload": "postfix"}},  # the app one carries details
+            {"a" * 64: {"namespace": "mail", "workload": "mailer"}},  # the app one carries details
         )
     out = _render_summary(db)
-    assert "1 impaired (1 high)" in out  # your apps: just postfix is actually failing
+    assert "1 impaired (1 high)" in out  # your apps: just mailer is actually failing
     assert "2 platform" in out  # coredns + svclb set aside, not hidden
-    assert "worst: postfix not routing mail  [high]" in out  # worst APP finding, not the plumbing
+    assert "worst: mailer not routing mail  [high]" in out  # worst APP finding, not the plumbing
 
 
 def test_summary_leads_with_function_drift_is_noted_not_impaired(tmp_path):
@@ -93,7 +93,7 @@ def test_summary_leads_with_function_drift_is_noted_not_impaired(tmp_path):
             _NOW,
             {
                 "a" * 64: {"change": "MODIFIED", "kind": "deployment"},  # drift -> noted
-                "b" * 64: {"category": "Unhealthy", "namespace": "akeyless"},  # symptom -> impaired
+                "b" * 64: {"category": "Unhealthy", "namespace": "payments"},  # symptom -> impaired
             },
         )
     out = _render_summary(db)
@@ -139,8 +139,8 @@ def test_summary_surfaces_a_promotion_ready_response(tmp_path, monkeypatch):
             evidence={"a" * 64: {"category": "Evicted"}, "b" * 64: {"category": "Evicted"}},
         )
         # resolved by hand, same fix both times -> a response that's earned a promotion review
-        store.resolve("a" * 64, "raise the ephemeral-storage limit", "jeff", _NOW)
-        store.resolve("b" * 64, "raise the ephemeral-storage limit", "jeff", _NOW)
+        store.resolve("a" * 64, "raise the ephemeral-storage limit", "ops", _NOW)
+        store.resolve("b" * 64, "raise the ephemeral-storage limit", "ops", _NOW)
     assert "earned a promotion review" in _render_summary(db)  # glanceable, not buried in `learn`
 
 
