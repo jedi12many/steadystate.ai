@@ -363,3 +363,57 @@ def test_initialize_carries_the_silo_label_and_live_state(tmp_path):
 def test_initialize_without_a_label_omits_the_title():
     out = handle_request(_req("initialize", {}), ":memory:", write=False)["result"]
     assert "title" not in out["serverInfo"]  # no label -> no per-wall title
+
+
+# -- the startup report (printed to STDERR so you see what a wall resolved) --------
+
+
+def test_startup_report_shows_the_resolved_wall_context(tmp_path, monkeypatch):
+    import json
+
+    from steadystate.inbound.mcp import startup_report
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "steadystate").mkdir()
+    (tmp_path / "steadystate" / "checks.json").write_text(
+        json.dumps(
+            [
+                {
+                    "name": "squid",
+                    "read": {"kind": "ansible-service", "selector": "p", "service": "squid"},
+                    "when": {"expect": "active"},
+                    "emit": {"severity": "high", "title": "down"},
+                }
+            ]
+        )
+    )
+    monkeypatch.delenv("STEADYSTATE_CHECKS", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-secret-value-do-not-print")
+    out = "\n".join(startup_report("state.db", write=False, author=True, label="akeyless-use1"))
+    assert "wall: akeyless-use1" in out and "grant: author" in out
+    assert "steadystate/checks.json" in out and "(1 loaded)" in out  # the resolved path + count
+    assert "STEADYSTATE_CHECKS=(unset)" in out  # the per-silo gotcha is visible at a glance
+    assert "ANTHROPIC_API_KEY=set" in out and "sk-secret-value" not in out  # presence, never value
+
+
+def test_startup_report_surfaces_a_global_checks_override(tmp_path, monkeypatch):
+    from steadystate.inbound.mcp import startup_report
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("STEADYSTATE_CHECKS", "/shared/all.json")
+    out = "\n".join(startup_report("state.db", write=True, author=False, label="w"))
+    assert "STEADYSTATE_CHECKS=/shared/all.json" in out  # the override that breaks per-silo shows
+    assert "grant: write" in out
+
+
+def test_server_instructions_scope_to_the_wall_and_warn_against_fanning_out():
+    import tempfile
+
+    from steadystate.inbound.mcp import _server_instructions
+
+    out = _server_instructions(tempfile.mktemp(suffix=".db"), "akeyless-gw")
+    assert "akeyless-gw** wall" in out  # self-identifies the wall
+    assert "don't fan out" in out and "explicitly asks about all" in out  # the scoping rule
+    # an unnamed single server has no other walls to confuse -> no scoping paragraph
+    bare = _server_instructions(tempfile.mktemp(suffix=".db"), "")
+    assert "wall:" not in bare and "fan out" not in bare

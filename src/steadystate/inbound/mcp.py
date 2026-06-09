@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import sys
+from pathlib import Path
 from typing import Any
 
 from .. import __version__
@@ -320,11 +321,21 @@ def _server_instructions(state_path: str, label: str) -> str:
     summary (open findings, what's pending, how fresh the data is), then the how-to -- so an agent
     resumes already knowing the state, no tool round-trip. The summary is a cheap store read."""
     who = f"steadystate -- silo: {label}" if label else "steadystate"
-    snapshot = run_command(Command(SUMMARY, _MCP_ACTOR), state_path).strip()
-    header = (
-        f"{who}\nCurrent state (call `summary` to refresh):\n{snapshot}\n\n" if snapshot else ""
+    # The wall-scoping rule: this server IS one deployment. If a client has several steadystate
+    # servers connected (one per wall), it must use THIS one only for THIS deployment -- not fan out
+    # across walls for a single-deployment question (the safety wall holds either way, but firing an
+    # unrelated wall's tools is wrong targeting + noise).
+    scope = (
+        f"This server is the **{label}** wall: its tools observe and act on {label} ONLY. If other "
+        f"steadystate servers are connected (other deployments/regions), use THIS one solely for "
+        f"{label} -- don't run its tools for another deployment, and don't fan out across walls "
+        "unless the operator explicitly asks about all of them.\n\n"
+        if label
+        else ""
     )
-    return f"{header}{_HOW_TO}"
+    snapshot = run_command(Command(SUMMARY, _MCP_ACTOR), state_path).strip()
+    state = f"Current state (call `summary` to refresh):\n{snapshot}\n\n" if snapshot else ""
+    return f"{who}\n{scope}{state}{_HOW_TO}"
 
 
 def handle_request(
@@ -391,24 +402,70 @@ def handle_request(
     return _error(req_id, -32601, f"method not found: {method!r}")
 
 
+def startup_report(
+    state_path: str, *, write: bool, author: bool = False, label: str = ""
+) -> list[str]:
+    """The lines a starting server prints to **stderr** (never stdout -- that's the JSON-RPC
+    channel) so you can SEE what this wall resolved: its grant tier, cwd, and the actual files it's
+    reading (state.db, targets, checks, solutions, config) with how many loaded, plus the
+    path-affecting env. The fast answer to 'why can't it see my checks?' -- it names the resolved
+    path + count right at start. Pure (reads env + files, never raises); secrets as set/unset."""
+    import os
+
+    from ..config import config_path
+    from ..probe.custom import load_checks, resolve_checks_path
+    from ..probe.solutions import load_solutions, resolve_solutions_path
+    from ..targets import DEFAULT_TARGETS_FILE, TARGETS_ENV
+
+    grant = "write" if write else ("author" if author else "read-only")
+    lines = [f"steadystate MCP server -- wall: {label or '(unnamed)'} | grant: {grant}"]
+    lines.append(f"  cwd          {os.getcwd()}")
+    lines.append(f"  state.db     {state_path}")
+    lines.append(f"  targets      {os.environ.get(TARGETS_ENV) or DEFAULT_TARGETS_FILE}")
+    lines.append(f"  checks       {resolve_checks_path()}  ({len(load_checks())} loaded)")
+    lines.append(f"  solutions    {resolve_solutions_path()}  ({len(load_solutions())} loaded)")
+    cfg = config_path()
+    lines.append(f"  config       {cfg}" + ("" if Path(cfg).exists() else "  (none)"))
+    # The path-affecting env (a set STEADYSTATE_CHECKS is the usual 'wrong file' culprit) + whether
+    # an LLM key is present -- value never printed, only set/unset.
+    env_parts = [
+        f"{k}={os.environ[k]}" if os.environ.get(k) else f"{k}=(unset)"
+        for k in ("STEADYSTATE_CHECKS", "STEADYSTATE_TARGETS", "STEADYSTATE_CONFIG", "KUBECONFIG")
+    ]
+    env_parts += [
+        f"{k}={'set' if os.environ.get(k) else 'unset'}"
+        for k in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY")
+    ]
+    lines.append("  env          " + " | ".join(env_parts))
+    return lines
+
+
 def serve_stdio(
     state_path: str, *, write: bool, author: bool = False, label: str = ""
 ) -> None:  # pragma: no cover -- I/O
-    """Run the MCP server over stdio until EOF: read newline-delimited JSON-RPC from stdin,
-    dispatch, write each response as one line to stdout (kept clean -- only JSON-RPC; logs go to
-    stderr)."""
-    for line in sys.stdin:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            request = json.loads(line)
-        except ValueError:
-            _write(_error(None, -32700, "parse error"))
-            continue
-        response = handle_request(request, state_path, write=write, author=author, label=label)
-        if response is not None:
-            _write(response)
+    """Run the MCP server over stdio: print a startup report to STDERR, then read newline-delimited
+    JSON-RPC from stdin, dispatch, and write each response as one line to stdout (kept clean -- only
+    JSON-RPC). Stops cleanly on EOF (the client closed stdin) or Ctrl-C, with a `stopped` line."""
+    for line in startup_report(state_path, write=write, author=author, label=label):
+        print(line, file=sys.stderr)
+    ready = "  ready -- JSON-RPC over stdio; close stdin or Ctrl-C to stop"
+    print(ready, file=sys.stderr, flush=True)
+    try:
+        for line in sys.stdin:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                request = json.loads(line)
+            except ValueError:
+                _write(_error(None, -32700, "parse error"))
+                continue
+            response = handle_request(request, state_path, write=write, author=author, label=label)
+            if response is not None:
+                _write(response)
+    except KeyboardInterrupt:  # Ctrl-C / SIGINT -> a clean stop, not a traceback
+        pass
+    print("steadystate MCP server stopped.", file=sys.stderr, flush=True)
 
 
 def _write(obj: dict[str, Any]) -> None:  # pragma: no cover -- stdout I/O

@@ -19,6 +19,20 @@ The verbs are a small, fixed set; you never need to search or guess one. A plain
 a question to **answer** — reach for a tool only to *get data*, otherwise just reply, and point the
 operator at the natural next verb (a panic → `analyze`; a fix they keep doing → `define-solution`).
 
+## One server = one wall — don't fan out across deployments
+
+Each steadystate MCP server **is one deployment** (one silo/wall — its own state, targets, checks,
+and creds). If several are connected (e.g. `akeyless-gw` and `global-egress`), they are **different
+applications**, not interchangeable:
+
+- When the operator asks about **deployment X**, use **only X's server/tools**. "Smoke-test the
+  Akeyless gateways" means the `akeyless-gw` server — **not** also `global-egress`.
+- **Don't fan out** across walls (running every server's tool "in parallel") unless the operator
+  explicitly asks about *all* of them. A tool's server name (e.g. `akeyless-gw-smoke`) tells you
+  which wall it touches — match it to what was asked.
+- Each server's `initialize` says which wall it is; trust that. The wall keeps one server from
+  *seeing* another's data, but picking the *right* wall for the question is yours to get right.
+
 ## To CHANGE live infrastructure, go through steadystate
 
 Propose changes through steadystate's gated path — `fix` / `approve` / `run` a vetted action, a
