@@ -8,6 +8,10 @@ change between releases until 1.0.0. Releases are published as GitHub Releases.
 
 ## [Unreleased]
 
+### Added
+
+- **A fatal/panic now auto-analyzes itself -- the RCA is waiting in `show`, you don't have to ask.** A `scan` that detects a crash finding carrying captured crash logs (a stack trace or the `--previous` log window) now **runs the RCA for it automatically** and saves it -- so `show <fp>` already has the writeup, and a *scheduled* scan produces it unattended, ready to `analyze <fp> --to github` to the vendor. The tool found the panic; it shouldn't wait to be asked to explain it. Once per fingerprint (it never re-pays the model for one already analyzed), capped per scan to bound cost on a mass-crash, and gated by the LLM exactly like the scan's other reasoning (`--no-llm` / the kill switch / `--confirm-llm` all apply; no LLM -> a clean no-op). Best-effort: a wedged model never breaks the scan.
+
 ### Changed
 
 - **`analyze` re-fetches the pod's logs LIVE at analyze time, not just the scan-time snapshot.** The most investigator-like half: when you run `analyze <fp>`, steadystate now re-pulls the pod's **current AND `--previous` (crashed) container** logs *fresh* (a bigger tail, aimed at the finding's cluster + kubeconfig), and leads the model's evidence with them -- so it reasons over the live picture, not a capture a scan took hours ago. Best-effort and read-only (`kubectl logs`): if the pod is gone or unreachable it falls back to the captured `log_window`. `KubectlProbe.logs_for_analysis`; `analyze_finding(..., live_logs=...)`.
