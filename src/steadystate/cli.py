@@ -2344,6 +2344,11 @@ _DIALS: tuple[tuple[str, str, str], ...] = (
     ("STEADYSTATE_CHECKS", ".steadystate/checks.json", "custom-checks file (version-control this)"),
     ("STEADYSTATE_SOLUTIONS", ".steadystate/solutions.json", "authored runbook (version-control)"),
     ("STEADYSTATE_SOLUTION_AUTO", "off", "auto-apply matched solutions in-bound (else offer)"),
+    (
+        "STEADYSTATE_NO_SAFETY_NET",
+        "off",
+        "!! lift the #253 solution gates -- drafts offerable, open cmds auto",
+    ),
     ("STEADYSTATE_ENRICH_QUERY", "(none)", "PromQL bar for --enrich prometheus"),
     ("STEADYSTATE_METRICS_SOURCE", "prometheus", "monitoring backend `metrics` reads"),
     ("STEADYSTATE_METRIC_QUERIES", ".steadystate/metrics.json", "{name: query} map for `metrics`"),
