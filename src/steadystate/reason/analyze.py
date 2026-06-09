@@ -1,11 +1,12 @@
-"""Grounded root-cause analysis -- turn a captured crash/panic finding into the vendor/support-ready
-RCA a senior engineer would write, ANCHORED to the evidence steadystate captured.
+"""Root-cause analysis -- turn a captured crash/panic finding into the vendor/support-ready RCA a
+senior engineer would write.
 
-The differentiator isn't the model -- anyone can paste a log into a chatbot. It's that the analysis
-is grounded in evidence the tool captured (the stack trace, the restart status, the log retention)
-and told, explicitly, to cite it and **never invent** a frame, a file, or a cause it can't see.
-steadystate's job is to capture the right evidence and frame the question; the model reasons over
-*that*, and says plainly what the evidence doesn't show. That's what makes the answer checkable.
+steadystate's job is to capture the RIGHT evidence -- above all the logs LEADING UP TO the failure
+(the cause lives in the lead-up, not the panic line) -- and frame the question; the model is the
+investigator that reasons over it. We don't out-code that reasoning; we feed it well and keep it
+honest. So the prompt asks it to investigate -- trace the sequence, bring what it knows, connect the
+dots -- while QUOTING the lines it relies on and labelling what's inference vs what the logs show.
+The analysis stays checkable without being gagged into a transcript that misses the cause.
 """
 
 from __future__ import annotations
@@ -18,39 +19,48 @@ from ..state import Finding
 # The RCA prompt. It asks for the exact shape a senior on-call writes (and a vendor's support team
 # needs), and -- the whole point -- it FORBIDS going beyond the captured evidence.
 _RCA_SYSTEM = (
-    "You are a senior SRE writing a root-cause analysis of a production incident, for an engineer "
-    "and -- if it turns out to be a vendor's bug -- their support team. Use ONLY the captured "
-    "evidence below. Do NOT invent a frame, a file, a line number, or a cause that isn't in it.\n\n"
-    "Produce a tight RCA with these sections (include one only if the evidence supports it; if it "
-    "doesn't, write 'not in the captured evidence'):\n"
+    "You are a senior SRE INVESTIGATING a production incident -- writing the RCA an "
+    "on-call engineer (and, if it's a vendor's bug, their support team) needs. You're "
+    "given the captured logs LEADING UP TO the failure plus the error/stack block. Read the whole "
+    "sequence and reason like an investigator: the cause is usually in what happened BEFORE the "
+    "failure line, not the failure line itself -- trace the operations, the state, and the "
+    "trigger. Bring what you know about this kind of system to connect the dots.\n\n"
+    "Produce a tight RCA:\n"
     "  Root cause -- one line.\n"
-    "  What was being done -- the operation in flight, if the evidence shows it.\n"
-    "  Call chain -- if a stack trace is present, the frames leading to the failure, in order "
-    "(function + file:line each), and point out the exact frame where it broke.\n"
-    "  Smoking gun -- the single most telling line, quoted verbatim, and what it proves.\n"
+    "  What was happening before it failed -- the lead-up, from the logs.\n"
+    "  Call chain -- if a stack trace is present, the frames to the failure (function + file:line "
+    "each) and the exact frame where it broke.\n"
+    "  Smoking gun -- the single most telling line, quoted verbatim.\n"
     "  Trigger -- what set it off.\n"
-    "  Operational facts -- did the pod restart? are pre-incident logs retained? which "
-    "workload/namespace?\n\n"
-    "Be precise + grounded: quote the evidence line you're citing. Never speculate beyond it -- a "
-    "checkable, honest RCA beats a confident guess."
+    "  Operational facts -- did the pod restart? which workload/namespace?\n\n"
+    "Honesty over confidence: QUOTE the log lines you rely on, and clearly separate what the logs "
+    "SHOW from what you're INFERRING (an inference is fine -- just label it). If the evidence "
+    "genuinely doesn't show something, say so rather than inventing a frame, a file, or a cause."
 )
 
 
 def _evidence_bundle(finding: Finding) -> str:
     """The captured evidence as a labeled block for the model -- the finding's headline + every
-    structured field, the stack trace last + verbatim (it's the meat the call chain needs)."""
+    structured field, then the LOG WINDOW (the lead-up to the failure) and the stack trace, verbatim
+    and last: the before-event logs are the meat the investigation actually reads."""
     lines = [
         f"Finding: {finding.last_title}",
         f"Severity: {finding.last_severity}   Status: {finding.status}",
         f"First seen: {finding.first_seen}   Last seen: {finding.last_seen}",
     ]
     details = finding.details or {}
+    window = details.get(EvidenceKeys.LOG_WINDOW)
     trace = details.get(EvidenceKeys.TRACE)
+    bulky = {EvidenceKeys.LOG_WINDOW, EvidenceKeys.TRACE}  # the long blocks go last, under headers
     for key, value in details.items():
-        if key != EvidenceKeys.TRACE:  # the trace is appended last, verbatim, under its own header
+        if key not in bulky:
             lines.append(f"{key}: {value}")
+    if window:
+        lines.append(
+            "\n--- captured logs leading up to the failure (oldest -> newest) ---\n" + str(window)
+        )
     if trace:
-        lines.append("\n--- captured log / stack trace ---\n" + str(trace))
+        lines.append("\n--- captured error / stack-trace block ---\n" + str(trace))
     return "\n".join(lines)
 
 

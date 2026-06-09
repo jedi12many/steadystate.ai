@@ -8,6 +8,10 @@ change between releases until 1.0.0. Releases are published as GitHub Releases.
 
 ## [Unreleased]
 
+### Changed
+
+- **`analyze` now captures the logs LEADING UP TO a failure and lets the model investigate them.** A real dogfood exposed the gap: steadystate found a panic in an Akeyless gateway, but its RCA *completely missed* -- because we'd starved and gagged the one component that could nail it. For a crashlooping pod we kept **only the last log line** (one line, for a panic), and the `analyze` prompt told the model to *"use ONLY the captured evidence, never invent"* -- a transcriptionist, when the win is an **investigator**. Fixed both halves: the crashloop path now captures the **`--previous` (crashed) container's log tail** (its tail *is* the lead-up to the crash, bounded), and the `--deep` log scan captures a **window around the fatal line including the lines before it** (not just the stack forward -- the cause is in the lead-up, not the panic line). And the prompt is reframed to **investigate**: read the whole sequence, reason, bring domain knowledge, connect the dots -- while *quoting* the lines it cites and *labelling* what's inference vs what the logs show, so it stays checkable without being gagged into a transcript that misses the cause. New `log_window` evidence (`EvidenceKeys.LOG_WINDOW`). We can't out-code the model's reasoning -- so we feed it well and keep it honest.
+
 ### Security
 
 - **`STEADYSTATE_NO_SAFETY_NET` -- the operator's risk dial (issue #253 phase 4, completes the arc).** The human is the final decider on how much risk they accept: a deliberately loud, off-by-default flag that **lifts the #253 solution gates** -- a `proposed` draft becomes offerable, and an open `command`/`playbook` becomes auto-eligible (still within the bound). It's surfaced in `posture` (a `!! SAFETY NET OFF` line, so it's never silent) and `doctor`, and **every action it permits is audited `[no-safety-net]`**. The deterministic catalog allow-pattern still governs catalog actions -- this only lifts the *authored-solution* gates, so "throw caution to the wind" stays scoped and accountable. Off, the gates from phases 1-2 hold.

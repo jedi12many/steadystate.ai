@@ -31,7 +31,10 @@ class EvidenceKeys:
     KIND: Final = "kind"  # resource kind -- command composition
     NODE: Final = "node"  # node name -- node-scoped command composition
     CHANGE: Final = "change"  # a drift's change type; its PRESENCE marks drift vs live symptom
-    LAST_LOG: Final = "last_log"  # the failing pod's last log line -- RCA evidence
-    TRACE: Final = "trace"  # captured stack trace, rendered last by `analyze`
+    LAST_LOG: Final = "last_log"  # the failing pod's last log line -- the headline
+    LOG_WINDOW: Final = (
+        "log_window"  # the log tail LEADING UP TO the failure -- the meat `analyze` reads
+    )
+    TRACE: Final = "trace"  # captured stack trace + its lead-up, rendered last by `analyze`
     SAMPLE: Final = "sample"  # sample error lines -- RCA evidence
     CORRELATED: Final = "correlated"  # group-scope marker on a correlation fingerprint
