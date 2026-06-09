@@ -23,7 +23,7 @@ This is a deliberate, lean reframe of an earlier custom-everything system (own a
 
 1. **Build the reasoning + the guardrails. Rent everything else.** Collection, storage, dashboards, and execution already exist and are better than we want to maintain.
 2. **Modular from day one.** Five plugin seams + an enricher + a probe (below). Security/compliance/cost are packs, not core.
-3. **Chat-first, thin UI.** Operators live in Slack/Teams. The tool comes to them and talks back. The web UI is config + a read-only view, nothing more.
+3. **Chat-first, no owned UI.** Operators live in Slack/Teams and drive from the terminal, CI, or an agent over MCP. The tool comes to them and talks back. *(There is no web UI today, by design; if one were ever added it would be a thin read-only view -- or a Grafana app -- never an owned frontend.)*
 4. **Default-quiet.** Steady state = silence. We only surface *departures* (drift, policy violations, malfunction) that clear the bar. (Borrowed, hard-won, from the predecessor.)
 5. **The operator is authoritative.** If a human says "that drift is intentional," we believe them and stop nagging.
 6. **No action without a guardrail.** Every remediation is apply-eligibility-checked, snapshotted, verified, and reversible — whether triggered from chat or anywhere else.
@@ -33,7 +33,7 @@ This is a deliberate, lean reframe of an earlier custom-everything system (own a
 ```
 DECLARED state (plugins — must be EASY)        OBSERVED state (rented)
  terraform · argocd · docker-compose            the real cloud/cluster/host, via
- ansible · helm · k8s · pulumi                   each tool's own diff where possible
+ ansible · helm · k8s · rancher                  each tool's own diff where possible
         │  via each tool's OWN machine-readable      │  (terraform plan, argocd live, …)
         │  output, never raw-file parsing            │
         ▼                                            ▼
@@ -108,7 +108,7 @@ pulumi = "acme_steadystate.pulumi:make_source"   # make_source(path) -> DriftSou
 pci = "acme_steadystate.pci:PCIDomain"           # zero-arg -> a Domain
 ```
 
-The engine itself is **not** a plugin inside someone else's product (it's a stateful service + an embeddable library). The *integrations* are the plugins.
+The engine itself is **not** a plugin inside someone else's product. You run it as a CLI from inside your IaC repo (the repo never imports *it*); it can also run as a long-running service or be driven over MCP. The *integrations* are the plugins.
 
 ## 7. Operator communication (ChatOps) — first-class
 
@@ -127,7 +127,7 @@ The tool **lives in Slack/Teams**, not in a dashboard you must remember to open.
 
 **Bidirectional** (Events API + bot), not outbound-only. **Chat is a trigger, not a bypass:** operator identity → role, high-blast-radius needs explicit confirm, same guardrails as everywhere.
 
-This is why the **web UI is thin**: onboarding/config, a read-only Alerts list, settings/audit. (Could even be a Grafana app → zero owned frontend.)
+This is why there is **no owned web UI**: the surfaces are chat, the terminal, CI, and MCP. If a read-only view were ever wanted it'd be a Grafana app (zero owned frontend), not a console to maintain.
 
 ## 8. Decisions (locked)
 
@@ -137,7 +137,10 @@ This is why the **web UI is thin**: onboarding/config, a read-only Alerts list, 
 - **Positioning: separate / adjacent** to the predecessor product; clean-room, its own domain.
 - **Thesis scope: drift + malfunction, not "monitoring."** Steady state includes *health*, not just config, so operational malfunction is a first-class departure (§1, §4) — the product is *steadystate*, not *driftfinder*. The boundary that keeps this from drifting into Datadog/Loki territory: Symptoms are scoped to **declared resources** and their **detection is rented** (we read existing health verdicts and reason about them; we don't store metrics, scrape all logs, or run alerting rules). *Decision: yes. Built: the `Symptom` type, the kubectl/docker/argocd probes, cross-type diagnosis (§11), and chat-summoned probes (§7).*
 
-## 9. v0 scope (the thinnest thing that proves the spine)
+## 9. v0 scope (the thinnest thing that proves the spine) — *historical*
+
+> The original v0 milestone, shipped long ago; the engine has grown well past it (see §11). Kept for
+> the design narrative, not as a statement of current scope.
 
 `steadystate scan ./infra` →
 1. **Terraform StateSource**: run `terraform plan -json` (terraform already diffs declared vs real cloud state) → parse resource changes.
@@ -149,10 +152,14 @@ No domain packs, no executor, no UI yet. Proves: ingest → reconcile → reason
 
 ## 10. Open decisions
 
-- **License** — MIT vs Apache-2.0 (patent grant; common for infra OSS) vs a source-available license if open-core protection matters. *Owner: you.*
-- **Surface order** — Slack first, then Teams? (Slack's bot/Events API is the faster build.)
-- **Plugin mechanism for out-of-tree packs** — in-process Python entry points to start; gRPC/WASM later if we want language-agnostic third-party packs.
-- **Observed-state beyond tf-plan** — ride each tool's native diff (tf plan, argocd live) first; a generic cloud-API observer is a later, bigger build.
+*Most of the original open decisions are now settled (kept for the record):* **License** — Apache-2.0
+(the patent grant). **Surface order** — Slack, Discord, and Teams all shipped over one inbound seam.
+**Out-of-tree plugin mechanism** — in-process Python entry points shipped (`plugins.py`); gRPC/WASM
+stays a later option only if language-agnostic third-party packs are wanted.
+
+Still genuinely open:
+
+- **Observed-state beyond a native diff** — ride each tool's own diff (`terraform plan`, the low-cred `terraform-state`, ArgoCD live, the k8s/ansible live variants) first; a *generic* cloud-API observer is a later, bigger build.
 
 ## 11. Roadmap
 
