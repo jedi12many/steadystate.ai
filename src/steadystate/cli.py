@@ -422,6 +422,48 @@ def _spend_dict(calls: list) -> dict | None:
     }
 
 
+def _is_crash(finding) -> bool:
+    """A finding worth an AUTOMATIC RCA: it carries captured crash/panic logs -- a stack trace, or
+    the `--previous` log window the probe grabs for a crashloop/fatal (not drift/posture)."""
+    d = finding.details or {}
+    return bool(d.get("trace") or d.get("log_window"))
+
+
+def _auto_analyze(store, report, now, gate, *, limit: int = 5) -> int:
+    """A fatal/panic shouldn't wait to be ASKED. Auto-run the RCA for newly-detected crash findings
+    (those carrying captured crash logs) and save it -- so `show <fp>` has the writeup waiting and a
+    scheduled scan produces it unattended, ready to ship to the vendor. ONCE per fingerprint (skip
+    one already analyzed -- don't re-pay the model); capped per scan to bound cost on a mass-crash;
+    needs an LLM (gated by the SAME egress confirm as the scan). Best-effort: a failure never breaks
+    the scan. Returns how many it analyzed."""
+    from .reason.analyze import analyze_finding
+
+    analyst = LLMAnalyst(gate=gate)
+    if analyst._provider() == "none":
+        return 0
+    findings = {f.fingerprint: f for f in store.all_findings()}
+    seen: set[str] = set()
+    done = 0
+    for alert in report.alerts:
+        for symptom in alert.symptoms:
+            fp = symptom.fingerprint
+            if done >= limit or fp in seen:
+                continue
+            seen.add(fp)
+            finding = findings.get(fp)
+            if finding is None or not _is_crash(finding) or store.get_analysis(fp):
+                continue
+            with contextlib.suppress(Exception):  # a wedged model/db must never sink the scan
+                rca = analyze_finding(finding, analyst._complete)
+                if rca:
+                    store.save_analysis(fp, rca, now)
+                    done += 1
+    with contextlib.suppress(Exception):  # roll this analyst's spend into the scan's ledger
+        for call in analyst.calls:
+            store.record_llm_call(call, now)
+    return done
+
+
 @app.command()
 def scan(
     path: Path | None = typer.Argument(
@@ -674,6 +716,15 @@ def scan(
             record_cleanups(store, report, now)
             # Offer the wall's authored runbook fixes for any matching malfunction (approve-gated).
             record_solution_remediations(store, report, now)
+            # A fatal/panic shouldn't wait to be ASKED -- auto-run the RCA for new crashes so the
+            # writeup is waiting in `show` (and a scheduled scan produces it unattended). LLM-gated.
+            if not no_llm:
+                analyzed = _auto_analyze(store, report, now, gate)
+                if analyzed:
+                    typer.echo(
+                        f"auto-analyzed {analyzed} crash(es) -- `show <fp>` has the RCA; "
+                        "`analyze <fp> --to github` ships it to the vendor."
+                    )
     if json_out:  # the machine-readable form: stdout is pure JSON, no surfaces, no spend footer
         payload = report_to_dict(report, resolved=resolved, spend=_spend_dict(report.llm_calls))
         typer.echo(json.dumps(payload, indent=2))
