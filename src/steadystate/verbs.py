@@ -70,7 +70,7 @@ from .inbound.base import (
 from .metrics import fetch_metrics
 from .notify import SURFACES
 from .onboarding import Status, capabilities
-from .probe.custom import add_check, describe_check, load_checks, run_smoke_checks
+from .probe.custom import CheckResult, add_check, describe_check, load_checks, run_smoke_checks
 from .probe.solutions import add_solution, describe_solution, load_solutions, solutions_for
 from .reason.alert import Alert, Layer, Severity
 from .reason.analyze import analyze_finding
@@ -921,7 +921,12 @@ def _render_smoke(checks_path: str = "") -> str:
     """Run the wall's `http` smoke tests live and report PASS/FAIL each -- the affirmative
     'is it actually working?' view. Active (GET/HEAD), read-only. No http results -> a DIAGNOSING
     note (smoke runs only `http` checks; a loaded non-http check would otherwise look invisible)."""
-    results = run_smoke_checks(checks_path)
+    return _format_smoke(run_smoke_checks(checks_path), checks_path)
+
+
+def _format_smoke(results: list[CheckResult], checks_path: str = "") -> str:
+    """Render smoke results as PASS/FAIL lines -- split from the run so a caller (the CLI) can
+    render AND gate the exit code from ONE run, instead of executing every http endpoint twice."""
     if not results:
         return _smoke_empty_reason(checks_path)
     passed = sum(1 for r in results if r.passed)
@@ -1034,11 +1039,13 @@ def _render_posture() -> str:
     )
 
 
-def _render_health(state_path: str, checks_path: str = "", workload: str = "") -> str:
-    """The one-call "is it working?" verdict, leading with the active signal: run the `http` smoke
-    tests (proof), fold in the live malfunctions (impaired), and answer WORKING | DEGRADED | DOWN.
-    With ``workload`` it scopes to one workload and **correlates** -- the smoke result, the live
-    symptoms, AND a config drift on that same workload (a likely cause). Read-only; no grant."""
+def health_report(state_path: str, checks_path: str = "", workload: str = "") -> tuple[str, str]:
+    """The one-call "is it working?" view AND its verdict (WORKING | DEGRADED | DOWN), from a single
+    computation -- so a caller (the CLI) gates on the verdict as data, not by string-matching the
+    rendered text. Leads with the active signal: run the `http` smoke tests (proof), fold in live
+    malfunctions (impaired). With ``workload`` it scopes to one workload and **correlates** -- the
+    smoke result, the live symptoms, AND a config drift on that same workload (a likely cause).
+    Read-only; no grant."""
     smoke = run_smoke_checks(checks_path, match=workload)
     smoke_fail = [r for r in smoke if not r.passed]
     impaired: list[Finding] = []
@@ -1087,7 +1094,12 @@ def _render_health(state_path: str, checks_path: str = "", workload: str = "") -
         lines.append("  metrics: " + "  |  ".join(f"{m.name} {m.value:g}" for m in shown))
     if verdict == WORKING and not smoke:
         lines.append("  (no smoke test here -- add an `http` check to actively verify)")
-    return "\n".join(lines)
+    return "\n".join(lines), verdict
+
+
+def _render_health(state_path: str, checks_path: str = "", workload: str = "") -> str:
+    """The health view as text (chat/MCP); the CLI uses ``health_report`` for the verdict."""
+    return health_report(state_path, checks_path, workload)[0]
 
 
 def _add_check(payload: str, checks_path: str = "") -> str:

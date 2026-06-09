@@ -1787,11 +1787,11 @@ def health(
     to it and correlate the smoke result + live symptoms + the config drift that likely caused them.
     Active but read-only. Exits non-zero when the verdict isn't WORKING (for CI / a gate)."""
     from .health import WORKING
-    from .verbs import _render_health
+    from .verbs import health_report
 
-    out = _render_health(str(state), checks, workload)
-    typer.echo(out)
-    if not out.startswith(WORKING):
+    text, verdict = health_report(str(state), checks, workload)
+    typer.echo(text)
+    if verdict != WORKING:  # gate on the verdict as data, not by string-matching the rendered text
         raise typer.Exit(1)
 
 
@@ -1801,10 +1801,13 @@ def smoke(checks: str = _CHECKS_OPTION) -> None:
     'is it actually working?' answer (it exercises the endpoint), and an agent's close-the-loop
     verify after a fix. Active but read-only (GET/HEAD). Exits non-zero if any smoke test fails."""
     from .probe.custom import run_smoke_checks
-    from .verbs import _render_smoke
+    from .verbs import _format_smoke
 
-    typer.echo(_render_smoke(checks))
-    if any(not r.passed for r in run_smoke_checks(checks)):
+    results = run_smoke_checks(
+        checks
+    )  # run ONCE -- render and gate the exit code from the same run
+    typer.echo(_format_smoke(results, checks))
+    if any(not r.passed for r in results):
         raise typer.Exit(1)  # a failed smoke test -> non-zero, so CI / a script can gate on it
 
 
