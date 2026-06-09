@@ -8,8 +8,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from steadystate.inbound.base import command_from_text
-from steadystate.inbound.server import run_command
 from steadystate.state import StateStore
+from steadystate.verbs import run_command
 
 _T0 = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
 _T1 = datetime(2026, 6, 2, 12, 0, 0, tzinfo=UTC)

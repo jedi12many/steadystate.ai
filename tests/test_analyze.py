@@ -94,7 +94,7 @@ def test_no_model_returns_none_so_the_caller_degrades_honestly():
 
 
 def test_analyze_verb_renders_the_rca_for_a_recorded_finding(tmp_path, monkeypatch):
-    import steadystate.inbound.server as srv
+    import steadystate.verbs as srv
 
     db = str(tmp_path / "s.db")
     with StateStore(db) as store:
@@ -121,7 +121,7 @@ def test_analyze_verb_renders_the_rca_for_a_recorded_finding(tmp_path, monkeypat
 
 
 def test_analyze_saves_the_rca_and_show_displays_it(tmp_path, monkeypatch):
-    import steadystate.inbound.server as srv
+    import steadystate.verbs as srv
 
     db = str(tmp_path / "s.db")
     with StateStore(db) as store:
@@ -144,7 +144,7 @@ def test_analyze_saves_the_rca_and_show_displays_it(tmp_path, monkeypatch):
 
 
 def test_send_analysis_guards(tmp_path):
-    import steadystate.inbound.server as srv
+    import steadystate.verbs as srv
 
     db = str(tmp_path / "s.db")
     with StateStore(db) as store:

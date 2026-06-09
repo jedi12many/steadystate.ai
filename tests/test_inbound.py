@@ -29,7 +29,7 @@ from steadystate.inbound.base import (
     command_from_text,
     render_help,
 )
-from steadystate.inbound.server import dispatch, run_command
+from steadystate.inbound.server import dispatch
 from steadystate.inbound.slack import (
     SlackInbound,
     command_from_payload,
@@ -39,6 +39,7 @@ from steadystate.model import ChangeType, Drift, Provenance
 from steadystate.notify.slack import format_slack_message
 from steadystate.reason.alert import Alert, Layer, Severity
 from steadystate.state import PendingAction, StateStore
+from steadystate.verbs import run_command
 
 _SECRET = "shhh"
 _NOW = 1_700_000_000.0
@@ -407,7 +408,7 @@ def test_probe_json_returns_the_report_shape(monkeypatch, tmp_path):
         _targets_file(tmp_path, {"prod": {"source": "argocd", "path": "/x", "label": "prod"}}),
     )
     monkeypatch.setattr(
-        "steadystate.inbound.server.build_report", lambda *a, **k: _report_with_one_alert()
+        "steadystate.verbs.build_report", lambda *a, **k: _report_with_one_alert()
     )
     doc = json.loads(run_command(_json_flag(PROBE, "prod"), ":memory:"))
     assert doc["summary"]["alerts"] == 1  # same shape as `scan --json`
@@ -448,7 +449,7 @@ def _record(db: str, fp: str) -> None:
 
 
 def test_send_dispatches_a_finding_to_a_configured_surface(monkeypatch, tmp_path):
-    from steadystate.inbound import server
+    from steadystate import verbs as server  # SURFACES + _send_finding live here now
 
     sent: list = []
 
@@ -493,7 +494,7 @@ def test_run_command_approve_routes_to_core(monkeypatch, tmp_path):
         seen["fp"], seen["actor"] = fingerprint, actor
         return "applied!", None
 
-    monkeypatch.setattr("steadystate.inbound.server.apply_pending", fake_apply)
+    monkeypatch.setattr("steadystate.verbs.apply_pending", fake_apply)
     db = str(tmp_path / "s.db")
     with StateStore(db) as store:  # approve now resolves the fp against the pending store first
         store.record_pending(_pending("fp9"), datetime(2026, 1, 1, tzinfo=UTC))
@@ -550,7 +551,7 @@ def test_run_command_probe_resolves_and_summarizes(monkeypatch, tmp_path):
     )
     # Stub the engine: this test is about the wiring (resolve -> run -> summarize), not a real scan.
     monkeypatch.setattr(
-        "steadystate.inbound.server.build_report", lambda *a, **k: _report_with_one_alert()
+        "steadystate.verbs.build_report", lambda *a, **k: _report_with_one_alert()
     )
     msg = run_command(Command(PROBE, "amy", "prod"), ":memory:")
     assert "prod: 1 alert" in msg and "web is Degraded" in msg and "HIGH" in msg
@@ -570,7 +571,7 @@ def test_probe_deep_flag_parses_and_threads_log_scanning(monkeypatch, tmp_path):
         captured.update(k)
         return _report_with_one_alert()
 
-    monkeypatch.setattr("steadystate.inbound.server.build_report", fake_build)
+    monkeypatch.setattr("steadystate.verbs.build_report", fake_build)
     run_command(command_from_text("probe prod deep", "amy"), ":memory:")
     assert captured["scan_logs"] is True
     run_command(Command(PROBE, "amy", "prod"), ":memory:")  # plain probe -> no deep
@@ -578,8 +579,8 @@ def test_probe_deep_flag_parses_and_threads_log_scanning(monkeypatch, tmp_path):
 
 
 def test_summarize_shows_the_description_by_default_and_evidence_when_verbose():
-    from steadystate.inbound.server import _summarize
     from steadystate.probe.base import Symptom
+    from steadystate.verbs import _summarize
 
     symptom = Symptom(
         identity="apps/Deployment/prod/web",
@@ -609,7 +610,7 @@ def test_summarize_shows_the_description_by_default_and_evidence_when_verbose():
 
 
 def test_summarize_shows_a_correlated_groups_mute_all_key():
-    from steadystate.inbound.server import _summarize
+    from steadystate.verbs import _summarize
 
     alert = Alert(
         title="web is CrashLoopBackOff in 2 place(s)",
@@ -702,7 +703,7 @@ def test_run_command_probe_reports_an_engine_failure_without_crashing(monkeypatc
     def boom(*a, **k):
         raise ValueError("source blew up")
 
-    monkeypatch.setattr("steadystate.inbound.server.build_report", boom)
+    monkeypatch.setattr("steadystate.verbs.build_report", boom)
     assert "Probe of 'prod' failed: source blew up" in run_command(
         Command(PROBE, "amy", "prod"), ":memory:"
     )
@@ -719,7 +720,7 @@ def test_run_command_probe_appends_a_spend_footer(monkeypatch, tmp_path):
         "STEADYSTATE_TARGETS",
         _targets_file(tmp_path, {"prod": {"source": "argocd", "path": "/x", "label": "prod"}}),
     )
-    monkeypatch.setattr("steadystate.inbound.server.build_report", lambda *a, **k: report)
+    monkeypatch.setattr("steadystate.verbs.build_report", lambda *a, **k: report)
     msg = run_command(Command(PROBE, "amy", "prod"), ":memory:")
     assert "prod: 1 alert" in msg and "LLM: 1 call(s)" in msg  # the summon shows what it cost
 
@@ -797,7 +798,7 @@ def test_run_command_probe_verbose_shows_the_evidence(monkeypatch, tmp_path):
         _targets_file(tmp_path, {"prod": {"source": "terraform", "path": "/x", "label": "prod"}}),
     )
     monkeypatch.setattr(
-        "steadystate.inbound.server.build_report", lambda *a, **k: Report(items=[alert])
+        "steadystate.verbs.build_report", lambda *a, **k: Report(items=[alert])
     )
     # without verbose: just title + fp
     plain = run_command(Command(PROBE, "amy", "prod"), ":memory:")
@@ -829,7 +830,7 @@ def test_run_command_probe_shows_the_fingerprint_to_act_on(monkeypatch, tmp_path
         _targets_file(tmp_path, {"prod": {"source": "terraform", "path": "/x", "label": "prod"}}),
     )
     monkeypatch.setattr(
-        "steadystate.inbound.server.build_report", lambda *a, **k: Report(items=[alert])
+        "steadystate.verbs.build_report", lambda *a, **k: Report(items=[alert])
     )
     msg = run_command(Command(PROBE, "amy", "prod"), ":memory:")
     # the fingerprint is shown so a benign finding can be `mute`d

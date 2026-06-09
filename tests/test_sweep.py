@@ -178,7 +178,7 @@ def test_cli_sweep_no_targets_file(monkeypatch, tmp_path):
 def test_chat_probe_all_runs_a_stateful_sweep(monkeypatch, tmp_path):
     import steadystate.sweep as sweep
     from steadystate.inbound.base import command_from_text
-    from steadystate.inbound.server import run_command
+    from steadystate.verbs import run_command
 
     tf = tmp_path / "targets.json"
     tf.write_text(json.dumps({"prod": {"source": "k8s-live", "context": "prod"}}))
@@ -196,7 +196,7 @@ def test_chat_probe_all_shows_finding_detail_and_honors_verbose(monkeypatch, tmp
     # and `verbose` did nothing. The digest must read like a single probe: WHAT is wrong + a fp.
     import steadystate.sweep as sweep
     from steadystate.inbound.base import command_from_text
-    from steadystate.inbound.server import run_command
+    from steadystate.verbs import run_command
 
     tf = tmp_path / "targets.json"
     tf.write_text(
@@ -282,7 +282,7 @@ def test_cli_sweep_to_pushes_the_fleet_alerts_to_surfaces(monkeypatch, tmp_path)
 
 
 def test_probe_records_findings_but_resolves_no_other_target(monkeypatch, tmp_path):
-    import steadystate.inbound.server as server
+    import steadystate.verbs as server
     from steadystate.state import StateStore
 
     tf = tmp_path / "targets.json"
@@ -309,7 +309,7 @@ def test_probe_records_findings_but_resolves_no_other_target(monkeypatch, tmp_pa
 
 
 def test_probe_creates_the_state_db_from_scratch(monkeypatch, tmp_path):
-    import steadystate.inbound.server as server
+    import steadystate.verbs as server
     from steadystate.state import StateStore
 
     tf = tmp_path / "targets.json"

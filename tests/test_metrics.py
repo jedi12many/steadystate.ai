@@ -115,7 +115,7 @@ def test_fetch_metrics_is_a_no_op_without_queries(monkeypatch, tmp_path):
 def test_metrics_verb_renders_and_is_read_only(monkeypatch, tmp_path):
     from steadystate.inbound.base import METRICS, Command
     from steadystate.inbound.mcp import mcp_tools
-    from steadystate.inbound.server import run_command
+    from steadystate.verbs import run_command
 
     monkeypatch.setenv("STEADYSTATE_METRIC_QUERIES", str(tmp_path / "metrics.json"))
     (tmp_path / "metrics.json").write_text(json.dumps({"p99_latency": "q"}))
@@ -132,8 +132,8 @@ def test_health_folds_in_the_metric_context(monkeypatch, tmp_path):
     from datetime import UTC, datetime
 
     import steadystate.probe.custom as custom
-    from steadystate.inbound.server import _render_health
     from steadystate.state import StateStore
+    from steadystate.verbs import _render_health
 
     monkeypatch.setenv("STEADYSTATE_METRIC_QUERIES", str(tmp_path / "metrics.json"))
     (tmp_path / "metrics.json").write_text(json.dumps({"p99_latency": "q"}))

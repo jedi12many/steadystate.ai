@@ -10,8 +10,8 @@ from datetime import UTC, datetime
 from unittest import mock
 
 from steadystate.inbound.base import APPROVE, command_from_text
-from steadystate.inbound.server import _resolve_mute_target, _resolve_pending, run_command
 from steadystate.state import PendingAction, StateStore
+from steadystate.verbs import _resolve_mute_target, _resolve_pending, run_command
 
 _NOW = datetime(2026, 6, 3, 12, 0, 0, tzinfo=UTC)
 _RESTART = "kubectl rollout restart deployment/web -n prod"

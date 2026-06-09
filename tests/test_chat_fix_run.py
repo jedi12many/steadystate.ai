@@ -9,8 +9,8 @@ from unittest import mock
 
 from steadystate.act.execute import CATALOG_SOURCE, run_catalog_action
 from steadystate.inbound.base import Command
-from steadystate.inbound.server import run_command
 from steadystate.state import PendingAction, StateStore
+from steadystate.verbs import run_command
 
 _NOW = datetime(2026, 6, 3, 12, 0, 0, tzinfo=UTC)
 _RESTART = "kubectl rollout restart deployment/web -n prod --context east"

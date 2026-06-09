@@ -22,8 +22,8 @@ from steadystate.act.decide import (
 )
 from steadystate.act.execute import CATALOG_SOURCE
 from steadystate.inbound.base import Command
-from steadystate.inbound.server import run_command
 from steadystate.state import RESOLVED, Finding, StateStore
+from steadystate.verbs import run_command
 
 _NOW = datetime(2026, 6, 3, 12, 0, 0, tzinfo=UTC)
 _T0 = _NOW.isoformat()

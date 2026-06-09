@@ -12,8 +12,8 @@ from steadystate.act.bounds import Envelope, Impact, Reversibility, confirmation
 from steadystate.act.breakglass import BREAKGLASS_SOURCE, breakglass_allowed
 from steadystate.act.execute import run_catalog_action
 from steadystate.inbound.base import Command
-from steadystate.inbound.server import run_command
 from steadystate.state import PendingAction, StateStore
+from steadystate.verbs import run_command
 
 _NOW = datetime(2026, 6, 3, 12, 0, 0, tzinfo=UTC)
 
