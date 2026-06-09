@@ -40,6 +40,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from .._http import safe_urlopen  # the single http(s)-gated urlopen
+from ..evidence import EvidenceKeys
 from ..model import Provenance
 from ..reason.alert import Severity
 from .ansible_health import (
@@ -546,7 +547,7 @@ class CustomCheckEvaluator:
         evidence = {
             "value": f"{actual:.1f} {check.unit}",
             "threshold": f"{check.op} {check.value:.0f}",
-            "namespace": check.namespace,
+            EvidenceKeys.NAMESPACE: check.namespace,
             "selector": check.selector,
             "matched_pods": str(len(values)),
         }
@@ -788,7 +789,7 @@ def _log_symptom(check: CustomCheck, logs: str | None, context: str) -> Symptom 
         "selector": check.selector,
     }
     if check.namespace:
-        evidence["namespace"] = check.namespace
+        evidence[EvidenceKeys.NAMESPACE] = check.namespace
     return _to_symptom(check, detail, evidence, context)
 
 

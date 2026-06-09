@@ -35,6 +35,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from statistics import median
 
+from ..evidence import EvidenceKeys
 from ..state import RESOLVED, Finding
 from .reflex import AUTO, reflex_for_category, reflex_recurrence
 
@@ -84,16 +85,16 @@ def gather_demonstrations(findings: list[Finding], acted: set[str]) -> list[Demo
     for finding in findings:
         if finding.status != RESOLVED or finding.fingerprint in acted:
             continue
-        category = finding.details.get("category")
+        category = finding.details.get(EvidenceKeys.CATEGORY)
         if not category:  # a drift / non-health finding carries no category -- nothing to learn
             continue
         demos.append(
             Demonstration(
                 fingerprint=finding.fingerprint,
                 category=category,
-                identity=finding.details.get("workload", finding.last_title),
-                namespace=finding.details.get("namespace", ""),
-                cluster=finding.details.get("cluster", ""),
+                identity=finding.details.get(EvidenceKeys.WORKLOAD, finding.last_title),
+                namespace=finding.details.get(EvidenceKeys.NAMESPACE, ""),
+                cluster=finding.details.get(EvidenceKeys.CLUSTER, ""),
                 open_seconds=_open_seconds(finding.first_seen, finding.last_seen),
                 solution=finding.note or "",  # the operator's recorded fix, if they used `resolve`
             )

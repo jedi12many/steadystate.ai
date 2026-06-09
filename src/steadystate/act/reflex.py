@@ -27,6 +27,7 @@ from collections import Counter
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 
+from ..evidence import EvidenceKeys
 from ..reason.report import Report
 from ..state import OPEN, Finding, StateStore
 from .approve import apply_pending
@@ -124,7 +125,7 @@ def reflex_recurrence(
     for finding in findings:
         if finding.status != OPEN or finding.fingerprint not in acted:
             continue  # only a fix that DIDN'T hold (acted, yet open again) counts against trust
-        category = finding.details.get("category")
+        category = finding.details.get(EvidenceKeys.CATEGORY)
         if not category:
             continue
         reflex = reflex_for_category(category, active)

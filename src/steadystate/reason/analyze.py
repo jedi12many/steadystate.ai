@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from ..evidence import EvidenceKeys
 from ..state import Finding
 
 # The RCA prompt. It asks for the exact shape a senior on-call writes (and a vendor's support team
@@ -44,9 +45,9 @@ def _evidence_bundle(finding: Finding) -> str:
         f"First seen: {finding.first_seen}   Last seen: {finding.last_seen}",
     ]
     details = finding.details or {}
-    trace = details.get("trace")
+    trace = details.get(EvidenceKeys.TRACE)
     for key, value in details.items():
-        if key != "trace":  # the trace is appended last, verbatim, under its own header
+        if key != EvidenceKeys.TRACE:  # the trace is appended last, verbatim, under its own header
             lines.append(f"{key}: {value}")
     if trace:
         lines.append("\n--- captured log / stack trace ---\n" + str(trace))

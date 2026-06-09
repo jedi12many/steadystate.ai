@@ -16,6 +16,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+from .evidence import EvidenceKeys
+
 IMPAIRED = (
     "impaired"  # a live malfunction -- the thing isn't doing its job (a symptom / failed check)
 )
@@ -30,7 +32,7 @@ def finding_disposition(details: Mapping[str, str] | None) -> str:
     d = details or {}
     if not d:
         return NOTED  # no evidence -> a posture/policy finding (or nothing to place) -> noted
-    if "change" in d:
+    if EvidenceKeys.CHANGE in d:
         return NOTED  # a config drift -- diverged from declared, not a live failure
     return IMPAIRED  # probe/check evidence with no change -> a live symptom -> impaired
 

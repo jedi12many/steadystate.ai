@@ -25,6 +25,7 @@ import os
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+from .evidence import EvidenceKeys
 from .model import Drift
 from .reason.alert import Alert
 from .reason.report import Report
@@ -138,7 +139,10 @@ def finding_evidence(report: Report) -> dict[str, dict[str, str]]:
     out: dict[str, dict[str, str]] = {}
     for item in report.items:
         for drift in item.drifts:
-            out[drift.fingerprint] = {"change": drift.change_type.value, "kind": drift.kind}
+            out[drift.fingerprint] = {
+                EvidenceKeys.CHANGE: drift.change_type.value,
+                EvidenceKeys.KIND: drift.kind,
+            }
         for symptom in item.symptoms:
             if symptom.evidence:
                 out[symptom.fingerprint] = dict(symptom.evidence)
@@ -147,10 +151,10 @@ def finding_evidence(report: Report) -> dict[str, dict[str, str]]:
         if item.correlation_fingerprint and item.symptoms:
             first = item.symptoms[0]
             out[item.correlation_fingerprint] = {
-                "correlated": f"{len(item.symptoms)} place(s)",
-                "workload": first.identity.rsplit("/", 1)[-1].rsplit(".", 1)[-1],
-                "kind": first.kind,
-                "category": first.category,
+                EvidenceKeys.CORRELATED: f"{len(item.symptoms)} place(s)",
+                EvidenceKeys.WORKLOAD: first.identity.rsplit("/", 1)[-1].rsplit(".", 1)[-1],
+                EvidenceKeys.KIND: first.kind,
+                EvidenceKeys.CATEGORY: first.category,
             }
     return out
 

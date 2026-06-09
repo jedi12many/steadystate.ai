@@ -33,6 +33,7 @@ from ..act.reflex import reflex_recurrence, reflexes
 from ..act.solution_remedy import record_solution_remediations
 from ..classify import APPLICATION, finding_layer
 from ..engine import build_report
+from ..evidence import EvidenceKeys
 from ..health import IMPAIRED, NOTED, WORKING, finding_disposition, wall_verdict
 from ..metrics import fetch_metrics
 from ..notify import SURFACES
@@ -460,7 +461,7 @@ def _render_show(fingerprint: str, state_path: str, flags: frozenset[str] = froz
         lines.append("  (no evidence captured -- re-run a `probe`/`scan` to capture it)")
     # The wall's runbook: if the operator authored a solution for this problem (by category or a
     # title regex), surface it -- "here's the documented fix, and who vouched for it". Read-only.
-    category = (finding.details or {}).get("category", "")
+    category = (finding.details or {}).get(EvidenceKeys.CATEGORY, "")
     matches = solutions_for(category, finding.last_title, load_solutions())
     if matches:
         lines.append("  -- known solution(s) (authored runbook) --")
@@ -612,16 +613,16 @@ def _finding_fields(finding: Finding) -> FindingFields:
     kubeconfig resolved from the matching target (the finding stores its cluster *context*, the
     target carries that context's kubeconfig). Empty for anything the finding doesn't carry."""
     details = finding.details
-    context = details.get("cluster", "")
+    context = details.get(EvidenceKeys.CLUSTER, "")
     kubeconfig = ""
     if context:
         target = next((t for t in load_targets_from_env().values() if t.context == context), None)
         kubeconfig = target.kubeconfig if target is not None else ""
     return FindingFields(
-        kind=details.get("kind", ""),
+        kind=details.get(EvidenceKeys.KIND, ""),
         # a workload finding stores `workload`; a node finding stores `node` (the node name).
-        name=details.get("workload") or details.get("node", ""),
-        namespace=details.get("namespace", ""),
+        name=details.get(EvidenceKeys.WORKLOAD) or details.get(EvidenceKeys.NODE, ""),
+        namespace=details.get(EvidenceKeys.NAMESPACE, ""),
         context=context,
         kubeconfig=kubeconfig,
     )
@@ -711,7 +712,7 @@ def _fix_finding(fingerprint: str, state_path: str, actor: str) -> str:
         finding, error = _lookup_finding(store, fingerprint)
         if finding is None:
             return error
-        category = finding.details.get("category", "")
+        category = finding.details.get(EvidenceKeys.CATEGORY, "")
         action = offered_action(category)
         if action is None:
             return (

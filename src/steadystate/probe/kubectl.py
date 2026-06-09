@@ -14,6 +14,7 @@ import re
 import subprocess
 from dataclasses import dataclass, field
 
+from ..evidence import EvidenceKeys
 from ..model import Provenance, Resource
 from ..reason.alert import Severity
 from ..sources.base import Capabilities
@@ -397,18 +398,18 @@ class KubectlProbe:
         # Insertion order is display order; the long log line goes last. The store keeps these
         # per fingerprint, so a later `show` can answer "what was the error, and was it recent?".
         evidence = {
-            "workload": _name(resource.identity),
-            "kind": resource.kind,
-            "namespace": namespace,
-            "category": category,
+            EvidenceKeys.WORKLOAD: _name(resource.identity),
+            EvidenceKeys.KIND: resource.kind,
+            EvidenceKeys.NAMESPACE: namespace,
+            EvidenceKeys.CATEGORY: category,
             "unhealthy_pods": str(len(sick)),
             "pods": ", ".join(p.name for p in sick),
             "max_restarts": str(worst.restarts),
         }
         if self._context:
-            evidence["cluster"] = self._context
+            evidence[EvidenceKeys.CLUSTER] = self._context
         if tail:
-            evidence["last_log"] = tail
+            evidence[EvidenceKeys.LAST_LOG] = tail
         return Symptom(
             identity=resource.identity,
             kind=resource.kind,
@@ -470,20 +471,20 @@ class KubectlProbe:
         detail = f"{total} error log line(s)" + (" incl. a fatal signature" if fatal else "")
         detail += f"; e.g. {sample[0]}" if sample else ""
         evidence = {
-            "workload": name,
-            "kind": resource.kind,
-            "namespace": namespace,
-            "category": "Erroring",
+            EvidenceKeys.WORKLOAD: name,
+            EvidenceKeys.KIND: resource.kind,
+            EvidenceKeys.NAMESPACE: namespace,
+            EvidenceKeys.CATEGORY: "Erroring",
             "error_lines": str(total),
             "fatal": "yes" if fatal else "no",
             "pods_scanned": ", ".join(scanned),
         }
         if self._context:
-            evidence["cluster"] = self._context
+            evidence[EvidenceKeys.CLUSTER] = self._context
         if sample:
-            evidence["sample"] = " | ".join(sample[:3])
+            evidence[EvidenceKeys.SAMPLE] = " | ".join(sample[:3])
         if trace:  # the captured stack-trace block -- the call chain `analyze` root-causes
-            evidence["trace"] = "\n".join(trace)
+            evidence[EvidenceKeys.TRACE] = "\n".join(trace)
         return Symptom(
             identity=resource.identity,
             kind=resource.kind,
@@ -563,9 +564,9 @@ class KubectlProbe:
         where = f"{self._context}/" if self._context else ""
         on = f" on {self._context}" if self._context else ""
         identity = f"{where}Node/{node}"
-        evidence = {"node": node, "disk_percent": str(pct)}
+        evidence = {EvidenceKeys.NODE: node, "disk_percent": str(pct)}
         if self._context:
-            evidence["cluster"] = self._context
+            evidence[EvidenceKeys.CLUSTER] = self._context
         return Symptom(
             identity=identity,
             kind="Node",
@@ -584,9 +585,13 @@ class KubectlProbe:
         where = f"{self._context}/" if self._context else ""
         identity = f"{where}Node/{issue.node}"
         on = f" on {self._context}" if self._context else ""
-        evidence = {"node": issue.node, "condition": issue.category, "message": issue.message}
+        evidence = {
+            EvidenceKeys.NODE: issue.node,
+            "condition": issue.category,
+            "message": issue.message,
+        }
         if self._context:
-            evidence["cluster"] = self._context
+            evidence[EvidenceKeys.CLUSTER] = self._context
         return Symptom(
             identity=identity,
             kind="Node",

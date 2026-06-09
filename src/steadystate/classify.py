@@ -13,6 +13,8 @@ import os
 import re
 from collections.abc import Mapping
 
+from .evidence import EvidenceKeys
+
 APPLICATION = "application"
 PLATFORM = "platform"
 
@@ -93,8 +95,8 @@ def finding_layer(details: Mapping[str, str] | None, title: str = "") -> str:
     the structured ``details`` when present (Symptoms carry them); for a finding that only has a
     title (some policy findings), the workload is parsed from a ``workload '<name>'`` title. The
     default is ``application`` -- never set a finding aside as plumbing unless we can place it."""
-    namespace = (details or {}).get("namespace", "")
-    workload = (details or {}).get("workload", "") or _workload_from_title(title)
+    namespace = (details or {}).get(EvidenceKeys.NAMESPACE, "")
+    workload = (details or {}).get(EvidenceKeys.WORKLOAD, "") or _workload_from_title(title)
     return PLATFORM if is_platform(namespace, workload) else APPLICATION
 
 
