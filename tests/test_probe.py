@@ -306,6 +306,21 @@ def test_cap_log_keeps_the_tail_and_bounds_size():
     assert "line 0" not in capped and len(capped.splitlines()) <= 150  # oldest dropped, bounded
 
 
+def test_logs_for_analysis_pulls_both_the_previous_and_current_container(monkeypatch):
+    # `analyze` re-fetches FRESH: the --previous (crashed) container's lead-up AND the current one.
+    import subprocess
+
+    def fake_run(argv, **kwargs):
+        crashed = "--previous" in argv
+        text = "connecting to ca\npanic: nil deref" if crashed else "restarted; serving ok"
+        return subprocess.CompletedProcess(argv, 0, stdout=text, stderr="")
+
+    monkeypatch.setattr("steadystate.probe.kubectl.subprocess.run", fake_run)
+    out = KubectlProbe().logs_for_analysis("prod", "web-abc")
+    assert "previous (crashed) container" in out and "panic: nil deref" in out  # the lead-up
+    assert "current container" in out and "serving ok" in out  # what's happened since the restart
+
+
 def test_probe_is_silent_on_a_healthy_workload(monkeypatch):
     prober = _probe(monkeypatch, {"items": [_pod("web-ok", phase="Running")]})
     assert prober.probe([_resource()]) == []

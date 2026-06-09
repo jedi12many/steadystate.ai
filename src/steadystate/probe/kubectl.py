@@ -304,6 +304,7 @@ def scan_log_text(text: str, threshold: int) -> LogVerdict | None:
 
 _LOG_WINDOW_LINES = 150  # the recent log tail kept as before-event context for `analyze`
 _LOG_WINDOW_CHARS = 8000  # ...bounded for the store + the model's context window
+_ANALYZE_TAIL = 400  # a bigger tail re-fetched at `analyze` time (on-demand) -- the lead-up matters
 
 
 def cap_log(text: str) -> str:
@@ -639,6 +640,27 @@ class KubectlProbe:
                 self._kubectl("logs", pod, "-n", namespace, "--tail", tail), best_effort=True
             )
         return cap_log(text or "")
+
+    def logs_for_analysis(self, namespace: str, pod: str) -> str:
+        """Re-fetch a pod's logs FRESH for `analyze` -- the **`--previous`** (crashed) container's
+        tail (the lead-up to the crash) AND the current container's (what's happened since the
+        restart), each labelled and bounded. Pulled at analyze time, with a bigger tail than the
+        scan snapshot, so the model investigates the live picture, not a stale capture. Best-effort:
+        '' when the pod is gone / unreachable -- `analyze` falls back to the captured window."""
+        tail = str(_ANALYZE_TAIL)
+        parts: list[str] = []
+        prev = self._run_text(
+            self._kubectl("logs", pod, "-n", namespace, "--tail", tail, "--previous"),
+            best_effort=True,
+        )
+        if prev.strip():
+            parts.append("== previous (crashed) container ==\n" + cap_log(prev))
+        cur = self._run_text(
+            self._kubectl("logs", pod, "-n", namespace, "--tail", tail), best_effort=True
+        )
+        if cur.strip():
+            parts.append("== current container ==\n" + cap_log(cur))
+        return "\n\n".join(parts)
 
     def _run_text(self, argv: list[str], *, best_effort: bool = False) -> str:
         try:

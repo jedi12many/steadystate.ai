@@ -74,6 +74,27 @@ def test_evidence_bundle_leads_with_the_before_event_log_window():
     assert "worker starting" in bundle and "Policy(0x0)" in bundle  # the lead-up + the panic
 
 
+def test_evidence_bundle_leads_with_live_refetched_logs_when_present():
+    # logs re-fetched FRESH at analyze time lead; the scan-time capture follows as the snapshot.
+    bundle = _evidence_bundle(
+        _finding({"workload": "gateway", "log_window": "old scan snapshot"}),
+        live_logs="fresh: nil pointer on the ca client",
+    )
+    assert "RE-FETCHED LIVE" in bundle and "fresh: nil pointer" in bundle
+    assert bundle.index("fresh: nil pointer") < bundle.index("old scan snapshot")  # live first
+
+
+def test_analyze_feeds_the_live_logs_to_the_model():
+    seen = {}
+
+    def fake(system: str, user: str, caller: str):
+        seen["user"] = user
+        return "rca"
+
+    analyze_finding(_finding({"trace": _PANIC}), fake, live_logs="freshly re-fetched lead-up")
+    assert "freshly re-fetched lead-up" in seen["user"]
+
+
 def test_the_rca_prompt_says_investigate_the_lead_up_and_stay_honest():
     system = _RCA_SYSTEM.lower()
     assert "investigat" in system  # an investigator, not a transcriptionist

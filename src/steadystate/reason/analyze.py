@@ -39,10 +39,12 @@ _RCA_SYSTEM = (
 )
 
 
-def _evidence_bundle(finding: Finding) -> str:
-    """The captured evidence as a labeled block for the model -- the finding's headline + every
-    structured field, then the LOG WINDOW (the lead-up to the failure) and the stack trace, verbatim
-    and last: the before-event logs are the meat the investigation actually reads."""
+def _evidence_bundle(finding: Finding, live_logs: str = "") -> str:
+    """The evidence as a labeled block for the model -- the finding's headline + every structured
+    field, then the logs, verbatim and last (the meat the investigation reads). ``live_logs`` (the
+    pod's logs RE-FETCHED FRESH at analyze time -- current + previous container) lead when present;
+    the scan-time LOG_WINDOW / trace follow as the captured snapshot (the fallback when the pod's
+    gone)."""
     lines = [
         f"Finding: {finding.last_title}",
         f"Severity: {finding.last_severity}   Status: {finding.status}",
@@ -55,9 +57,14 @@ def _evidence_bundle(finding: Finding) -> str:
     for key, value in details.items():
         if key not in bulky:
             lines.append(f"{key}: {value}")
+    if live_logs:
+        lines.append(
+            "\n--- logs RE-FETCHED LIVE at analyze time (current + previous container) ---\n"
+            + live_logs
+        )
     if window:
         lines.append(
-            "\n--- captured logs leading up to the failure (oldest -> newest) ---\n" + str(window)
+            "\n--- captured logs leading up to the failure (scan-time snapshot) ---\n" + str(window)
         )
     if trace:
         lines.append("\n--- captured error / stack-trace block ---\n" + str(trace))
@@ -65,9 +72,12 @@ def _evidence_bundle(finding: Finding) -> str:
 
 
 def analyze_finding(
-    finding: Finding, complete: Callable[[str, str, str], str | None]
+    finding: Finding,
+    complete: Callable[[str, str, str], str | None],
+    *,
+    live_logs: str = "",
 ) -> str | None:
-    """The grounded RCA for one finding, via the LLM seam (``complete``); None when no model is
-    configured. The prompt is built ONLY from the finding's captured evidence -- so the analysis is
-    anchored to what steadystate actually saw, not the model's priors."""
-    return complete(_RCA_SYSTEM, _evidence_bundle(finding), "analyze")
+    """The RCA for one finding, via the LLM seam (``complete``); None when no model is configured.
+    ``live_logs`` (the pod's logs re-fetched FRESH at analyze time) lead the evidence when the
+    caller could pull them -- so the model investigates the live picture, not a stale capture."""
+    return complete(_RCA_SYSTEM, _evidence_bundle(finding, live_logs), "analyze")
