@@ -230,8 +230,11 @@ SOLUTION_SCHEMA_HINT = (
     "A solution is JSON: {name, for?(a finding category or check name), match?(a title regex), "
     "problem?, solution:{kind, run?, target?}, impact?(low|medium|high), "
     "reversibility?(low|medium|high), author}. At least one of for/match (both -> AND); "
-    "kind is command|playbook|reboot|... (open); a fix needs a run or a target; author is required "
-    "(the audit). impact/reversibility default medium -- they're the bound when it's automated."
+    "kind is command|playbook|reboot|workflow|... (open); a fix needs a run or a target; author is "
+    "required (the audit). impact/reversibility default medium -- they're the bound when it's "
+    "automated. kind `workflow` dispatches a GitHub Actions workflow: run is "
+    "'owner/repo/workflow.yml[@ref] [input=value ...]' (inputs {placeholder}-fillable from the "
+    "finding; needs STEADYSTATE_GITHUB_TOKEN with actions:write)."
 )
 
 
