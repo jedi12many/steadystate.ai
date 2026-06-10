@@ -1,0 +1,8 @@
+{
+  "3f9a1c0d2b8e": {
+    "title": "kube-system DaemonSet skew on the GPU pool",
+    "by": "ops",
+    "note": "expected during the driver rollout window -- tracked in the platform backlog",
+    "added": "2026-06-10"
+  }
+}
