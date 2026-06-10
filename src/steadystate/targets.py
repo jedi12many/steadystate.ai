@@ -41,6 +41,13 @@ class Target:
     # kubeconfig sitting in the project dir, not merged into ~/.kube/config). Empty = the ambient
     # kubeconfig. When set, every kubectl read for this target adds ``--kubeconfig <file>``.
     kubeconfig: str = ""
+    # The **broker command** that mints this target's kubeconfig fresh at probe time (e.g.
+    # ``akeyless get-secret-value --name /k8s/prod/kubeconfig``, a ``vault``/``rancher`` one-liner,
+    # or your own script): its stdout IS the kubeconfig. Run as an argv (no shell), fail-closed,
+    # the output held in a temp file for exactly one probe -- the long-running-server answer to
+    # short-lived credentials (see broker.py / examples/brokered-creds). Mutually exclusive with
+    # ``kubeconfig`` (one says where the file IS, the other says how to MINT it).
+    kubeconfig_from: str = ""
     # The Ansible inventory file an ``ansible-live`` target reads host/service health from (empty
     # for other sources). Discovered from ansible.cfg/cwd; passed to the ansible probe as ``-i``.
     inventory: str = ""
@@ -61,6 +68,13 @@ def load_targets(path: str | Path) -> dict[str, Target]:
     for name, spec in raw.items():
         if not isinstance(spec, dict) or "source" not in spec:
             raise ValueError(f"target '{name}' needs at least a 'source'")
+        if spec.get("kubeconfig") and spec.get("kubeconfig_from"):
+            # Ambiguous intent must fail at load, not silently pick one mid-probe: `kubeconfig`
+            # names a standing file, `kubeconfig_from` mints a fresh one -- they can't both win.
+            raise ValueError(
+                f"target '{name}' sets both 'kubeconfig' and 'kubeconfig_from' -- choose one "
+                "(a standing file, or a broker command that mints it at probe time)"
+            )
         out[name] = Target(
             name=name,
             source=str(spec["source"]),
@@ -69,6 +83,7 @@ def load_targets(path: str | Path) -> dict[str, Target]:
             probe=str(spec.get("probe") or "auto"),
             context=str(spec.get("context") or ""),
             kubeconfig=str(spec.get("kubeconfig") or ""),
+            kubeconfig_from=str(spec.get("kubeconfig_from") or ""),
             inventory=str(spec.get("inventory") or ""),
         )
     return out
@@ -101,6 +116,8 @@ def target_to_spec(target: Target) -> dict[str, str]:
         spec["context"] = target.context
     if target.kubeconfig:
         spec["kubeconfig"] = target.kubeconfig
+    if target.kubeconfig_from:
+        spec["kubeconfig_from"] = target.kubeconfig_from
     if target.inventory:
         spec["inventory"] = target.inventory
     return spec

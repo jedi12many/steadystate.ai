@@ -29,6 +29,7 @@ from .act.learn import ADOPT, promotable_solutions
 from .act.learn import learn as derive_lessons
 from .act.reflex import reflex_recurrence, reflexes
 from .act.solution_remedy import no_safety_net, record_solution_remediations
+from .broker import target_credentials
 from .classify import APPLICATION, finding_layer
 from .engine import build_report
 from .evidence import EvidenceKeys
@@ -325,6 +326,7 @@ def _render_targets() -> str:
     lines = [f"{len(targets)} target(s):"]
     lines += [
         f"  {name:<14} {t.source:<14} {('context=' + t.context) if t.context else t.label}"
+        + ("  [creds brokered at probe time]" if t.kubeconfig_from else "")
         for name, t in sorted(targets.items())
     ]
     return "\n".join(lines)
@@ -1236,17 +1238,20 @@ def probe_report(target_name: str, state_path: str, *, scan_logs: bool = False) 
     if target is None:
         raise LookupError(f"Unknown target '{target_name}'. Known: {', '.join(sorted(targets))}.")
     # A live target (k8s-live) has no path -- Path("") is "." which its source ignores; the
-    # context aims the source + probe at that one cluster.
-    report = build_report(
-        target.source,
-        Path(target.path),
-        probe="auto",
-        label=target.label,
-        context=target.context,
-        kubeconfig=target.kubeconfig,  # a cwd kubeconfig the context lives in (else "")
-        inventory=target.inventory,  # an ansible-live target's inventory (else "")
-        scan_logs=scan_logs,  # `--deep` -> also scan pod logs for errors
-    )
+    # context aims the source + probe at that one cluster. A brokered target (kubeconfig_from)
+    # mints its credential fresh for exactly this probe (fail closed -- a failed broker raises
+    # with the reason, and the caller reports it like any probe failure).
+    with target_credentials(target) as kubeconfig:
+        report = build_report(
+            target.source,
+            Path(target.path),
+            probe="auto",
+            label=target.label,
+            context=target.context,
+            kubeconfig=kubeconfig,  # static, ambient (""), or just-brokered
+            inventory=target.inventory,  # an ansible-live target's inventory (else "")
+            scan_logs=scan_logs,  # `--deep` -> also scan pod logs for errors
+        )
     if state_path:  # persist the findings (record-only) -- this also creates the db
         _record_probe_findings(report, state_path)
     return report
