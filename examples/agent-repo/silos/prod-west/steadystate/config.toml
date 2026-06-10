@@ -1,0 +1,11 @@
+# prod-west -- a second wall: same shape as prod-east, its own creds/state/port.
+
+[bound]
+self_healing = "service"
+recoverable  = "none"
+
+[knowledge]
+dir = "../../steadystate/kb"    # the same shared docs
+
+[workflows]
+repo = "your-org/agent-repo"

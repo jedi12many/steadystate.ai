@@ -1,0 +1,23 @@
+# prod-east -- one WALL: its own targets, state db, bound, and listener port.
+# `--silo prod-east` chdirs here, so every relative path below resolves inside this wall.
+
+[bound]                 # this wall's autonomy envelope -- reviewed in a PR, not a loose env var
+self_healing = "service"
+recoverable  = "none"
+
+[knowledge]             # the trick: every silo shares ONE knowledge base at the repo level
+dir = "../../steadystate/kb"
+
+[workflows]             # `runs` / `dispatch` / `workflow` solutions act on the agent repo itself
+repo = "your-org/agent-repo"
+
+[servicenow]                      # ticket routing -- the right team gets this wall's incidents
+assignment_group = "platform-ops"
+
+[[servicenow.route]]
+for = "NetworkUnreachable"
+group = "network-ops"
+
+[[servicenow.route]]
+match = "dns|gateway|proxy"
+group = "network-ops"
