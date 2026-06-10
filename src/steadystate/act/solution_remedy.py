@@ -28,6 +28,7 @@ from ..state import APPLIED, APPROVED, FAILED, VERIFIED, AuditEntry, PendingActi
 from .base import RemediationResult
 from .bounds import BoundPolicy, Envelope, Impact, Reversibility, bound_from_env, within_bounds
 from .plan import RemediationPlan, Risk
+from .workflow import DISPATCH_SENTINEL, WORKFLOW_KIND, dispatch_workflow, parse_workflow_spec
 
 # The sentinel ``source`` marking a PendingAction as an authored-solution command (apply_pending
 # routes on it). Not a real DriftSource -- the stored command is the whole action.
@@ -40,13 +41,14 @@ SOLUTION_SOURCE = "solution"
 _SOLUTION_AUTO_ENV = "STEADYSTATE_SOLUTION_AUTO"
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 
-# Open-content kinds: the `run` is an arbitrary operator-authored command with NO allow-pattern. A
-# solution's declared impact/reversibility is the AUTHOR's word, not a trusted envelope -- so these
-# can never auto-apply on that word alone. They ALWAYS escalate to a human approve, no matter the
-# bound they claim. (A safe auto path returns once a solution is vouched through a trusted channel
-# -- committed to main, or SSO-vouched in chat -- see issue #253; the self-declared envelope never
-# widens its own blast radius.)
-_ARBITRARY_KINDS = frozenset({"command", "playbook"})
+# Open-content kinds: the `run` is arbitrary operator-authored content with NO allow-pattern -- a
+# raw command, a playbook, or a `workflow` (a dispatched Actions workflow is arbitrary code in
+# another repo). A solution's declared impact/reversibility is the AUTHOR's word, not a trusted
+# envelope -- so these can never auto-apply on that word alone. They ALWAYS escalate to a human
+# approve, no matter the bound they claim. (A safe auto path returns once a solution is vouched
+# through a trusted channel -- committed to main, or SSO-vouched in chat -- see issue #253; the
+# self-declared envelope never widens its own blast radius.)
+_ARBITRARY_KINDS = frozenset({"command", "playbook", WORKFLOW_KIND})
 
 # The operator's risk dial: turn OFF the #253 solution safety net. On, a DRAFT becomes offerable and
 # an open command becomes auto-eligible (still within the bound). The human is the final decider on
@@ -141,6 +143,13 @@ def record_solution_remediations(
             command = _fill(runnable.run, symptom.evidence)
             if _PLACEHOLDER.search(command):  # an unfilled {placeholder} -> skip a broken command
                 continue
+            if runnable.kind == WORKFLOW_KIND:
+                spec, _problem = parse_workflow_spec(shlex.split(command))
+                if spec is None:  # a malformed workflow entry is never offered as a broken action
+                    continue  # (`doctor` diagnoses the runbook; the offer path just won't break)
+                # The sentinel makes the stored pending self-describing: `approve` routes it to
+                # the Actions API, and `pending` reads honestly ("workflow-dispatch org/...").
+                command = f"{DISPATCH_SENTINEL} {command}"
             action = PendingAction(
                 fingerprint=symptom.fingerprint,
                 source=SOLUTION_SOURCE,
@@ -198,13 +207,19 @@ def run_solution(
         _envelope(sol) if sol is not None else Envelope(Reversibility.RECOVERABLE, Impact.TENANT)
     )
     risk = _RISK.get(sol.impact, Risk.MEDIUM) if sol is not None else Risk.MEDIUM
+    argv = shlex.split(action.command)
+    is_dispatch = bool(argv) and argv[0] == DISPATCH_SENTINEL  # a `workflow` solution's pending
     plan = RemediationPlan(
         drift_identity=action.drift_identity,
         eligible=True,
         risk=risk,
         reason=f"authored solution: {action.drift_identity}",
-        command=shlex.split(action.command),
-        blast_radius="runs the authored runbook command (operator-vouched)",
+        command=argv,
+        blast_radius=(
+            "dispatches the authored GitHub Actions workflow (runs in its repo, operator-vouched)"
+            if is_dispatch
+            else "runs the authored runbook command (operator-vouched)"
+        ),
         revert="per the runbook entry -- a human authored this fix",
         envelope=envelope,
     )
@@ -212,6 +227,15 @@ def run_solution(
         return RemediationResult(
             plan=plan, applied=False, verified=False, detail="empty solution command."
         )
+    if is_dispatch:
+        # An API call, not a subprocess: re-parse the spec the offer validated and POST the
+        # workflow_dispatch. Fail closed with the dispatcher's human-readable reason.
+        spec, problem = parse_workflow_spec(argv[1:])
+        if spec is None:
+            refused = f"workflow dispatch refused: {problem}"
+            return RemediationResult(plan=plan, applied=False, verified=False, detail=refused)
+        ok, detail = dispatch_workflow(spec)
+        return RemediationResult(plan=plan, applied=ok, verified=False, detail=detail)
     try:
         proc = subprocess.run(  # noqa: S603 -- argv list (no shell); operator-authored command
             plan.command, capture_output=True, text=True, timeout=timeout, check=False

@@ -17,7 +17,7 @@ version-controlled file is the audit; surfacing the fix against a matching findi
   "for": "Evicted",                       // STRICT match: a finding category or a custom-check name
   "match": "gateway.*(hung|not routing)", // OR a title REGEX (use either, or both -> AND)
   "problem": "Evicted pods pile up as Failed.",
-  "solution": { "kind": "command",        // command | playbook | reboot | ... (open)
+  "solution": { "kind": "command",        // command | playbook | reboot | workflow | ... (open)
                 "run": "kubectl delete pods --field-selector=status.phase=Failed -n {namespace}" },
   "impact": "low", "reversibility": "high", // the bound -- a destructive fix still needs approval
   "author": "ops", "added": "2026-06-07"   // the audit anchor
@@ -27,6 +27,21 @@ version-controlled file is the audit; surfacing the fix against a matching findi
 - **`for`** pins it to a problem **strictly** (exact category / check name); **`match`** is a title
   **regex** for fuzzier shapes. Set one, or both (both must hold). `{namespace}`/`{workload}` are
   filled from the matched finding.
+- **`kind: "workflow"`** dispatches a **GitHub Actions workflow** — for shops whose automation
+  lives in their repos, the fix often *is* "run that workflow":
+
+  ```jsonc
+  "solution": { "kind": "workflow",
+                "run": "your-org/platform-infra/redeploy-runners.yml@main cluster={cluster}" }
+  ```
+
+  The grammar is `owner/repo/workflow.yml[@ref] [input=value ...]` (a `.github/workflows/` path
+  works too; inputs are `{placeholder}`-fillable). It POSTs the `workflow_dispatch` over stdlib
+  urllib — no `gh` CLI — using the same `STEADYSTATE_GITHUB_TOKEN`/`GITHUB_TOKEN` the issues
+  surface uses (needs `actions:write`), and the approval reply links the workflow's runs page.
+  Like `command`/`playbook` it's an **open** kind: it never auto-applies on its self-declared
+  bound — a human approves, and your workflow's own environments/required-reviewers stay a second
+  gate on the Actions side.
 - **`impact` + `reversibility`** are the **bound** — so when this is automated, a low-impact /
   reversible fix can auto-apply (only with autonomy granted), while anything destructive still
   escalates to a human.
