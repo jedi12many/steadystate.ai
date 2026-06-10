@@ -44,6 +44,7 @@ from .inbound.base import (
     CHECKS,
     COST,
     DECLINE,
+    DISPATCH,
     FINDINGS,
     FIX,
     HEALTH,
@@ -57,6 +58,7 @@ from .inbound.base import (
     POSTURE,
     PROBE,
     RUN,
+    RUNS,
     SEND,
     SHOW,
     SMOKE,
@@ -88,7 +90,17 @@ from .reason.llm import LLMAnalyst
 from .reason.report import Report
 from .reconcile_state import _fingerprints, alert_suppressed, finding_evidence, seen_findings
 from .serialize import finding_to_dict, report_to_dict
-from .state import FINDING_FILTERS, Finding, PendingAction, StateStore, filter_findings
+from .state import (
+    APPLIED,
+    APPROVED,
+    FAILED,
+    FINDING_FILTERS,
+    AuditEntry,
+    Finding,
+    PendingAction,
+    StateStore,
+    filter_findings,
+)
 from .sweep import render_sweep, sweep_targets
 from .targets import load_targets_from_env
 
@@ -498,6 +510,41 @@ def _render_analyze(fingerprint: str, state_path: str) -> str:
         store.save_analysis(finding.fingerprint, rca, datetime.now(UTC))
     saved = f"\n\n(saved -- `show {finding.fingerprint[:12]}` shows it; `--to github` sends it)"
     return f"root-cause analysis -- {finding.last_title}\n{'=' * 60}\n{rca}{saved}"
+
+
+def _render_runs(workflow: str) -> str:
+    """`runs [workflow]`: recent GitHub Actions runs in the agent's workflows repo -- the repo's
+    own automation as the agent's instruments. Read-only; every miss is an honest one-liner."""
+    from .act.workflow import list_runs
+
+    return list_runs(workflow.strip())
+
+
+def _dispatch_run(workflow: str, inputs_raw: str, actor: str, state_path: str) -> str:
+    """`dispatch <workflow>[@ref] [input=value ...]`: kick off one of the agent repo's own
+    workflows NOW. Structurally scoped to that repo (the workflow file is the only caller-chosen
+    part), fail-closed via the same dispatcher the `workflow` solution kind uses, and **audited**
+    -- who asked for which workflow with which inputs lands in `history`, success or failure.
+    The audit write is best-effort: telemetry must never eat the dispatch outcome."""
+    from .act.workflow import dispatch_named
+
+    ok, detail = dispatch_named(workflow, inputs_raw.split())
+    if state_path:
+        with contextlib.suppress(Exception), StateStore(state_path) as store:
+            store.record_audit(
+                AuditEntry(
+                    fingerprint="",
+                    source="workflow",
+                    drift_identity=f"dispatch {workflow}"
+                    + (f" {inputs_raw}" if inputs_raw else ""),
+                    actor=actor,
+                    decision=APPROVED,
+                    outcome=APPLIED if ok else FAILED,
+                    detail=detail,
+                ),
+                datetime.now(UTC),
+            )
+    return detail
 
 
 def _render_ask(question: str, state_path: str) -> str:
@@ -1368,6 +1415,10 @@ def run_command(command: Command, state_path: str) -> str:
         return _render_posture()
     if command.verb == METRICS:
         return _render_metrics()
+    if command.verb == RUNS:
+        return _render_runs(command.argument)
+    if command.verb == DISPATCH:
+        return _dispatch_run(command.argument, command.argument2, command.actor, state_path)
     if command.verb == CHECKS:
         return _render_checks()
     if command.verb == SOLUTIONS:

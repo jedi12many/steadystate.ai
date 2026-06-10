@@ -106,6 +106,101 @@ def _error_message(err: urllib.error.HTTPError) -> str:
     return str(message) if message else err.reason or "request failed"
 
 
+def agent_repo() -> str:
+    """The **agent's workflows repo** -- the one whose committed workflows are the agent's own
+    instruments (`runs` reads them, `dispatch` kicks them). Resolution, 12-factor:
+    ``STEADYSTATE_WORKFLOWS_REPO`` > ``[workflows] repo`` in config.toml > the GitHub surface's
+    repo resolution (``STEADYSTATE_GITHUB_REPO``, else the cwd's ``origin`` remote -- the agent
+    repo usually IS the repo the listener runs from). '' when nothing resolves."""
+    env = os.environ.get("STEADYSTATE_WORKFLOWS_REPO", "").strip()
+    if env:
+        return env
+    from ..config import config_table
+
+    configured = config_table("workflows").get("repo")
+    if isinstance(configured, str) and configured.strip():
+        return configured.strip()
+    from ..notify.github import _resolve_repo
+
+    return _resolve_repo() or ""
+
+
+_NO_REPO_HINT = (
+    "no workflows repo configured -- set `[workflows] repo` in steadystate/config.toml (or "
+    "STEADYSTATE_WORKFLOWS_REPO), or run from a repo with a GitHub `origin` remote."
+)
+_NO_TOKEN_HINT = (
+    "needs a token -- set STEADYSTATE_GITHUB_TOKEN (or GITHUB_TOKEN) with actions read/write "
+    "on the workflows repo."
+)
+
+
+def _get(url: str, token: str) -> dict:
+    """One authenticated GET against the Actions API, parsed. Raises like urllib does -- the
+    callers turn failures into honest one-liners."""
+    request = urllib.request.Request(
+        url,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "steadystate",
+        },
+    )
+    with safe_urlopen(request, timeout=_TIMEOUT) as response:
+        body = json.loads(response.read() or b"{}")
+    return body if isinstance(body, dict) else {}
+
+
+def list_runs(workflow: str = "", *, limit: int = 8) -> str:
+    """Recent GitHub Actions runs in the agent's workflows repo, rendered for chat/CLI -- the
+    'did the nightly scan pass?' answer from real run history. ``workflow`` (a file name) scopes
+    to one workflow; bare lists the repo's latest runs across workflows. Read-only; every miss is
+    an honest one-liner (no repo, no token, an unknown workflow, an API error)."""
+    repo = agent_repo()
+    if not repo:
+        return _NO_REPO_HINT
+    token = _token()
+    if not token:
+        return f"`runs` {_NO_TOKEN_HINT}"
+    api = (os.environ.get("GITHUB_API_URL") or _DEFAULT_API).rstrip("/")
+    scope = f"/actions/workflows/{workflow}/runs" if workflow else "/actions/runs"
+    try:
+        data = _get(f"{api}/repos/{repo}{scope}?per_page={limit}", token)
+    except urllib.error.HTTPError as err:
+        where = f"workflow '{workflow}' in {repo}" if workflow else repo
+        return f"couldn't read runs for {where} ({err.code}): {_error_message(err)}"
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        return f"couldn't read runs: {exc}"
+    runs = data.get("workflow_runs") or []
+    if not runs:
+        scoped = f" for {workflow}" if workflow else ""
+        return f"no runs{scoped} in {repo} yet."
+    scoped = f" -- {workflow}:" if workflow else ":"
+    lines = [f"{len(runs[:limit])} recent run(s) in {repo}{scoped}"]
+    for run in runs[:limit]:
+        name = (run.get("path") or "").rsplit("/", 1)[-1] or str(run.get("name") or "?")
+        state = str(run.get("conclusion") or run.get("status") or "?")
+        branch = str(run.get("head_branch") or "")
+        when = str(run.get("updated_at") or "")
+        lines.append(f"  {name:<28} {state:<12} {branch:<14} {when}  {run.get('html_url') or ''}")
+    return "\n".join(lines)
+
+
+def dispatch_named(workflow: str, input_tokens: list[str]) -> tuple[bool, str]:
+    """Dispatch one of the **agent repo's own** workflows on demand -- the chat/CLI `dispatch`
+    verb. ``workflow`` is the file (``redeploy.yml``, optionally ``@ref``); the repo is ALWAYS
+    the configured agent repo, so the verb is structurally scoped to it -- the workflows committed
+    there are the vetted menu. Returns ``(ok, detail)``, fail closed like the solution path."""
+    repo = agent_repo()
+    if not repo:
+        return False, _NO_REPO_HINT
+    spec, problem = parse_workflow_spec([f"{repo}/{workflow.strip()}", *input_tokens])
+    if spec is None:
+        return False, problem
+    return dispatch_workflow(spec)
+
+
 def dispatch_workflow(spec: WorkflowSpec) -> tuple[bool, str]:
     """POST the ``workflow_dispatch`` event for ``spec``. Returns ``(ok, detail)`` -- the detail
     names what was dispatched and links the workflow's runs page, or says exactly why not (a

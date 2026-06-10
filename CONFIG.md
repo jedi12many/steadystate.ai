@@ -35,6 +35,10 @@ to      = "console"     # add "github" to open an issue; deliver = "github-pr" f
 
 [knowledge]             # where `ask` reads the team's committed docs from
 dir = "steadystate/kb"  # the default; STEADYSTATE_KB overrides per run
+
+[workflows]             # the agent's own automation -- `runs` reads it, `dispatch` kicks it
+repo = "your-org/agent-repo"  # default: the GitHub surface's repo (env, or the cwd's origin);
+                              # STEADYSTATE_WORKFLOWS_REPO overrides per run
 ```
 
 `STEADYSTATE_CONFIG` points elsewhere; it's read CWD-relative, so `--silo` gets per-silo config.
@@ -104,7 +108,7 @@ See **[LLM_SAFETY.md](./LLM_SAFETY.md)** for how these compose into the control 
 | `STEADYSTATE_WEBHOOK_URL` | Generic JSON webhook (Opsgenie / Jira / a bus) |
 | `STEADYSTATE_PAGERDUTY_ROUTING_KEY` | PagerDuty (Events API v2, deduped by fingerprint) |
 | `STEADYSTATE_SERVICENOW_INSTANCE` · `_USER` · `_PASSWORD` · `_TABLE` · `_AUTOCLOSE` · `_CLOSE_CODE` | ServiceNow incidents |
-| `STEADYSTATE_GITHUB_TOKEN` (or `GITHUB_TOKEN`) · `_REPO` · `_SEVERITY` · `_AUTOCLOSE` · `GITHUB_API_URL` | **GitHub issues** (`--to github`) — opened only when *sure* (a severity gate, default `high`), **one per finding** (deduped by a fingerprint marker), and **auto-closed when it clears**. Closing the loop. The same token also powers the **`workflow` solution kind** (a runbook fix that dispatches a `workflow_dispatch` — add `actions:write`). |
+| `STEADYSTATE_GITHUB_TOKEN` (or `GITHUB_TOKEN`) · `_REPO` · `_SEVERITY` · `_AUTOCLOSE` · `GITHUB_API_URL` | **GitHub issues** (`--to github`) — opened only when *sure* (a severity gate, default `high`), **one per finding** (deduped by a fingerprint marker), and **auto-closed when it clears**. Closing the loop. The same token also powers the **`workflow` solution kind** and the **`runs`/`dispatch` verbs** over the agent's workflows repo (`[workflows] repo` / `STEADYSTATE_WORKFLOWS_REPO`) — add `actions:read`/`actions:write` respectively. |
 | `PROMETHEUS_URL` · `PROMETHEUS_PUSHGATEWAY_URL` | Metrics |
 | `GRAFANA_URL` · `GRAFANA_TOKEN` | Dashboard annotations |
 
