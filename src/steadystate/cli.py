@@ -1062,12 +1062,29 @@ def mute(
     fingerprint: str = typer.Argument(..., help="The Event fingerprint (from `findings`)."),
     note: str = typer.Option("", "--note", help="Why it's muted (recorded with the finding)."),
     actor: str = typer.Option("cli", "--actor", help="Who muted it (recorded for audit)."),
+    commit: bool = typer.Option(
+        False,
+        "--commit",
+        help="Also write it to the COMMITTED mutes (steadystate/mutes.json) -- the decision "
+        "survives any state db, and 'why is this suppressed?' has a PR to point at.",
+    ),
     state: Path = _STATE_OPTION,
 ) -> None:
-    """Mute a finding by fingerprint: future scans suppress it until you `unmute`."""
+    """Mute a finding by fingerprint: future scans suppress it until you `unmute`. A mute is a
+    *decision*; `--commit` promotes it to committed intent so a rebuilt host / fresh state db
+    re-applies it on its first scan (see also `commit-mutes` for the bulk export)."""
+    now = datetime.now(UTC)
     with _open_store(state) as store:
-        store.mute(fingerprint, note or None, actor, datetime.now(UTC))
+        store.mute(fingerprint, note or None, actor, now)
+        found = store.get(fingerprint)
+        # A pre-mute of an unseen fingerprint has no real title yet -- don't echo the fp as one.
+        title = found.last_title if found and found.last_title != fingerprint else ""
     typer.echo(f"muted {fingerprint}")
+    if commit:
+        from .mutes import commit_mute
+
+        path = commit_mute(fingerprint, title=title, by=actor, note=note)
+        typer.echo(f"committed -> {path} (commit the file so the mute survives any state db)")
 
 
 @app.command()
@@ -1075,10 +1092,32 @@ def unmute(
     fingerprint: str = typer.Argument(..., help="The Event fingerprint to un-mute/un-snooze."),
     state: Path = _STATE_OPTION,
 ) -> None:
-    """Clear a mute or snooze on a finding: it surfaces again on the next scan."""
+    """Clear a mute or snooze on a finding: it surfaces again on the next scan. (A COMMITTED
+    mute re-applies on the next scan -- lifting one permanently means removing it from
+    steadystate/mutes.json, a PR; the command says so when that's the case.)"""
+    from .mutes import committed_warning
+
     with _open_store(state) as store:
         store.unmute(fingerprint, datetime.now(UTC))
-    typer.echo(f"unmuted {fingerprint}")
+    typer.echo(f"unmuted {fingerprint}{committed_warning(fingerprint)}")
+
+
+@app.command("commit-mutes")
+def commit_mutes(
+    state: Path = _STATE_OPTION,
+) -> None:
+    """Export this db's current **permanent mutes** into the committed mutes file
+    (steadystate/mutes.json) -- the backup strategy for mute decisions. Fingerprints are
+    content-derived, so the committed file re-applies on ANY state db's first scan: a rebuilt
+    host, a fresh wall, a teammate's checkout. Merging and reviewable (each entry carries the
+    finding's title + who muted it); snoozes are temporal and stay db-local. Commit the file."""
+    from .mutes import export_mutes
+
+    with _open_store(state) as store:
+        added, total, path = export_mutes(store)
+    typer.echo(f"committed {added} new mute(s) ({total} total) -> {path}")
+    if added:
+        typer.echo("commit the file -- the decisions now survive any state db.")
 
 
 @app.command()

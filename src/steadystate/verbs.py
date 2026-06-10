@@ -75,6 +75,7 @@ from .inbound.base import (
     render_help,
 )
 from .metrics import fetch_metrics
+from .mutes import apply_committed_mutes, committed_warning
 from .notify import SURFACES
 from .onboarding import Status, capabilities
 from .probe.custom import CheckResult, add_check, describe_check, load_checks, run_smoke_checks
@@ -208,7 +209,10 @@ def _unmute_finding(store: StateStore, token: str) -> str:
     if finding is None:
         return error
     store.unmute(finding.fingerprint, datetime.now(UTC))
-    return f"Unmuted {finding.fingerprint} -- it surfaces again on the next scan."
+    return (
+        f"Unmuted {finding.fingerprint} -- it surfaces again on the next scan."
+        f"{committed_warning(finding.fingerprint)}"
+    )
 
 
 def _snooze_finding(store: StateStore, token: str, duration_text: str, actor: str) -> str:
@@ -1291,6 +1295,9 @@ def _record_probe_findings(report: Report, state_path: str) -> None:
         Path(state_path).parent.mkdir(parents=True, exist_ok=True)
         now = datetime.now(UTC)
         with StateStore(state_path) as store:
+            # Committed mutes first (steadystate/mutes.json), so even a fresh db suppresses what
+            # the team already judged benign -- a probe is many operators' first touch of a wall.
+            apply_committed_mutes(store, now)
             store.record(seen_findings(report), now, finding_evidence(report))
             # Offer an approvable cleanup for any evicted pods -- so `pending` lists it and
             # `approve <fp>` runs the kubectl delete. Never auto-runs; approve is the gate.
