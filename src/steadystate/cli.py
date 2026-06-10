@@ -1234,6 +1234,33 @@ def dispatch(
     typer.echo(_dispatch_run(workflow, " ".join(inputs or []), _local_actor(), str(state)))
 
 
+@app.command()
+def requests() -> None:
+    """List the **vetted requests** this team fulfills -- each an operator-authored recipe
+    (`steadystate/requests.json`) that turns an ask into a **review-gated PR** in the repo that
+    owns the decision (e.g. `request proxy-domain domain=example.com` -> a PR adding the domain
+    to the proxy allowlist). Read-only; `request <name> ...` makes one."""
+    from .verbs import _render_requests
+
+    typer.echo(_render_requests())
+
+
+@app.command()
+def request(
+    name: str = typer.Argument(..., help="The recipe name (see `requests`)."),
+    params: list[str] = typer.Argument(None, help="The recipe's parameters, as param=value."),
+    state: Path = _STATE_OPTION,
+) -> None:
+    """Make a **vetted request**: the committed recipe's deterministic edit becomes a PR in the
+    repo that owns it, and the reply carries the link -- *"someone will review it soon."*
+    Parameters are regex-validated against the recipe; the edit itself is operator intent; the
+    target repo's review is the gate. Deduped (asking twice points at the open PR) and audited.
+    Needs STEADYSTATE_GITHUB_TOKEN (or GITHUB_TOKEN) with write on the target repo."""
+    from .verbs import _make_request
+
+    typer.echo(_make_request(name, " ".join(params or []), _local_actor(), str(state)))
+
+
 class _WatchDone(Exception):  # noqa: N818 -- a control-flow signal, not an error
     """Raised to break the watch loop on the first match (`--once`)."""
 

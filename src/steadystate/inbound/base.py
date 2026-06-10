@@ -30,6 +30,8 @@ APPROVE = "approve"
 ASK = "ask"
 DECLINE = "decline"
 DISPATCH = "dispatch"
+REQUEST = "request"
+REQUESTS_LIST = "requests"
 RUNS = "runs"
 HELP = "help"
 PENDING = "pending"
@@ -145,6 +147,19 @@ COMMANDS: dict[str, tuple[str, str]] = {
         "instead of waiting for its cron (`dispatch nightly-scan.yml`). Structurally scoped to "
         "that one repo (committing a workflow there is the vetting); audited with who asked; "
         "needs a token with actions:write",
+    ),
+    REQUESTS_LIST: (
+        "requests",
+        "list the vetted requests this team fulfills -- each is an operator-authored recipe "
+        "(steadystate/requests.json) that turns an ask into a review-gated PR in the repo that "
+        "owns it",
+    ),
+    REQUEST: (
+        "request <name> [param=value ...]",
+        "make a vetted request -- e.g. `request proxy-domain domain=example.com` opens a PR "
+        "adding that domain to the proxy allowlist, and replies with the link for review. The "
+        "edit is deterministic (the committed recipe), the parameters are regex-validated, the "
+        "target repo's review is the gate. Audited",
     ),
     CHECKS: ("checks", "list this wall's custom health checks (.steadystate/checks.json)"),
     SOLUTIONS: ("solutions", "list this wall's authored runbook of problem->fix entries"),
@@ -289,6 +304,8 @@ _TOOL_ARGS: dict[str, tuple[tuple[str, bool], ...]] = {
     METRICS: (),
     RUNS: (("workflow", False),),  # optional: scope to one workflow file
     DISPATCH: (("workflow", True), ("inputs", False)),  # the file[@ref]; then input=value pairs
+    REQUESTS_LIST: (),
+    REQUEST: (("name", True), ("params", False)),  # the recipe; then param=value pairs
     CHECKS: (),
     SOLUTIONS: (),
     SMOKE: (),
@@ -328,6 +345,10 @@ _TOOL_EFFECT: dict[str, str] = {
     # Kicking a workflow sends an event to GitHub; what runs is the agent repo's own committed
     # automation. Effectful -> NL echoes it for a human to confirm, and MCP needs the write grant.
     DISPATCH: "external-send",
+    REQUESTS_LIST: "read-only",
+    # Opening a PR is a proposal (reversible by close) -- but it's still an outward write, so the
+    # same discipline as dispatch: NL echo-to-confirm, MCP write grant, audited.
+    REQUEST: "external-send",
     CHECKS: "read-only",
     SOLUTIONS: "read-only",  # lists the authored runbook -- showing a fix isn't running it
     SMOKE: "read-only",  # active (GET/HEAD probes) but idempotent -- reads, never mutates
@@ -399,12 +420,13 @@ def command_from_text(text: str, actor: str) -> Command | None:
             if rest:
                 return Command(ASK, actor, " ".join(rest))
             continue  # a bare `ask` carries no question -> not actionable
-        if verb == DISPATCH:
-            # `dispatch <workflow> [input=value ...]`: the inputs ride VERBATIM in argument2 --
-            # no flag extraction, so an input value that happens to be a flag word survives.
+        if verb in (DISPATCH, REQUEST):
+            # `dispatch <workflow> [input=value ...]` / `request <name> [param=value ...]`: the
+            # pairs ride VERBATIM in argument2 -- no flag extraction, so a value that happens to
+            # be a flag word survives.
             if rest:
-                return Command(DISPATCH, actor, rest[0], argument2=" ".join(rest[1:]))
-            continue  # a bare `dispatch` names no workflow -> not actionable
+                return Command(verb, actor, rest[0], argument2=" ".join(rest[1:]))
+            continue  # bare -> names nothing -> not actionable
         flags = frozenset(_FLAG_ALIASES[t.lower()] for t in rest if t.lower() in _FLAG_ALIASES)
         args = [t for t in rest if t.lower() not in _FLAG_ALIASES]
         if verb in _NEEDS_TWO:

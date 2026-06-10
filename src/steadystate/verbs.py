@@ -57,6 +57,8 @@ from .inbound.base import (
     PENDING,
     POSTURE,
     PROBE,
+    REQUEST,
+    REQUESTS_LIST,
     RUN,
     RUNS,
     SEND,
@@ -520,30 +522,58 @@ def _render_runs(workflow: str) -> str:
     return list_runs(workflow.strip())
 
 
+def _audit_outward(
+    source: str, what: str, actor: str, ok: bool, detail: str, state_path: str
+) -> None:
+    """Record an outward action (a workflow dispatch, a request PR) to the audit log -- who asked
+    for what, success or failure. Best-effort: telemetry must never eat the action's outcome."""
+    if not state_path:
+        return
+    with contextlib.suppress(Exception), StateStore(state_path) as store:
+        store.record_audit(
+            AuditEntry(
+                fingerprint="",
+                source=source,
+                drift_identity=what,
+                actor=actor,
+                decision=APPROVED,
+                outcome=APPLIED if ok else FAILED,
+                detail=detail,
+            ),
+            datetime.now(UTC),
+        )
+
+
 def _dispatch_run(workflow: str, inputs_raw: str, actor: str, state_path: str) -> str:
     """`dispatch <workflow>[@ref] [input=value ...]`: kick off one of the agent repo's own
     workflows NOW. Structurally scoped to that repo (the workflow file is the only caller-chosen
     part), fail-closed via the same dispatcher the `workflow` solution kind uses, and **audited**
-    -- who asked for which workflow with which inputs lands in `history`, success or failure.
-    The audit write is best-effort: telemetry must never eat the dispatch outcome."""
+    -- who asked for which workflow with which inputs lands in `history`, success or failure."""
     from .act.workflow import dispatch_named
 
     ok, detail = dispatch_named(workflow, inputs_raw.split())
-    if state_path:
-        with contextlib.suppress(Exception), StateStore(state_path) as store:
-            store.record_audit(
-                AuditEntry(
-                    fingerprint="",
-                    source="workflow",
-                    drift_identity=f"dispatch {workflow}"
-                    + (f" {inputs_raw}" if inputs_raw else ""),
-                    actor=actor,
-                    decision=APPROVED,
-                    outcome=APPLIED if ok else FAILED,
-                    detail=detail,
-                ),
-                datetime.now(UTC),
-            )
+    what = f"dispatch {workflow}" + (f" {inputs_raw}" if inputs_raw else "")
+    _audit_outward("workflow", what, actor, ok, detail, state_path)
+    return detail
+
+
+def _render_requests() -> str:
+    """`requests`: the vetted asks this team fulfills -- discoverable from chat. Read-only."""
+    from .act.requests import describe_requests
+
+    return describe_requests()
+
+
+def _make_request(name: str, params_raw: str, actor: str, state_path: str) -> str:
+    """`request <name> [param=value ...]`: fulfill a vetted request -- the deterministic,
+    operator-authored edit becomes a review-gated PR in the repo that owns the decision, and the
+    reply carries the link. Parameters are regex-validated; the model never composes the diff;
+    the target repo's review is the gate. **Audited** -- who requested what, success or failure."""
+    from .act.requests import fulfill_request
+
+    ok, detail = fulfill_request(name, params_raw.split(), actor)
+    what = f"request {name}" + (f" {params_raw}" if params_raw else "")
+    _audit_outward("request", what, actor, ok, detail, state_path)
     return detail
 
 
@@ -1419,6 +1449,10 @@ def run_command(command: Command, state_path: str) -> str:
         return _render_runs(command.argument)
     if command.verb == DISPATCH:
         return _dispatch_run(command.argument, command.argument2, command.actor, state_path)
+    if command.verb == REQUESTS_LIST:
+        return _render_requests()
+    if command.verb == REQUEST:
+        return _make_request(command.argument, command.argument2, command.actor, state_path)
     if command.verb == CHECKS:
         return _render_checks()
     if command.verb == SOLUTIONS:
