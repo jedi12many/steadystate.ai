@@ -16,10 +16,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 TARGETS_ENV = "STEADYSTATE_TARGETS"  # path to the targets JSON document
-# The default registry path when STEADYSTATE_TARGETS isn't set. Lives under .steadystate/ (the
-# gitignored state dir, alongside state.db), so `discover --create` and the chat fallback never
-# read or clobber an unrelated `targets.json` that happens to be in the cwd.
+# The legacy/gitignored registry path -- still read when it's what a repo has. Targets earned a
+# committed home when `kubeconfig_from` made them pointers (a broker command), never keys: see
+# COMMITTED_TARGETS_FILE below, the preferred location.
 DEFAULT_TARGETS_FILE = ".steadystate/targets.json"
+COMMITTED_TARGETS_FILE = "steadystate/targets.json"  # version-controlled INTENT (preferred)
 
 
 @dataclass(frozen=True)
@@ -89,16 +90,37 @@ def load_targets(path: str | Path) -> dict[str, Target]:
     return out
 
 
+def resolve_targets_path(explicit: str = "") -> str:
+    """Where the targets registry lives. Targets are *intent* once their credentials are brokered
+    (``kubeconfig_from`` -- pointers, never keys), so the **committed** ``steadystate/`` is the
+    preferred home: it travels with the repo, and every entry point -- the CLI, the listener, an
+    MCP server a client spawns with no env -- finds it with nothing exported. Order: ``explicit``,
+    else ``STEADYSTATE_TARGETS``, else committed ``steadystate/targets.json`` if it exists, else
+    the legacy ``.steadystate/targets.json`` if THAT exists -- and for a fresh write (neither
+    yet), the committed location, so a new registry lands somewhere reviewed."""
+    if explicit:
+        return explicit
+    env = os.environ.get(TARGETS_ENV, "").strip()
+    if env:
+        return env
+    if Path(COMMITTED_TARGETS_FILE).exists():
+        return COMMITTED_TARGETS_FILE
+    if Path(DEFAULT_TARGETS_FILE).exists():
+        return DEFAULT_TARGETS_FILE
+    return COMMITTED_TARGETS_FILE
+
+
 def load_targets_from_env() -> dict[str, Target]:
-    """The targets registry: ``STEADYSTATE_TARGETS`` if set, else ``./.steadystate/targets.json``
-    when it exists -- the same resolution `scan --target` / `targets` use, so a `discover --create`
-    registry is picked up by the local `chat` REPL without exporting an env var. ``{}`` when neither
-    resolves, so a listener with no targets answers a probe cleanly instead of erroring."""
-    path = os.environ.get(TARGETS_ENV)
-    if path:
-        return load_targets(path)
-    default = Path(DEFAULT_TARGETS_FILE)
-    return load_targets(default) if default.exists() else {}
+    """The targets registry every surface resolves (scan --target / chat / MCP / `up`'s sweep):
+    ``STEADYSTATE_TARGETS`` if set (a set-but-unreadable path fails LOUDLY -- a typo must never
+    read as 'no targets'), else the committed ``steadystate/targets.json``, else the legacy
+    ``.steadystate/targets.json``. ``{}`` when none resolves, so a listener with no targets
+    answers a probe cleanly instead of erroring."""
+    env = os.environ.get(TARGETS_ENV, "").strip()
+    if env:
+        return load_targets(env)
+    path = resolve_targets_path()
+    return load_targets(path) if Path(path).exists() else {}
 
 
 def target_to_spec(target: Target) -> dict[str, str]:
