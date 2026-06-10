@@ -11,11 +11,26 @@ Everything the agent **knows** and **may do** lives in this repo, reviewed in PR
 | | Where | Why |
 |---|---|---|
 | **Intent** — KB docs, config, bound, targets, runbook, request recipes, workflows | committed (`steadystate/`, `silos/*/steadystate/`, `.github/workflows/`) | a human reviews what the agent knows and may do |
-| **Memory** — findings, mutes, audit, cost ledger, saved RCAs | host-local, gitignored (`.steadystate/state.db`) | re-derived by the next sweep; committing it would churn, race the live listener, and publish operational history |
+| **Memory** — findings, audit, cost ledger, saved RCAs | host-local, gitignored (`.steadystate/state.db`) | re-derived by the next sweep; committing it would churn, race the live listener, and publish operational history |
 
-**Do not commit `state.db` (or convert it to text).** Losing it costs history and mutes, never
-correctness — the next sweep rebuilds the picture from live infra. If audit durability matters,
-back the file up like any host data.
+**Do not commit `state.db` (or convert it to text).** Losing it costs history, never correctness —
+the next sweep rebuilds the picture from live infra.
+
+## The backup strategy — decisions to git, history to host backup
+
+- **Mutes are decisions, and they're committed.** `steadystate mute <fp> --commit` (or the bulk
+  `commit-mutes`) writes them to a per-wall `steadystate/mutes.json` (see
+  [prod-east's](silos/prod-east/steadystate/mutes.json)); every scan **imports them into whatever
+  db it finds**, so a rebuilt host or fresh wall self-heals on its first sweep — you never re-mute.
+  Fingerprints are content-derived, so the same finding matches everywhere. `unmute` warns when a
+  mute is committed (the file, not the db, is then the thing to change — a PR).
+- **The accountability trail exports.** A cron `steadystate --silo <wall> history --json --limit 0`
+  shipped to wherever you keep logs makes *who approved/dispatched/requested what* durable beyond
+  the db.
+- **Everything else** (findings/cost/saved RCAs) is host memory. If you want it durable too, back
+  the *file* up — `sqlite3 .steadystate/state.db ".backup /backups/state-$(date +%F).db"` in cron
+  is safe against the live writer, or run [Litestream](https://litestream.io) to replicate the WAL
+  continuously to object storage. Rented durability; no schema, no second database.
 
 ## The layout
 
