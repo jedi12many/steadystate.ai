@@ -39,6 +39,7 @@ from .inbound.base import (
     ADD_SOLUTION,
     ANALYZE,
     APPROVE,
+    ASK,
     CHECKS,
     COST,
     DECLINE,
@@ -495,6 +496,22 @@ def _render_analyze(fingerprint: str, state_path: str) -> str:
         store.save_analysis(finding.fingerprint, rca, datetime.now(UTC))
     saved = f"\n\n(saved -- `show {finding.fingerprint[:12]}` shows it; `--to github` sends it)"
     return f"root-cause analysis -- {finding.last_title}\n{'=' * 60}\n{rca}{saved}"
+
+
+def _render_ask(question: str, state_path: str) -> str:
+    """`ask <question>`: answer from the committed knowledge base (steadystate/kb/*.md) -- the
+    Tier-1 half of chat. Retrieval is deterministic (keyword scoring over the docs' sections); the
+    model only synthesizes an answer FROM the retrieved sections and cites the file -- with no
+    model, the sections themselves are the (honest) answer. Read-only; an LLM egress like analyze,
+    and its spend lands in the same cost ledger."""
+    from .inbound.translate import persist_llm_calls
+    from .reason.knowledge import ask_kb
+
+    analyst = _nl_analyst()
+    reply = ask_kb(question, analyst._complete if analyst is not None else None)
+    if analyst is not None:
+        persist_llm_calls(state_path, analyst.calls)
+    return reply
 
 
 def _send_analysis(fingerprint: str, state_path: str, surface: str) -> str:
@@ -1308,6 +1325,8 @@ def run_command(command: Command, state_path: str) -> str:
         return render_help()
     if command.verb == SUMMARY:
         return _render_summary(state_path)
+    if command.verb == ASK:
+        return _render_ask(command.argument, state_path)
     if command.verb == TARGETS:
         return _render_targets()
     if command.verb == PENDING:
