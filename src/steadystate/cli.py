@@ -2151,11 +2151,24 @@ def history(
         "", "--label", help="Filter to one environment label (from scan --label)."
     ),
     limit: int = typer.Option(20, "--limit", help="Show the most recent N entries."),
+    json_out: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit the entries as JSON (newest first) -- the archival export: a cron "
+        "`history --json --limit 0` shipped to wherever you keep logs makes 'who did what' "
+        "durable beyond the state db.",
+    ),
     state: Path = _STATE_OPTION,
 ) -> None:
-    """Show the remediation audit log: every approve/decline, newest first (append-only)."""
+    """Show the remediation audit log: every approve/decline/dispatch/request, newest first
+    (append-only). `--json` exports the full entries (detail included) for archival."""
+    from dataclasses import asdict
+
     with _open_store(state) as store:
-        rows = store.audit_log(limit=limit, environment=label or None)
+        rows = store.audit_log(limit=limit or 1_000_000, environment=label or None)
+    if json_out:
+        typer.echo(json.dumps([asdict(entry) for entry in rows], indent=2))
+        return
     if not rows:
         typer.echo("no remediation history.")
         return
