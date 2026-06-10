@@ -185,3 +185,57 @@ def test_send_analysis_guards(tmp_path):
         "a" * 64, db, "slack"
     )  # only github carries an RCA
     assert "analyze" in srv._send_analysis("a" * 64, db, "github")  # no saved RCA -> run analyze
+
+
+# -- grounding in prior RCAs: this fleet's history for the same failure ------------
+
+
+def test_prior_incidents_surfaces_earlier_rcas_of_the_same_category():
+    from steadystate.reason.analyze import prior_incidents
+
+    store = StateStore()
+    # an earlier CrashLoopBackOff that was analyzed...
+    store.record(
+        {"a" * 64: ("high", "web crashed (mon)")},
+        datetime(2026, 6, 1, tzinfo=UTC),
+        {"a" * 64: {"category": "CrashLoopBackOff"}},
+    )
+    store.save_analysis(
+        "a" * 64, "Root cause: nil CA client.\n...more frames...", datetime(2026, 6, 1, tzinfo=UTC)
+    )
+    # ...and a NEW one of the same category today
+    store.record(
+        {"b" * 64: ("high", "web crashed (today)")},
+        datetime(2026, 6, 8, tzinfo=UTC),
+        {"b" * 64: {"category": "CrashLoopBackOff"}},
+    )
+    finding = {f.fingerprint: f for f in store.all_findings()}["b" * 64]
+    out = prior_incidents(store, finding)
+    assert "PRIOR RCAs" in out and "CrashLoopBackOff" in out
+    assert (
+        "web crashed (mon)" in out and "Root cause: nil CA client." in out
+    )  # the prior root cause
+    assert "more frames" not in out  # only the first line of the prior RCA, not the whole thing
+
+
+def test_prior_incidents_is_empty_with_no_earlier_analyzed_incident():
+    from steadystate.reason.analyze import prior_incidents
+
+    store = StateStore()
+    store.record(
+        {"b" * 64: ("high", "web crashed")},
+        datetime(2026, 6, 8, tzinfo=UTC),
+        {"b" * 64: {"category": "CrashLoopBackOff"}},
+    )
+    finding = {f.fingerprint: f for f in store.all_findings()}["b" * 64]
+    assert prior_incidents(store, finding) == ""  # no prior analyzed incident -> no context
+
+
+def test_evidence_bundle_frames_with_prior_history_up_front():
+    bundle = _evidence_bundle(
+        _finding({"trace": _PANIC}), prior="PRIOR RCAs: - web: nil CA client last time"
+    )
+    assert "PRIOR RCAs" in bundle and "nil CA client last time" in bundle
+    assert bundle.index("PRIOR RCAs") < bundle.index(
+        "Policy(0x0)"
+    )  # history frames before the logs

@@ -80,7 +80,7 @@ from .probe.solutions import (
     vouch_solution,
 )
 from .reason.alert import Alert, Layer, Severity
-from .reason.analyze import analyze_finding
+from .reason.analyze import analyze_finding, prior_incidents
 from .reason.cost import roll_up, roll_up_by_period, scan_cost_line
 from .reason.llm import LLMAnalyst
 from .reason.report import Report
@@ -478,6 +478,7 @@ def _render_analyze(fingerprint: str, state_path: str) -> str:
         return "No findings yet -- run a `probe`/`scan` first, then `analyze <fingerprint>`."
     with StateStore(state_path) as store:
         finding, error = _lookup_finding(store, fingerprint)
+        prior = prior_incidents(store, finding) if finding is not None else ""
     if finding is None:
         return error
     analyst = _nl_analyst()
@@ -487,7 +488,7 @@ def _render_analyze(fingerprint: str, state_path: str) -> str:
             "over the captured evidence, not a guess. `show` gives the raw evidence; see `doctor`."
         )
     live = _refetch_logs(finding)  # fresh current + previous logs, best-effort -> investigate live
-    rca = analyze_finding(finding, analyst._complete, live_logs=live)
+    rca = analyze_finding(finding, analyst._complete, live_logs=live, prior=prior)
     if not rca:
         return "the model returned no analysis -- try again, or `show` the captured evidence."
     with StateStore(state_path) as store:  # persist it -- don't lose the RCA, or re-pay the model

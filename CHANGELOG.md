@@ -10,6 +10,8 @@ change between releases until 1.0.0. Releases are published as GitHub Releases.
 
 ### Added
 
+- **`analyze` is grounded in this fleet's history -- it knows whether a crash is the SAME root cause as before or NEW.** An RCA no longer reasons from one incident in isolation: it's now given the **prior RCAs for the same failure category** (their root-cause lines, most-recent first) and told to state up front whether this incident shares a past root cause or is new. So a recurring panic reads as *"same nil-CA-client bug as June 6"* instead of a fresh investigation every time -- continuity, and a smarter read on recurrence. The same "ground the model in fleet history" move the decider already makes, now for the RCA; wired into both manual `analyze` and the auto-analyze path. Cheap (one root-cause line per prior incident, capped), and `''` when there's no earlier analyzed incident.
+
 - **A fatal/panic now auto-analyzes itself -- the RCA is waiting in `show`, you don't have to ask.** A `scan` that detects a crash finding carrying captured crash logs (a stack trace or the `--previous` log window) now **runs the RCA for it automatically** and saves it -- so `show <fp>` already has the writeup, and a *scheduled* scan produces it unattended, ready to `analyze <fp> --to github` to the vendor. The tool found the panic; it shouldn't wait to be asked to explain it. Once per fingerprint (it never re-pays the model for one already analyzed), capped per scan to bound cost on a mass-crash, and gated by the LLM exactly like the scan's other reasoning (`--no-llm` / the kill switch / `--confirm-llm` all apply; no LLM -> a clean no-op). Best-effort: a wedged model never breaks the scan.
 
 ### Changed
