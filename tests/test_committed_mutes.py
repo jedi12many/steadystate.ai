@@ -182,3 +182,32 @@ def test_commit_mute_helper_merges_not_clobbers(tmp_path, monkeypatch):
     commit_mute("abc123", title="new one", by="jeff")
     committed = load_committed_mutes(path)
     assert set(committed) == {"other", "abc123"}
+
+
+# -- the archival export: `history --json` -------------------------------------------------------
+
+
+def test_history_json_exports_full_entries_for_archival(tmp_path):
+    import json as jsonlib
+
+    from steadystate.state import APPLIED, APPROVED, AuditEntry
+
+    state = str(tmp_path / "state.db")
+    with StateStore(state) as store:
+        store.record_audit(
+            AuditEntry(
+                fingerprint="fp1",
+                source="workflow",
+                drift_identity="dispatch redeploy.yml",
+                actor="jeff",
+                decision=APPROVED,
+                outcome=APPLIED,
+                detail="dispatched",
+            ),
+            NOW,
+        )
+    result = runner.invoke(app, ["history", "--json", "--state", state])
+    assert result.exit_code == 0
+    entries = jsonlib.loads(result.output)
+    assert entries[0]["actor"] == "jeff" and entries[0]["detail"] == "dispatched"
+    assert entries[0]["at"]  # the store's timestamp rides along -- a real archival record
