@@ -22,9 +22,27 @@ DEFAULT_CONFIG_FILE = "steadystate/config.toml"  # the committed convention
 CONFIG_ENV = "STEADYSTATE_CONFIG"
 
 
+def in_steadystate_tree() -> bool:
+    """Whether the CWD already sits inside a ``steadystate/`` tree -- e.g. a silo living at
+    ``steadystate/silos/<name>/`` in a consumer repo. There, the committed-intent prefix would
+    stutter (``steadystate/silos/x/steadystate/config.toml``), so every intent resolver probes the
+    BARE filename too (``./config.toml``, ``./targets.json``, ``./kb/``) and fresh writes land
+    bare. Outside such a tree nothing changes -- the bare probe stays off, so an unrelated
+    ``config.toml`` in a normal IaC repo can never be misread as steadystate's."""
+    return any(part.lower() == "steadystate" for part in Path.cwd().parts)
+
+
 def config_path() -> Path:
-    """Where the config lives: ``STEADYSTATE_CONFIG`` if set, else the committed default."""
-    return Path(os.environ.get(CONFIG_ENV, "").strip() or DEFAULT_CONFIG_FILE)
+    """Where the config lives: ``STEADYSTATE_CONFIG`` if set, else the committed
+    ``steadystate/config.toml``, else -- inside a ``steadystate/`` tree (a silo) -- the bare
+    ``./config.toml``."""
+    env = os.environ.get(CONFIG_ENV, "").strip()
+    if env:
+        return Path(env)
+    committed = Path(DEFAULT_CONFIG_FILE)
+    if committed.exists() or not in_steadystate_tree():
+        return committed
+    return Path("config.toml")
 
 
 def load_config(path: Path | None = None) -> dict:

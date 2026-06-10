@@ -10,7 +10,7 @@ Everything the agent **knows** and **may do** lives in this repo, reviewed in PR
 
 | | Where | Why |
 |---|---|---|
-| **Intent** — KB docs, config, bound, targets, runbook, request recipes, workflows | committed (`steadystate/`, `silos/*/steadystate/`, `.github/workflows/`) | a human reviews what the agent knows and may do |
+| **Intent** — KB docs, config, bound, targets, runbook, request recipes, workflows | committed (everything under `steadystate/`, plus `.github/workflows/`) | a human reviews what the agent knows and may do |
 | **Memory** — findings, audit, cost ledger, saved RCAs | host-local, gitignored (`.steadystate/state.db`) | re-derived by the next sweep; committing it would churn, race the live listener, and publish operational history |
 
 **Do not commit `state.db` (or convert it to text).** Losing it costs history, never correctness —
@@ -19,8 +19,8 @@ the next sweep rebuilds the picture from live infra.
 ## The backup strategy — decisions to git, history to host backup
 
 - **Mutes are decisions, and they're committed.** `steadystate mute <fp> --commit` (or the bulk
-  `commit-mutes`) writes them to a per-wall `steadystate/mutes.json` (see
-  [prod-east's](silos/prod-east/steadystate/mutes.json)); every scan **imports them into whatever
+  `commit-mutes`) writes them to a per-wall `mutes.json` (see
+  [prod-east's](steadystate/silos/prod-east/mutes.json)); every scan **imports them into whatever
   db it finds**, so a rebuilt host or fresh wall self-heals on its first sweep — you never re-mute.
   Fingerprints are content-derived, so the same finding matches everywhere. `unmute` warns when a
   mute is committed (the file, not the db, is then the thing to change — a PR).
@@ -34,32 +34,35 @@ the next sweep rebuilds the picture from live infra.
 
 ## The layout
 
+Everything steadystate lives under **one committed `steadystate/` folder** — inside that tree,
+intent files resolve **bare** (no `steadystate/silos/x/steadystate/...` stutter):
+
 ```
 agent-repo/
 ├── .github/workflows/            # the agent's own automation -- `runs` reads it, `dispatch` kicks it,
 │   └── redeploy-runners.yml      #   a `workflow`-kind solution targets it
-├── steadystate/                  # SHARED intent (every silo points up here)
-│   ├── kb/                       #   the `ask` knowledge base -- your team's docs
+├── steadystate/                  # the agent's whole brain, one folder
+│   ├── kb/                       #   the `ask` knowledge base -- shared by every wall
 │   │   ├── services.md
 │   │   ├── projects.md
 │   │   └── runners.md
 │   ├── solutions.json            #   the runbook (problem -> fix), shared across walls
-│   └── requests.json             #   vetted asks -> review-gated PRs in other repos
-├── silos/                        # one subfolder per WALL (deployment x region)
-│   ├── prod-east/
-│   │   └── steadystate/
-│   │       ├── config.toml       #   this wall's bound, routing, knowledge pointer
-│   │       └── targets.json      #   this wall's clusters, creds brokered per probe
-│   └── prod-west/
-│       └── steadystate/ ...
+│   ├── requests.json             #   vetted asks -> review-gated PRs in other repos
+│   └── silos/                    #   one subfolder per WALL (deployment x region)
+│       ├── prod-east/
+│       │   ├── config.toml       #     this wall's bound, routing, knowledge pointer
+│       │   ├── targets.json      #     this wall's clusters, creds brokered per probe
+│       │   ├── mutes.json        #     this wall's committed "benign" decisions
+│       │   └── .steadystate/     #     runtime memory (state.db) -- gitignored, auto-created
+│       └── prod-west/ ...
 └── .gitignore                    # .steadystate/ -- runtime memory never enters git
 ```
 
 **Do you need `silos/` at all?** Only for isolation walls. One wall = one state db + one targets
 file + one credential domain + one listener. If a single credential domain covers all your
-clusters, stay flat: put `config.toml` + `targets.json` at the repo root's `steadystate/`, list
+clusters, stay flat: put `config.toml` + `targets.json` in the repo root's `steadystate/`, list
 every cluster in the one targets file (the sweep covers the fleet), and run one `up`. Reach for
-`silos/` when deployments must not share creds or state — each silo is its own wall.
+`steadystate/silos/` when deployments must not share creds or state — each silo is its own wall.
 
 ## Bring-up
 
@@ -67,9 +70,9 @@ every cluster in the one targets file (the sweep covers the fleet), and run one 
 pip install 'steadystate[llm]'
 git clone <your agent repo> && cd agent-repo
 
-# 1. register the walls (auto-named from the subfolders)
-mkdir -p silos/prod-east/.steadystate silos/prod-west/.steadystate   # the (gitignored) memory dirs
-steadystate silo discover silos/
+# 1. register the walls (auto-named from the subfolders; a fresh silo is found by its
+#    committed intent files -- no mkdir dance, memory dirs auto-create on first run)
+steadystate silo discover steadystate/silos/
 
 # 2. the environment (per host; never committed -- see CONFIG.md)
 export ANTHROPIC_API_KEY=...                      # the LLM (NL chat, ask synthesis, analyze)
@@ -77,8 +80,8 @@ export STEADYSTATE_GITHUB_TOKEN=...               # fine-grained: actions r/w on
                                                   #   + workflow solutions), contents+PRs write on the
                                                   #   repos your requests.json names
 export STEADYSTATE_TEAMS_SECURITY_TOKEN=...       # from the channel's Outgoing Webhook
-# (no STEADYSTATE_TARGETS needed -- the committed steadystate/targets.json is the default, so
-#  the CLI, the listener, and a client-spawned MCP server all find each silo's targets as-is)
+# (no STEADYSTATE_TARGETS needed -- inside the steadystate/ tree each silo's bare targets.json
+#  is the default, so the CLI, the listener, and a client-spawned MCP server all find it as-is)
 
 # 3. one listener per wall, its own port
 steadystate --silo prod-east up --from teams --port 8723 --sweep 10m
@@ -93,22 +96,23 @@ port. The first sweep runs immediately; the channel is live when the banner prin
 ```json
 { "mcpServers": { "prod-east": {
     "command": "steadystate",
-    "args": ["mcp", "--dir", "/path/to/agent-repo/silos/prod-east"] } } }
+    "args": ["mcp", "--dir", "/path/to/agent-repo/steadystate/silos/prod-east"] } } }
 ```
 
 ## Per-silo config — sharing the KB, walling the rest
 
-`--silo` chdirs into the wall, so every relative path in its `config.toml` resolves there. The
-trick that keeps **one** knowledge base answering **every** channel: each silo points its
-`[knowledge] dir` *up* at the repo-level docs (see
-[silos/prod-east/steadystate/config.toml](silos/prod-east/steadystate/config.toml)):
+`--silo` chdirs into the wall, so every relative path in its `config.toml` resolves there — and
+because the wall sits inside the `steadystate/` tree, its intent files live **bare** (no inner
+`steadystate/`). The trick that keeps **one** knowledge base answering **every** channel: each
+silo points its `[knowledge] dir` *up* at the shared docs (see
+[steadystate/silos/prod-east/config.toml](steadystate/silos/prod-east/config.toml)):
 
 ```toml
 [knowledge]
-dir = "../../steadystate/kb"     # shared docs -- one KB, every wall
+dir = "../../kb"     # shared docs -- one KB, every wall
 ```
 
-Targets are per-wall and committed ([targets.json](silos/prod-east/steadystate/targets.json)) —
+Targets are per-wall and committed ([targets.json](steadystate/silos/prod-east/targets.json)) —
 they hold **pointers, never keys**: each cluster names a `kubeconfig_from` broker command
 (akeyless / vault / rancher / your script) that mints a fresh, short-lived kubeconfig per probe
 and deletes it after. The standing secret stays in the broker CLI's own auth. Shared runbook:
