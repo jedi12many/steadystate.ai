@@ -6,6 +6,7 @@ keeps ticking, and survives a failing sweep)."""
 
 from __future__ import annotations
 
+import re
 import threading
 
 import pytest
@@ -15,6 +16,16 @@ import steadystate.cli as cli
 from steadystate.cli import _sweep_forever, app
 
 runner = CliRunner()
+
+
+def _plain(output: str) -> str:
+    """CliRunner output with typer's rich error-box stripped -- no ANSI codes, no box borders,
+    wrapped lines rejoined -- so an assertion reads the MESSAGE, not the 80-column rendering the
+    CI runner's narrow terminal happens to wrap it into (a phrase split across box lines made
+    `in` fail on CI while passing on a wide local terminal)."""
+    text = re.sub(r"\x1b\[[0-9;]*m", "", output)
+    text = re.sub(r"[│╭╮╰╯─]", " ", text)
+    return " ".join(text.split())
 
 
 @pytest.fixture
@@ -34,7 +45,7 @@ def test_up_rejects_an_unknown_provider():
 def test_up_rejects_a_bad_sweep_interval(_teams_ready):
     result = runner.invoke(app, ["up", "--sweep", "soonish"])
     assert result.exit_code != 0
-    assert "20s, 10m, 1h" in result.output
+    assert "20s, 10m, 1h" in _plain(result.output)
 
 
 def test_up_with_a_sweep_needs_targets(_teams_ready, monkeypatch, tmp_path):
@@ -42,7 +53,8 @@ def test_up_with_a_sweep_needs_targets(_teams_ready, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)  # no default .steadystate/targets.json here either
     result = runner.invoke(app, ["up", "--sweep", "10m"])
     assert result.exit_code != 0
-    assert "needs targets" in result.output and "--sweep 0" in result.output
+    plain = _plain(result.output)
+    assert "needs targets" in plain and "--sweep 0" in plain
 
 
 def test_up_reports_a_broken_targets_registry_cleanly(_teams_ready, monkeypatch, tmp_path):
@@ -51,7 +63,7 @@ def test_up_reports_a_broken_targets_registry_cleanly(_teams_ready, monkeypatch,
     monkeypatch.setenv("STEADYSTATE_TARGETS", str(tmp_path / "nowhere.json"))
     result = runner.invoke(app, ["up", "--sweep", "10m"])
     assert result.exit_code != 0
-    assert "can't read the targets registry" in result.output
+    assert "can't read the targets registry" in _plain(result.output)
 
 
 def test_up_rejects_an_unconfigured_adapter(monkeypatch):
