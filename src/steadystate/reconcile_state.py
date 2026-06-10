@@ -27,6 +27,7 @@ from datetime import UTC, datetime, timedelta
 
 from .evidence import EvidenceKeys
 from .model import Drift
+from .mutes import apply_committed_mutes
 from .reason.alert import Alert
 from .reason.report import Report
 from .state import StateStore
@@ -170,6 +171,11 @@ def reconcile(
     surface treats them as a count, as before.
     """
     now = now or datetime.now(UTC)
+
+    # 0. Import the COMMITTED mutes (steadystate/mutes.json) the db doesn't already suppress --
+    #    so a fresh state.db self-heals on its first scan and an operator's "this is benign"
+    #    survives any db loss. Idempotent; a missing/malformed file is simply no committed mutes.
+    apply_committed_mutes(store, now)
 
     # 1. Every fingerprint seen this scan -> (severity, title) to remember (alerts + signals both
     #    count as "present", so a finding that drops below the Event bar isn't read as resolved).
