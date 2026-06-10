@@ -33,15 +33,21 @@ _CLIP = 2400  # chars of one section fed to the model / shown in the degrade -- 
 
 def kb_dir() -> Path:
     """Where the knowledge base lives: ``STEADYSTATE_KB`` > ``[knowledge] dir`` in the committed
-    config > the ``steadystate/kb`` convention. CWD-relative like the other intent files, so
+    config > the ``steadystate/kb`` convention -- bare ``./kb`` inside a ``steadystate/`` tree (a
+    silo), where the committed prefix would stutter. CWD-relative like the other intent files, so
     ``--silo`` (which chdirs) gets a per-silo KB."""
+    from ..config import in_steadystate_tree
+
     env = os.environ.get(KB_ENV, "").strip()
     if env:
         return Path(env)
     configured = config_table("knowledge").get("dir")
     if isinstance(configured, str) and configured.strip():
         return Path(configured.strip())
-    return Path(DEFAULT_KB_DIR)
+    default = Path(DEFAULT_KB_DIR)
+    if default.is_dir() or not in_steadystate_tree():
+        return default
+    return Path("kb")
 
 
 @dataclass(frozen=True)

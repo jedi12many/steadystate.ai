@@ -38,10 +38,21 @@ _META_KEYS = ("title", "by", "note", "added")  # what a reviewer sees next to th
 
 
 def resolve_mutes_path(explicit: str = "") -> str:
-    """Where the committed mutes live: explicit > ``STEADYSTATE_MUTES`` > the convention."""
+    """Where the committed mutes live: explicit > ``STEADYSTATE_MUTES`` > the committed
+    convention -- bare ``./mutes.json`` inside a ``steadystate/`` tree (a silo), where the
+    committed prefix would stutter."""
+    from .config import in_steadystate_tree
+
     if explicit:
         return explicit
-    return os.environ.get(MUTES_ENV, "").strip() or COMMITTED_MUTES_FILE
+    env = os.environ.get(MUTES_ENV, "").strip()
+    if env:
+        return env
+    if Path(COMMITTED_MUTES_FILE).exists():
+        return COMMITTED_MUTES_FILE
+    if in_steadystate_tree():
+        return "mutes.json"
+    return COMMITTED_MUTES_FILE
 
 
 def load_committed_mutes(path: str = "") -> dict[str, dict[str, str]]:

@@ -5,7 +5,7 @@ self_healing = "service"
 recoverable  = "none"
 
 [knowledge]
-dir = "../../steadystate/kb"    # the same shared docs
+dir = "../../kb"    # the same shared docs
 
 [workflows]
 repo = "your-org/agent-repo"

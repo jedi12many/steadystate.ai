@@ -69,17 +69,26 @@ def remove_silo(name: str) -> bool:
     return True
 
 
+def _is_silo(child: Path) -> bool:
+    """Whether a folder looks like a silo: it has runtime memory (``.steadystate/``), committed
+    intent (``steadystate/``), or -- the flat layout at ``steadystate/silos/<name>/`` -- bare
+    intent files directly inside. So a fresh, never-run silo is found without a ``mkdir`` dance."""
+    if (child / ".steadystate").is_dir() or (child / "steadystate").is_dir():
+        return True
+    return (child / "config.toml").is_file() or (child / "targets.json").is_file()
+
+
 def discover_silos(parent: str = "") -> dict[str, str]:
-    """Find silos under ``parent`` (default: cwd) by convention -- each immediate subfolder that has
-    a ``.steadystate/`` is a silo, named by the subfolder. So a ``prod/`` holding ``web1/ web2/
-    runners1/`` (each with its own ``.steadystate/``) yields those three by name. Returns
-    {name -> absolute folder}, empty when ``parent`` isn't a dir or nothing qualifies. Read-only --
-    it only looks; ``silo discover`` is what registers them."""
+    """Find silos under ``parent`` (default: cwd) by convention -- each immediate subfolder that
+    looks like one (see :func:`_is_silo`) is a silo, named by the subfolder. So a
+    ``steadystate/silos/`` holding ``prod-east/ prod-west/`` yields both by name, run or not.
+    Returns {name -> absolute folder}, empty when ``parent`` isn't a dir or nothing qualifies.
+    Read-only -- it only looks; ``silo discover`` is what registers them."""
     base = Path(parent).expanduser() if parent else Path.cwd()
     if not base.is_dir():
         return {}
     return {
         child.name: str(child.resolve())
         for child in sorted(base.iterdir())
-        if child.is_dir() and (child / ".steadystate").is_dir()
+        if child.is_dir() and _is_silo(child)
     }

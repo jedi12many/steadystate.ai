@@ -39,6 +39,8 @@ def resolve_solutions_path(explicit: str = "") -> str:
     ``explicit`` path, else ``STEADYSTATE_SOLUTIONS``, else committed ``steadystate/solutions.json``
     if it exists, else the legacy ``.steadystate/solutions.json`` if THAT exists -- and for a fresh
     write (neither yet), the committed location, so a new authored fix lands somewhere committed."""
+    from ..config import in_steadystate_tree
+
     if explicit:
         return explicit
     env = os.environ.get(SOLUTIONS_ENV, "").strip()
@@ -46,9 +48,13 @@ def resolve_solutions_path(explicit: str = "") -> str:
         return env
     if Path(COMMITTED_SOLUTIONS_FILE).exists():
         return COMMITTED_SOLUTIONS_FILE
+    # Inside a steadystate/ tree (a silo) the committed prefix would stutter -- bare IS committed.
+    in_tree = in_steadystate_tree()
+    if in_tree and Path("solutions.json").exists():
+        return "solutions.json"
     if Path(DEFAULT_SOLUTIONS_FILE).exists():
         return DEFAULT_SOLUTIONS_FILE
-    return COMMITTED_SOLUTIONS_FILE
+    return "solutions.json" if in_tree else COMMITTED_SOLUTIONS_FILE
 
 
 @dataclass(frozen=True)

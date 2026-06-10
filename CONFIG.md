@@ -54,6 +54,13 @@ group = "network-ops"
 
 `STEADYSTATE_CONFIG` points elsewhere; it's read CWD-relative, so `--silo` gets per-silo config.
 
+**Inside a `steadystate/` tree, intent files resolve bare.** A silo living at
+`steadystate/silos/<name>/` holds `config.toml` / `targets.json` / `checks.json` /
+`solutions.json` / `mutes.json` / `kb/` **directly** — no inner `steadystate/` stutter — and
+fresh writes land bare there too. The committed `steadystate/X` form still wins when present, and
+outside such a tree the bare probe is off (an unrelated `config.toml` in a normal repo is never
+misread). Runtime memory still lives in a gitignored `.steadystate/` per silo.
+
 ## Targeting & state
 
 | Variable | Default | Effect |

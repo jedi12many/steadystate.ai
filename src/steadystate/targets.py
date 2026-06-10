@@ -98,6 +98,8 @@ def resolve_targets_path(explicit: str = "") -> str:
     else ``STEADYSTATE_TARGETS``, else committed ``steadystate/targets.json`` if it exists, else
     the legacy ``.steadystate/targets.json`` if THAT exists -- and for a fresh write (neither
     yet), the committed location, so a new registry lands somewhere reviewed."""
+    from .config import in_steadystate_tree
+
     if explicit:
         return explicit
     env = os.environ.get(TARGETS_ENV, "").strip()
@@ -105,9 +107,14 @@ def resolve_targets_path(explicit: str = "") -> str:
         return env
     if Path(COMMITTED_TARGETS_FILE).exists():
         return COMMITTED_TARGETS_FILE
+    # Inside a steadystate/ tree (a silo at steadystate/silos/<name>/) the committed prefix would
+    # stutter -- the bare file IS the committed location there, and fresh writes land bare too.
+    in_tree = in_steadystate_tree()
+    if in_tree and Path("targets.json").exists():
+        return "targets.json"
     if Path(DEFAULT_TARGETS_FILE).exists():
         return DEFAULT_TARGETS_FILE
-    return COMMITTED_TARGETS_FILE
+    return "targets.json" if in_tree else COMMITTED_TARGETS_FILE
 
 
 def load_targets_from_env() -> dict[str, Target]:
