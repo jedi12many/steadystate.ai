@@ -91,11 +91,12 @@ from .sources.k8s import HelmLiveSource, KustomizeLiveSource, capture_baseline
 from .state import OPEN, Finding, PendingAction, StateStore, filter_findings
 from .sweep import render_sweep, sweep_targets
 from .targets import (
-    DEFAULT_TARGETS_FILE,
+    COMMITTED_TARGETS_FILE,
     TARGETS_ENV,
     Target,
     load_targets,
     load_targets_from_env,
+    resolve_targets_path,
     save_targets,
     target_issues,
 )
@@ -366,8 +367,10 @@ def _auto_apply(store: StateStore, fingerprints: list[str]) -> None:
 
 
 def _targets_file() -> Path:
-    """Targets registry path: STEADYSTATE_TARGETS if set, else .steadystate/targets.json."""
-    return Path(os.environ.get(TARGETS_ENV) or DEFAULT_TARGETS_FILE)
+    """Targets registry path: STEADYSTATE_TARGETS if set, else the committed
+    steadystate/targets.json, else the legacy .steadystate/targets.json (see
+    ``resolve_targets_path`` -- targets are intent once their creds are brokered)."""
+    return Path(resolve_targets_path())
 
 
 def _load_registry() -> tuple[Path, dict[str, Target]]:
@@ -2681,7 +2684,7 @@ def _create_targets(
     stopped minikube, a deleted context still lingering in the kubeconfig) -- one fast `kubectl
     cluster-info` per live target, so a dead cluster never lands in the registry. Only ``k8s-live``
     targets are pinged; file/host sources are never contacted."""
-    target_file = Path(os.environ.get(TARGETS_ENV) or DEFAULT_TARGETS_FILE)
+    target_file = Path(resolve_targets_path())
     proposed = proposed_targets(findings, Path.cwd())
     # Fold in the live-discovered targets, but drop any the cwd-local pass already covers -- so a
     # compose project *in* the cwd isn't registered twice under two names. Key on (source, path,
@@ -2731,7 +2734,13 @@ def _create_targets(
         )
     for name in removed:
         typer.echo(f"  {name:<26} [removed (stale)]")
-    typer.echo(f"point the listener at it:  export {TARGETS_ENV}={target_file}")
+    if str(target_file).replace("\\", "/") == COMMITTED_TARGETS_FILE:
+        typer.echo(
+            "(the committed default -- every entry point finds it automatically; "
+            "version-control it, the entries are pointers, never keys)"
+        )
+    else:
+        typer.echo(f"point the listener at it:  export {TARGETS_ENV}={target_file}")
 
 
 @app.command()

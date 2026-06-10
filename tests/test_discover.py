@@ -863,7 +863,7 @@ def test_discover_create_cli_writes_targets_file(tmp_path, monkeypatch):
     from steadystate.discover import _slug
 
     name = _slug(tmp_path.name)  # named after the cwd (sanitized)
-    written = load_targets(tmp_path / ".steadystate/targets.json")
+    written = load_targets(tmp_path / "steadystate/targets.json")
     assert name in written
     assert written[name].source == "terraform"
 
@@ -910,7 +910,7 @@ def test_discover_deep_and_create_stack(tmp_path, monkeypatch):
     assert "DEEP INSPECTION (live, read-only):" in result.stdout
     assert "TARGETS ->" in result.stdout
     # and the targets file was actually written from that same pass
-    written = load_targets(tmp_path / ".steadystate/targets.json")
+    written = load_targets(tmp_path / "steadystate/targets.json")
     assert written[_slug(tmp_path.name)].source == "terraform"
 
 
@@ -943,7 +943,7 @@ def test_discover_deep_create_registers_live_compose_project(tmp_path, monkeypat
 
     result = CliRunner().invoke(app, ["discover", "--deep", "--create"])
     assert result.exit_code == 0
-    written = load_targets(tmp_path / ".steadystate/targets.json")
+    written = load_targets(tmp_path / "steadystate/targets.json")
     assert "shop" in written
     assert written["shop"].source == "docker-compose" and written["shop"].path == str(proj)
 
@@ -973,7 +973,7 @@ def test_discover_deep_create_dedupes_cwd_compose_project(tmp_path, monkeypatch)
 
     result = CliRunner().invoke(app, ["discover", "--deep", "--create"])
     assert result.exit_code == 0
-    written = load_targets(tmp_path / ".steadystate/targets.json")
+    written = load_targets(tmp_path / "steadystate/targets.json")
     assert len(written) == 1  # the cwd project, once -- not base + deep duplicated
     (only,) = written.values()
     assert only.source == "docker-compose" and only.path == str(tmp_path)
@@ -1308,7 +1308,7 @@ def test_discover_create_registers_a_target_per_kube_context(tmp_path, monkeypat
 
     result = CliRunner().invoke(app, ["discover", "--create"])
     assert result.exit_code == 0, result.output
-    written = load_targets(tmp_path / ".steadystate/targets.json")
+    written = load_targets(tmp_path / "steadystate/targets.json")
     assert len(written) == 2
     assert {t.context for t in written.values()} == {"prod-cluster", "gke_proj_zone_stg"}
     assert all(t.source == "k8s-live" and t.path == "" for t in written.values())
@@ -1330,4 +1330,4 @@ def test_discover_create_kube_contexts_is_idempotent(tmp_path, monkeypatch):
 
     CliRunner().invoke(app, ["discover", "--create"])
     CliRunner().invoke(app, ["discover", "--create"])  # second run must not duplicate
-    assert len(load_targets(tmp_path / ".steadystate/targets.json")) == 1
+    assert len(load_targets(tmp_path / "steadystate/targets.json")) == 1

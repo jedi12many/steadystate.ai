@@ -62,7 +62,8 @@ export STEADYSTATE_GITHUB_TOKEN=...               # fine-grained: actions r/w on
                                                   #   + workflow solutions), contents+PRs write on the
                                                   #   repos your requests.json names
 export STEADYSTATE_TEAMS_SECURITY_TOKEN=...       # from the channel's Outgoing Webhook
-export STEADYSTATE_TARGETS=steadystate/targets.json   # committed targets (silo-relative)
+# (no STEADYSTATE_TARGETS needed -- the committed steadystate/targets.json is the default, so
+#  the CLI, the listener, and a client-spawned MCP server all find each silo's targets as-is)
 
 # 3. one listener per wall, its own port
 steadystate --silo prod-east up --from teams --port 8723 --sweep 10m

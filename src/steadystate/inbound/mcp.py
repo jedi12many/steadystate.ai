@@ -415,13 +415,17 @@ def startup_report(
     from ..config import config_path
     from ..probe.custom import load_checks, resolve_checks_path
     from ..probe.solutions import load_solutions, resolve_solutions_path
-    from ..targets import DEFAULT_TARGETS_FILE, TARGETS_ENV
+    from ..targets import load_targets_from_env, resolve_targets_path
 
     grant = "write" if write else ("author" if author else "read-only")
     lines = [f"steadystate MCP server -- wall: {label or '(unnamed)'} | grant: {grant}"]
     lines.append(f"  cwd          {os.getcwd()}")
     lines.append(f"  state.db     {state_path}")
-    lines.append(f"  targets      {os.environ.get(TARGETS_ENV) or DEFAULT_TARGETS_FILE}")
+    try:  # the resolved registry + how many targets an agent can actually probe from here
+        target_count = f"  ({len(load_targets_from_env())} loaded)"
+    except (OSError, ValueError):
+        target_count = "  (UNREADABLE -- check the path)"
+    lines.append(f"  targets      {resolve_targets_path()}{target_count}")
     lines.append(f"  checks       {resolve_checks_path()}  ({len(load_checks())} loaded)")
     lines.append(f"  solutions    {resolve_solutions_path()}  ({len(load_solutions())} loaded)")
     cfg = config_path()
