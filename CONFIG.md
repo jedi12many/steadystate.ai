@@ -39,6 +39,17 @@ dir = "steadystate/kb"  # the default; STEADYSTATE_KB overrides per run
 [workflows]             # the agent's own automation -- `runs` reads it, `dispatch` kicks it
 repo = "your-org/agent-repo"  # default: the GitHub surface's repo (env, or the cwd's origin);
                               # STEADYSTATE_WORKFLOWS_REPO overrides per run
+
+[servicenow]                      # ticket ROUTING -- the right team gets the incident
+assignment_group = "platform-ops" # the default queue (optional; STEADYSTATE_SERVICENOW_GROUP overrides)
+
+[[servicenow.route]]              # first match wins, top-down (matched like solutions)
+for = "NetworkUnreachable"        # exact finding category / check name -> the network team
+group = "network-ops"
+
+[[servicenow.route]]
+match = "dns|gateway|proxy"       # OR a title regex
+group = "network-ops"
 ```
 
 `STEADYSTATE_CONFIG` points elsewhere; it's read CWD-relative, so `--silo` gets per-silo config.
@@ -107,7 +118,7 @@ See **[LLM_SAFETY.md](./LLM_SAFETY.md)** for how these compose into the control 
 | `SLACK_WEBHOOK_URL` · `TEAMS_WEBHOOK_URL` · `DISCORD_WEBHOOK_URL` | Chat |
 | `STEADYSTATE_WEBHOOK_URL` | Generic JSON webhook (Opsgenie / Jira / a bus) |
 | `STEADYSTATE_PAGERDUTY_ROUTING_KEY` | PagerDuty (Events API v2, deduped by fingerprint) |
-| `STEADYSTATE_SERVICENOW_INSTANCE` · `_USER` · `_PASSWORD` · `_TABLE` · `_AUTOCLOSE` · `_CLOSE_CODE` | ServiceNow incidents |
+| `STEADYSTATE_SERVICENOW_INSTANCE` · `_USER` · `_PASSWORD` · `_TABLE` · `_AUTOCLOSE` · `_CLOSE_CODE` · `_GROUP` | ServiceNow incidents — deduped by fingerprint, auto-resolved when the finding clears, and **routed to the right team's queue** via the committed `[servicenow]` routing map (category/title → `assignment_group`; `_GROUP` sets/overrides the default). |
 | `STEADYSTATE_GITHUB_TOKEN` (or `GITHUB_TOKEN`) · `_REPO` · `_SEVERITY` · `_AUTOCLOSE` · `GITHUB_API_URL` | **GitHub issues** (`--to github`) — opened only when *sure* (a severity gate, default `high`), **one per finding** (deduped by a fingerprint marker), and **auto-closed when it clears**. Closing the loop. The same token also powers the **`workflow` solution kind** and the **`runs`/`dispatch` verbs** over the agent's workflows repo (`[workflows] repo` / `STEADYSTATE_WORKFLOWS_REPO`) — add `actions:read`/`actions:write` respectively. |
 | `PROMETHEUS_URL` · `PROMETHEUS_PUSHGATEWAY_URL` | Metrics |
 | `GRAFANA_URL` · `GRAFANA_TOKEN` | Dashboard annotations |
