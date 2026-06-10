@@ -1185,6 +1185,22 @@ def analyze(
         typer.echo(_send_analysis(fingerprint, str(state), to.strip().lower()))
 
 
+@app.command()
+def ask(
+    question: list[str] = typer.Argument(..., help="The question, free text -- quotes optional."),
+    state: Path = _STATE_OPTION,
+) -> None:
+    """Answer a question from the team's committed **knowledge base** (`steadystate/kb/*.md`) --
+    'how do I request a new project?', 'what services do you offer?'. The Tier-1 half of chat:
+    process/how-to answers come from the docs the team already writes (committed beside the IaC,
+    reviewed in PRs), with the source cited; `summary`/`health` answer the live half. Retrieval is
+    deterministic (keyword scoring); the model only synthesizes FROM the retrieved sections -- and
+    with no LLM, the matching sections themselves are the (honest) answer."""
+    from .verbs import _render_ask
+
+    typer.echo(_render_ask(" ".join(question), str(state)))
+
+
 class _WatchDone(Exception):  # noqa: N818 -- a control-flow signal, not an error
     """Raised to break the watch loop on the first match (`--once`)."""
 

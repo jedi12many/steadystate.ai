@@ -32,6 +32,9 @@ recoverable  = "none"       # ("none" forbids it). STEADYSTATE_BOUND overrides p
 [ci]                    # the GitOps gate (inherits source/path from [defaults])
 fail_on = "high"        # any | low | medium | high | critical | none
 to      = "console"     # add "github" to open an issue; deliver = "github-pr" for a reconcile PR
+
+[knowledge]             # where `ask` reads the team's committed docs from
+dir = "steadystate/kb"  # the default; STEADYSTATE_KB overrides per run
 ```
 
 `STEADYSTATE_CONFIG` points elsewhere; it's read CWD-relative, so `--silo` gets per-silo config.
@@ -45,6 +48,7 @@ to      = "console"     # add "github" to open an issue; deliver = "github-pr" f
 | `STEADYSTATE_CHECKS` | `steadystate/checks.json` | The custom-health-checks file (also `--checks`). Checks are **intent, not runtime state**, so the default is the **committed** `steadystate/` (undotted) — reviewed in PRs, travels with the IaC — falling back to the legacy gitignored `.steadystate/checks.json` if a repo already has one. A fresh check lands in the committed location. |
 | `STEADYSTATE_SOLUTIONS` | `steadystate/solutions.json` | The authored **runbook** (also `--solutions`), defaulting to the **committed** `steadystate/` (undotted) like checks (legacy `.steadystate/` still read): documented `problem → fix` entries (a command / playbook / reboot), each signed by an `author`, that surface against a matching finding in `show` and can be **approved to run**. A check teaches steadystate to *see* a problem; a solution teaches it the *fix*. Intent, not state — *version-control it* so fixes are reviewed and keep their audit. (Acting on one still passes the bound + approval + audit.) |
 | `STEADYSTATE_SOLUTION_AUTO` | off | Opt-in to auto-apply a matched solution without a human. **Capped (issue #253):** an open `command`/`playbook` is **never** auto-applied on its *self-declared* bound — its `run` has no allow-pattern and the declared impact/reversibility is the author's word, so it always waits for `approve`. A safe unattended path returns only for a *vouched* solution (committed to `main`, or SSO-vouched in chat). A deliberately **separate** opt-in from drift/decider autonomy. Audited as `auto`; runs once per fingerprint. |
+| `STEADYSTATE_KB` | `steadystate/kb` | The committed **knowledge base** folder `ask` answers from (also `[knowledge] dir` in config.toml): the team's own markdown -- services offered, how-tos, onboarding -- committed beside the IaC and reviewed in PRs like checks/solutions. Retrieval is deterministic (keyword scoring over heading-delimited sections); the model only synthesizes from the retrieved sections, citing the file. See [docs/knowledge-base.md](./docs/knowledge-base.md). |
 | `KUBECONFIG` | kube default | Cluster access for `kubernetes`/`k8s-live` sources, live probes, and `verify` (standard kubectl variable). |
 | *(`--state`, not an env var)* | `.steadystate/state.db` | The SQLite memory db (findings / pendings / history / spend). One per wall; pass it explicitly to isolate. |
 

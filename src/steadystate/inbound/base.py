@@ -27,6 +27,7 @@ from typing import Protocol, runtime_checkable
 # every adapter parses its own payload shape down to one of these, so the cores never see a
 # vendor field. approve/decline act (and carry a fingerprint); help/pending are read-only.
 APPROVE = "approve"
+ASK = "ask"
 DECLINE = "decline"
 HELP = "help"
 PENDING = "pending"
@@ -67,6 +68,13 @@ COMMANDS: dict[str, tuple[str, str]] = {
         "summary",
         "a one-glance status -- open findings by severity, what's pending your approval, the "
         "homeostat's posture, and the single worst thing right now",
+    ),
+    ASK: (
+        "ask <question>",
+        "answer a question from the team's committed knowledge base (steadystate/kb/*.md) -- "
+        "'how do I request a new project?', 'what services do you offer?' -- the Tier-1 half of "
+        "chat: process/how-to answers come from the docs (source cited), live answers from "
+        "summary/health/findings",
     ),
     TARGETS: ("targets", "list the probe targets this listener knows"),
     PENDING: ("pending", "show remediations awaiting approval, with their fingerprints"),
@@ -257,6 +265,7 @@ def render_help() -> str:
 _TOOL_ARGS: dict[str, tuple[tuple[str, bool], ...]] = {
     HELP: (),
     SUMMARY: (),
+    ASK: (("question", True),),  # the question, free text -- taken verbatim
     TARGETS: (),
     PENDING: (),
     HEALTH: (("workload", False),),  # optional: scope the verdict to one workload + correlate
@@ -293,6 +302,7 @@ _TOOL_ARGS: dict[str, tuple[tuple[str, bool], ...]] = {
 _TOOL_EFFECT: dict[str, str] = {
     HELP: "read-only",
     SUMMARY: "read-only",
+    ASK: "read-only",  # reads the committed docs + an LLM egress (like analyze); never mutates
     HEALTH: "read-only",  # runs smoke (GET/HEAD) + reads findings -- active but never mutates
     POSTURE: "read-only",  # a self-report; an agent can always ask "am I bounded?" (no grant)
     METRICS: "read-only",  # reads your monitoring (GET) -- consumes it, never mutates
@@ -361,6 +371,12 @@ def command_from_text(text: str, actor: str) -> Command | None:
         if verb not in COMMANDS:
             continue
         rest = tokens[index + 1 :]
+        if verb == ASK:
+            # The question is free text, taken VERBATIM -- no flag/argument splitting, so a
+            # question containing a flag word ("how much does the llm cost?") isn't eaten.
+            if rest:
+                return Command(ASK, actor, " ".join(rest))
+            continue  # a bare `ask` carries no question -> not actionable
         flags = frozenset(_FLAG_ALIASES[t.lower()] for t in rest if t.lower() in _FLAG_ALIASES)
         args = [t for t in rest if t.lower() not in _FLAG_ALIASES]
         if verb in _NEEDS_TWO:

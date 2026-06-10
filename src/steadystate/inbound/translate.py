@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 from .base import (
     _TOOL_EFFECT,
     APPROVE,
+    ASK,
     COMMANDS,
     DECLINE,
     FIX,
@@ -75,6 +76,11 @@ def confident_command(text: str, actor: str) -> Command | None:
     command = command_from_text(text, actor)
     if command is None:
         return None
+    # `ask` grabs the whole rest of the line as its question, so a sentence that merely CONTAINS
+    # the word ("how do I ask for more quota?") would lose its lead-in. Only a line that leads
+    # with the verb is a confident, typed `ask`; anything else goes to the model whole.
+    if command.verb == ASK and text.split()[0].lower() != ASK:
+        return None
     # `run <action> <fingerprint>`: the fingerprint is the second arg; for the rest it's the first.
     reference = command.argument2 if command.verb == RUN else command.argument
     # Guard a finding reference: required ones always, an optional one only when it's actually
@@ -107,7 +113,10 @@ _SYSTEM = (
     "(it runs real, deterministic data). Use an answer for a genuine question that no single "
     "command settles -- a 'why', a 'should I', a summary across findings -- answering ONLY from "
     "the live state given below; never invent a fact, and if the answer isn't in that state say "
-    "which command would surface it (e.g. `probe`, `show <fp>`). Keep an answer SHORT: at most two "
+    "which command would surface it (e.g. `probe`, `show <fp>`). A process / how-do-I / 'what "
+    "services do you offer' question -- one about the team's services rather than the live state "
+    "-- is the `ask` command: pass the question as the argument (it answers from the committed "
+    "knowledge base, citing the doc). Keep an answer SHORT: at most two "
     "plain sentences, leading with the answer itself. This is a chat reply, not a report -- no "
     "step-by-step plans, no numbered or bulleted lists, no multiple options or runbooks unless the "
     "operator explicitly asks for them; give the single most useful next step, not every "
