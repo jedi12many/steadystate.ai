@@ -19,6 +19,26 @@ Config (HTTP Basic auth against the Table API):
   STEADYSTATE_SERVICENOW_TABLE        target table (default "incident")
   STEADYSTATE_SERVICENOW_CLOSE_CODE   close_code for auto-resolve (default "Solved (Permanently)")
   STEADYSTATE_SERVICENOW_AUTOCLOSE    set false/0/no to disable auto-resolve (default on)
+  STEADYSTATE_SERVICENOW_GROUP        default assignment_group (overrides config.toml's)
+
+**Routing -- the right team gets the ticket.** A committed ``[servicenow]`` table in config.toml
+maps findings to assignment groups, matched the same way solutions match (``for`` = exact
+category / check name, ``match`` = a title regex; both set -> both must hold; first route wins,
+top-down; ``assignment_group`` is the default when nothing routes)::
+
+    [servicenow]
+    assignment_group = "platform-ops"        # the default queue (optional)
+
+    [[servicenow.route]]
+    for = "NetworkUnreachable"               # a network problem -> the network team
+    group = "network-ops"
+
+    [[servicenow.route]]
+    match = "dns|gateway|proxy"
+    group = "network-ops"
+
+The ``group`` value is passed verbatim as the incident's ``assignment_group`` -- use the group's
+sys_id, or its exact name if your instance resolves reference display values.
 
 Outbound only; stdlib urllib, http(s)-gated by ``safe_urlopen``. Honest degrade when
 unconfigured -- says so once and sends nothing, never pretends it delivered.
@@ -31,6 +51,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -38,6 +59,7 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 from .._http import safe_urlopen
+from ..config import config_table
 from ..reason.alert import Alert
 from ..reason.report import Report
 
@@ -88,16 +110,66 @@ def _description(alert: Alert) -> str:
     return "\n".join(line for line in lines if line)
 
 
+def _routes() -> tuple[list[dict], str]:
+    """The committed routing map from config.toml's ``[servicenow]`` table: the ``[[route]]``
+    entries in file order, plus the default ``assignment_group`` (``STEADYSTATE_SERVICENOW_GROUP``
+    overrides it, 12-factor). ``([], "")`` when nothing is configured -- routing is opt-in."""
+    table = config_table("servicenow")
+    default = (
+        os.environ.get("STEADYSTATE_SERVICENOW_GROUP") or str(table.get("assignment_group") or "")
+    ).strip()
+    raw = table.get("route")
+    routes = [r for r in raw if isinstance(r, dict)] if isinstance(raw, list) else []
+    return routes, default
+
+
+def assignment_group_for(alert: Alert, routes: list[dict] | None = None, default: str = "") -> str:
+    """The assignment group this alert's incident should land in: the FIRST route (top-down) whose
+    matcher hits, else the default, else "" (leave the instance's own assignment alone). Matching
+    mirrors the runbook's: ``for`` is an exact symptom category / check name, ``match`` a title
+    regex; an entry with both must satisfy both. An uncompilable ``match`` skips that route (it
+    must never eat the ticket). Reads config when ``routes`` isn't injected."""
+    if routes is None:
+        routes, default = _routes()
+    title = alert.title or ""
+    categories = {
+        str(getattr(symptom, "category", "")).strip().lower() for symptom in alert.symptoms
+    }
+    for route in routes:
+        group = str(route.get("group") or "").strip()
+        if not group:
+            continue
+        for_category = str(route.get("for") or "").strip().lower()
+        pattern = str(route.get("match") or "").strip()
+        strict_ok = bool(for_category) and for_category in categories
+        try:
+            regex_ok = bool(pattern) and re.search(pattern, title, re.IGNORECASE) is not None
+        except re.error:
+            continue  # a broken route never eats the ticket; `doctor`-grade noise, not a crash
+        if for_category and pattern:
+            if strict_ok and regex_ok:
+                return group
+        elif strict_ok or regex_ok:
+            return group
+    return default
+
+
 def format_servicenow_incident(alert: Alert) -> dict:
-    """One Alert as a ServiceNow Table API incident record. Pure + testable. ``short_description``
-    is capped at ServiceNow's 160-char limit; ``correlation_id`` is the dedup key."""
-    return {
+    """One Alert as a ServiceNow Table API incident record. Pure given config + testable.
+    ``short_description`` is capped at ServiceNow's 160-char limit; ``correlation_id`` is the
+    dedup key; ``assignment_group`` is set only when the committed routing map (or its default)
+    names a team -- so a network finding lands in the network team's queue, not a catch-all."""
+    fields = {
         "short_description": alert.title[:160],
         "description": _description(alert),
         "urgency": _SN_URGENCY.get(alert.severity.value, "2"),
         "impact": _SN_URGENCY.get(alert.severity.value, "2"),
         "correlation_id": _correlation_id(alert),
     }
+    group = assignment_group_for(alert)
+    if group:
+        fields["assignment_group"] = group
+    return fields
 
 
 class ServiceNowSurface:
