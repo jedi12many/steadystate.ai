@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
+from .broker import target_credentials
 from .engine import build_report
 from .reason.pipeline import group_symptom_alerts
 from .reason.report import Report
@@ -84,16 +85,21 @@ def sweep_targets(
     built: list[tuple[str, Report | None, str]] = []
     for name, target in sorted(targets.items()):
         try:
-            report = build_report(
-                target.source,
-                Path(target.path),
-                probe="auto",
-                label=target.label,
-                context=target.context,
-                kubeconfig=target.kubeconfig,  # a cwd kubeconfig the context lives in (else "")
-                inventory=target.inventory,  # an ansible-live target's inventory (else "")
-                scan_logs=scan_logs,
-            )
+            # A brokered target (kubeconfig_from) mints its credential HERE, fresh per sweep, and
+            # the temp file dies with this probe -- so a long-running `up` never holds an expired
+            # kubeconfig. A failed broker raises (fail closed) and lands in the same per-target
+            # not-ok line as an unreachable cluster, never sinking the sweep.
+            with target_credentials(target) as kubeconfig:
+                report = build_report(
+                    target.source,
+                    Path(target.path),
+                    probe="auto",
+                    label=target.label,
+                    context=target.context,
+                    kubeconfig=kubeconfig,  # static, ambient (""), or just-brokered
+                    inventory=target.inventory,  # an ansible-live target's inventory (else "")
+                    scan_logs=scan_logs,
+                )
             built.append((name, report, ""))
         except Exception as exc:  # an unreachable/misconfigured cluster must not sink the sweep
             built.append((name, None, str(exc)))

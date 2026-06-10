@@ -1413,6 +1413,8 @@ def targets(
         # A live target shows its context (the cluster it reaches); a file target shows its path.
         locator = f"context={entry.context}" if entry.context else entry.path
         line = f"  {name:<26} {entry.source:<14} {locator}"
+        if entry.kubeconfig_from:  # minted fresh per probe -- worth seeing at a glance
+            line += "  [creds brokered at probe time]"
         if check:
             issues = target_issues(
                 entry, known_sources, known_probes, lambda p: Path(p).exists(), PATHLESS_SOURCES
@@ -2406,6 +2408,7 @@ _DIALS: tuple[tuple[str, str, str], ...] = (
     ("STEADYSTATE_MODEL", DEFAULT_MODEL, "default model"),
     ("STEADYSTATE_MODEL_CHEAP", DEFAULT_CHEAP_MODEL, "cheap tier (routing callers, e.g. chat-nl)"),
     ("STEADYSTATE_REACHABLE_TIMEOUT", "8s", "cluster reachability probe timeout (0 = no cap)"),
+    ("STEADYSTATE_BROKER_TIMEOUT", "30", "kubeconfig_from broker command timeout (seconds)"),
     ("STEADYSTATE_RESOLVE_AFTER", "30m", "grace before a gone finding resolves (0 = immediate)"),
     ("STEADYSTATE_PATCH_DIR", ".steadystate/patches", "where remediation patch files are written"),
     ("STEADYSTATE_SILOS", "~/.steadystate/silos.json", "named-silo registry (`silo add` / --silo)"),

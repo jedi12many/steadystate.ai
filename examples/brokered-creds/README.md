@@ -53,13 +53,48 @@ scan operates on a freshly-brokered, short-lived credential — no standing kube
 - **Rent the vault, don't rebuild it.** Vault / Rancher do this already; the wrapper is
   just glue. steadystate stays out of the secrets-management business.
 
+## The built-in connector — `kubeconfig_from` (for long-running processes)
+
+The wrapper above re-brokers per **run**, which fits cron. A long-running process — `steadystate up`
+(the chat listener + sweep) or the MCP server — holds whatever it launched with, so a short-lived
+kubeconfig expires mid-session. For those, skip the wrapper and let the target broker **itself**, at
+probe time, in `targets.json`:
+
+```json
+{
+  "prod-gateway": {
+    "source": "k8s-live",
+    "context": "prod",
+    "kubeconfig_from": "akeyless get-secret-value --name /k8s/prod/kubeconfig"
+  }
+}
+```
+
+Any CLI that prints a kubeconfig to stdout works — `akeyless get-secret-value`,
+`vault kv get -field=config secret/k8s/prod`, a `rancher`/`gcloud` one-liner, or your own script.
+Every probe (every sweep tick of `up`, every chat `probe`, every MCP call) runs the command fresh:
+the credential lands in a private temp file, is used for exactly that probe, and is **deleted the
+moment the probe finishes**. The standing secret (the vault token) never touches steadystate at
+all — it lives in the broker CLI's own auth.
+
+Discipline (the same as authored solutions): the command runs as an **argv, no shell** — pipes and
+redirection won't work; wrap any unwrapping (a JSON field, two commands) in a script and point
+`kubeconfig_from` at it. Failure is **closed**: a failed/hung/missing broker marks the target
+unreachable with the exit code and *stderr* (never stdout — that's the credential), and the probe
+simply doesn't run. Output that doesn't look like a kubeconfig is refused, so a vault error message
+is never handed to kubectl as creds. `STEADYSTATE_BROKER_TIMEOUT` (default 30s) caps the wait, and
+`steadystate targets` marks brokered targets so you see at a glance which credentials are minted
+fresh.
+
 ## Honest limits
 
-- **This fits one-shot / scheduled runs.** A `cron` probe re-brokers every run — perfect. But a
-  **long-running `steadystate mcp` server** holds the kubeconfig it launched with, so a short-lived
-  one will expire mid-session. For that, either restart the server on a schedule, or use a built-in
-  *credential connector* (a seam that re-brokers at probe time) — a deliberate future option, not in
-  this example.
+- **The wrapper fits one-shot / scheduled runs; the connector fits long-running ones.** A `cron`
+  probe re-brokers every run — keep the wrapper there if you like its explicitness. A long-running
+  `up` / `mcp` process should use `kubeconfig_from`, so every probe re-brokers on its own.
+- **`kubeconfig_from` is operator intent — review it like code.** It's a command steadystate will
+  execute; it lives in the targets registry you commit and review. Nothing live (chat / MCP) can
+  author a target, so the only way to plant a broker command is write access to the repo or the
+  machine — the same trust the wrapper script already required.
 - **Never log the secret.** No `echo "$TOKEN"`, no `set -x` around step 1. `set -euo pipefail` so a
   failed fetch aborts rather than running with stale or empty creds.
 - **Least privilege is still the hard limit.** Scope the Rancher token (and the kubeconfig's RBAC) to
@@ -68,12 +103,12 @@ scan operates on a freshly-brokered, short-lived credential — no standing kube
 
 | | |
 |---|---|
-| **Shape** | a pre-launch wrapper brokers a short-lived kubeconfig into the silo |
-| **Secret path** | secrets manager → token (in memory) → Rancher mints a kubeconfig → token discarded |
-| **On disk** | only the short-lived kubeconfig (`chmod 600`); no standing credential |
-| **Best for** | `cron` / scheduled probes (re-brokers each run); restart-on-schedule for a live server |
-| **Backstop** | least-privilege RBAC on what Rancher hands out |
+| **Shape** | a pre-launch wrapper (scheduled runs), or `kubeconfig_from` (long-running `up`/`mcp`) |
+| **Secret path** | secrets manager → token (in memory) → a fresh kubeconfig is minted → token discarded |
+| **On disk** | only the short-lived kubeconfig (0600) — per run (wrapper) or per probe (connector) |
+| **Best for** | wrapper: `cron` / scheduled probes · connector: `up`, the MCP server, the listener |
+| **Backstop** | least-privilege RBAC on what the broker hands out |
 
-✅ No new steadystate code — it rents your existing Vault + Rancher. The credential is
-short-lived and never persisted; the agent never touches it. (If you later want a long-running server
-to re-broker on its own, that's the built-in *credential connector* seam — ask when you need it.)
+✅ Either way it rents your existing vault — Vault, Akeyless, Rancher, a cloud CLI. The credential is
+short-lived and never persisted beyond its use; the agent never touches it, and the standing secret
+never enters steadystate.
