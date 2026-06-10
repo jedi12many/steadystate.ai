@@ -1203,6 +1203,37 @@ def ask(
     typer.echo(_render_ask(" ".join(question), str(state)))
 
 
+@app.command()
+def runs(
+    workflow: str = typer.Argument(
+        "", help="A workflow file to scope to (e.g. nightly-scan.yml); bare = the repo's latest."
+    ),
+) -> None:
+    """Recent **GitHub Actions runs** in the agent's workflows repo -- status, branch, when, and
+    the run link. The repo's own automation as the agent's instruments: 'did the nightly scan
+    pass?' answered from real run history. Repo resolution: `[workflows] repo` in config.toml /
+    STEADYSTATE_WORKFLOWS_REPO / the GitHub surface's repo (env, or the cwd's origin remote)."""
+    from .verbs import _render_runs
+
+    typer.echo(_render_runs(workflow))
+
+
+@app.command()
+def dispatch(
+    workflow: str = typer.Argument(..., help="The workflow file, optionally @ref (x.yml@staging)."),
+    inputs: list[str] = typer.Argument(None, help="workflow_dispatch inputs, as input=value."),
+    state: Path = _STATE_OPTION,
+) -> None:
+    """Kick off a GitHub Actions workflow in the **agent's workflows repo** now -- a fresh run
+    instead of waiting for its cron. Structurally scoped to that one repo (committing a workflow
+    there is the vetting); fail-closed (no token / unknown workflow / bad ref is a clean one-line
+    reason); **audited** -- who dispatched what, with which inputs, lands in `history`. Needs
+    STEADYSTATE_GITHUB_TOKEN (or GITHUB_TOKEN) with actions:write."""
+    from .verbs import _dispatch_run
+
+    typer.echo(_dispatch_run(workflow, " ".join(inputs or []), _local_actor(), str(state)))
+
+
 class _WatchDone(Exception):  # noqa: N818 -- a control-flow signal, not an error
     """Raised to break the watch loop on the first match (`--once`)."""
 

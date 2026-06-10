@@ -29,6 +29,8 @@ from typing import Protocol, runtime_checkable
 APPROVE = "approve"
 ASK = "ask"
 DECLINE = "decline"
+DISPATCH = "dispatch"
+RUNS = "runs"
 HELP = "help"
 PENDING = "pending"
 SUMMARY = "summary"
@@ -131,6 +133,19 @@ COMMANDS: dict[str, tuple[str, str]] = {
         "context alongside steadystate's findings. Configure {name: query} in "
         "STEADYSTATE_METRIC_QUERIES; steadystate rents the monitoring, never reimplements it",
     ),
+    RUNS: (
+        "runs [workflow]",
+        "recent GitHub Actions runs in the agent's workflows repo -- status, branch, when, link; "
+        "name a workflow file to scope (`runs nightly-scan.yml`). The repo's own automation as "
+        "the agent's instruments: 'did the nightly scan pass?' answered from real run history",
+    ),
+    DISPATCH: (
+        "dispatch <workflow>[@ref] [input=value ...]",
+        "kick off a GitHub Actions workflow in the agent's workflows repo NOW -- a fresh run "
+        "instead of waiting for its cron (`dispatch nightly-scan.yml`). Structurally scoped to "
+        "that one repo (committing a workflow there is the vetting); audited with who asked; "
+        "needs a token with actions:write",
+    ),
     CHECKS: ("checks", "list this wall's custom health checks (.steadystate/checks.json)"),
     SOLUTIONS: ("solutions", "list this wall's authored runbook of problem->fix entries"),
     SMOKE: (
@@ -210,10 +225,11 @@ _NEEDS_ARGUMENT = frozenset({PROBE, MUTE, UNMUTE, SHOW, FIX, VOUCH})
 # `snooze <fingerprint> <duration>`. The second plain token is the *last* one, so a natural filler
 # word in the middle is ignored.
 _NEEDS_TWO = frozenset({SEND, RUN, SNOOZE})
-# Verbs that take an *optional* argument (cost's period; findings' status filter); absent it, they
-# still dispatch. approve/decline live here too: a bare `approve` resolves to the sole pending, and
-# the argument may be an ordinal (`approve 2`) or a fingerprint prefix -- the server resolves it.
-_OPTIONAL_ARGUMENT = frozenset({COST, FINDINGS, APPROVE, DECLINE})
+# Verbs that take an *optional* argument (cost's period; findings' status filter; runs' workflow
+# scope); absent it, they still dispatch. approve/decline live here too: a bare `approve` resolves
+# to the sole pending, and the argument may be an ordinal (`approve 2`) or a fingerprint prefix --
+# the server resolves it.
+_OPTIONAL_ARGUMENT = frozenset({COST, FINDINGS, APPROVE, DECLINE, RUNS})
 # Verbs that take an *optional second* token after their required first: `approve <fp> [<token>]`,
 # where the token is the break-glass confirm target (e.g. the node name for a `delete-node`).
 _OPTIONAL_SECOND = frozenset({APPROVE})
@@ -271,6 +287,8 @@ _TOOL_ARGS: dict[str, tuple[tuple[str, bool], ...]] = {
     HEALTH: (("workload", False),),  # optional: scope the verdict to one workload + correlate
     POSTURE: (),
     METRICS: (),
+    RUNS: (("workflow", False),),  # optional: scope to one workflow file
+    DISPATCH: (("workflow", True), ("inputs", False)),  # the file[@ref]; then input=value pairs
     CHECKS: (),
     SOLUTIONS: (),
     SMOKE: (),
@@ -306,6 +324,10 @@ _TOOL_EFFECT: dict[str, str] = {
     HEALTH: "read-only",  # runs smoke (GET/HEAD) + reads findings -- active but never mutates
     POSTURE: "read-only",  # a self-report; an agent can always ask "am I bounded?" (no grant)
     METRICS: "read-only",  # reads your monitoring (GET) -- consumes it, never mutates
+    RUNS: "read-only",  # reads Actions run history (GET) -- never mutates
+    # Kicking a workflow sends an event to GitHub; what runs is the agent repo's own committed
+    # automation. Effectful -> NL echoes it for a human to confirm, and MCP needs the write grant.
+    DISPATCH: "external-send",
     CHECKS: "read-only",
     SOLUTIONS: "read-only",  # lists the authored runbook -- showing a fix isn't running it
     SMOKE: "read-only",  # active (GET/HEAD probes) but idempotent -- reads, never mutates
@@ -377,6 +399,12 @@ def command_from_text(text: str, actor: str) -> Command | None:
             if rest:
                 return Command(ASK, actor, " ".join(rest))
             continue  # a bare `ask` carries no question -> not actionable
+        if verb == DISPATCH:
+            # `dispatch <workflow> [input=value ...]`: the inputs ride VERBATIM in argument2 --
+            # no flag extraction, so an input value that happens to be a flag word survives.
+            if rest:
+                return Command(DISPATCH, actor, rest[0], argument2=" ".join(rest[1:]))
+            continue  # a bare `dispatch` names no workflow -> not actionable
         flags = frozenset(_FLAG_ALIASES[t.lower()] for t in rest if t.lower() in _FLAG_ALIASES)
         args = [t for t in rest if t.lower() not in _FLAG_ALIASES]
         if verb in _NEEDS_TWO:
