@@ -1,0 +1,13 @@
+[
+  {
+    "name": "proxy-domain",
+    "problem": "a server needs outbound access to a new domain",
+    "repo": "your-org/proxy-outbound",
+    "file": "allowlist.txt",
+    "edit": "append-line",
+    "value": "{domain}",
+    "params": { "domain": "^[a-z0-9.-]+\\.[a-z]{2,}$" },
+    "title": "request: allow outbound to {domain}",
+    "author": "ops"
+  }
+]

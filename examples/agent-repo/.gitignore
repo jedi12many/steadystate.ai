@@ -1,0 +1,5 @@
+# Runtime MEMORY stays on the host -- never in git. (Findings/mutes/audit/cost live in
+# .steadystate/state.db, re-derived by the next sweep; committing it would churn every
+# sweep tick, race the live listener, and publish operational history.)
+.steadystate/
+.env

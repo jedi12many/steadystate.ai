@@ -1,0 +1,12 @@
+{
+  "gateway": {
+    "source": "k8s-live",
+    "context": "prod-east-gateway",
+    "kubeconfig_from": "akeyless get-secret-value --name /k8s/prod-east/gateway/kubeconfig"
+  },
+  "runners": {
+    "source": "k8s-live",
+    "context": "prod-east-runners",
+    "kubeconfig_from": "akeyless get-secret-value --name /k8s/prod-east/runners/kubeconfig"
+  }
+}

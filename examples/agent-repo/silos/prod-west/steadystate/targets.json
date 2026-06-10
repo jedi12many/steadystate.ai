@@ -1,0 +1,7 @@
+{
+  "gateway": {
+    "source": "k8s-live",
+    "context": "prod-west-gateway",
+    "kubeconfig_from": "akeyless get-secret-value --name /k8s/prod-west/gateway/kubeconfig"
+  }
+}

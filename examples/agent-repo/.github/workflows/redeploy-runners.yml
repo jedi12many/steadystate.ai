@@ -1,0 +1,19 @@
+# The agent's automation lives in its own repo: committing this file is what vets it.
+# - `dispatch redeploy-runners.yml region=east` kicks it from chat/CLI/MCP (audited)
+# - the `redeploy-runner-pool` solution dispatches it when the finding matches (human-approved)
+# - `runs redeploy-runners.yml` shows its recent history in the channel
+name: redeploy-runners
+on:
+  workflow_dispatch:
+    inputs:
+      region:
+        description: "Which region's runner pool to redeploy"
+        required: true
+
+jobs:
+  redeploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Redeploy the ${{ inputs.region }} runner pool
+        run: ./scripts/redeploy-runners.sh "${{ inputs.region }}"

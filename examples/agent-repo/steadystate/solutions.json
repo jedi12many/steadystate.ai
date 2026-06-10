@@ -1,0 +1,28 @@
+[
+  {
+    "name": "redeploy-runner-pool",
+    "for": "RunnerPoolDegraded",
+    "problem": "the shared CI runner pool is degraded",
+    "solution": {
+      "kind": "workflow",
+      "run": "your-org/agent-repo/redeploy-runners.yml@main region={region}"
+    },
+    "impact": "medium",
+    "reversibility": "high",
+    "author": "ops",
+    "added": "2026-06-10"
+  },
+  {
+    "name": "reclaim-evicted-pods",
+    "for": "Evicted",
+    "problem": "evicted pods pile up as Failed and clutter the namespace",
+    "solution": {
+      "kind": "command",
+      "run": "kubectl delete pods --field-selector=status.phase=Failed -n {namespace}"
+    },
+    "impact": "low",
+    "reversibility": "high",
+    "author": "ops",
+    "added": "2026-06-10"
+  }
+]

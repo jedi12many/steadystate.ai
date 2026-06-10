@@ -25,7 +25,9 @@ the scenarios reference them and add the environment-specific glue.
 | [demo](./demo/) | the 60-second story (`./demo.sh`) | offline, deterministic: CI catches a critical S3 exposure, fails the gate, surfaces the signed runbook fix — record it (asciinema) |
 | [contained-agent](./contained-agent/) | an agent whose *only* tool is steadystate | the gates as a **real fence** — no shell, steadystate holds the creds (the sole-actuator setup) |
 | [copilot-ss](./copilot-ss/) | **soft guardrails** for Copilot | use steadystate for ops, go outside only on express permission — the realistic middle, and the best dogfooding setup |
-| [brokered-creds](./brokered-creds/) | no static kubeconfig | a pre-launch wrapper brokers a **short-lived** kubeconfig from Vault → Rancher; the secret never lands |
+| [brokered-creds](./brokered-creds/) | no static kubeconfig | a pre-launch wrapper brokers a **short-lived** kubeconfig from Vault → Rancher; the secret never lands — and `kubeconfig_from` re-brokers per probe for long-running servers |
+| [requests](./requests/) | a vetted ask → a review-gated PR | `request proxy-domain domain=…` opens the PR in the repo that owns it; regex-validated params, the merge review is the gate |
+| [agent-repo](./agent-repo/) | **the full Tier-1 channel agent** | one repo = the agent's brain: shared KB + walls under `silos/` + runbook + request recipes + its own workflows; one `up` per wall |
 
 New to steadystate? Start on a **[bastion-host](./bastion-host/)** — run it on a jump box you
 already use, deploy nothing into the cluster, and probe the live clusters with `steadystate chat`.
