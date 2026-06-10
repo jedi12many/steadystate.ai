@@ -7,6 +7,7 @@ import json
 import os
 import re
 import sys
+import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -94,6 +95,7 @@ from .targets import (
     TARGETS_ENV,
     Target,
     load_targets,
+    load_targets_from_env,
     save_targets,
     target_issues,
 )
@@ -2125,6 +2127,87 @@ def listen(
         raise typer.BadParameter(problem)
     state.parent.mkdir(parents=True, exist_ok=True)
     typer.echo(f"steadystate: listening for {adapter.name} commands on :{port}")
+    serve(adapter, port, str(state))
+
+
+def _sweep_forever(
+    state_path: str, every_seconds: float, deep: bool, stop: threading.Event | None = None
+) -> None:
+    """`up`'s warm-keeper: re-probe the whole fleet on an interval, recording to the SAME state.db
+    the listener reads (WAL -- safe across threads/processes), so a channel question ("are the
+    runners ok?") is answered from *recent* state instead of timing out a chat provider's reply
+    window on a live probe. The first sweep runs immediately -- chat is useful the moment `up`
+    prints its banner. Each tick prints the fleet's one-line tally with a timestamp (the service
+    console); a failing sweep is reported and the loop lives on. ``stop`` is for tests."""
+    from .verbs import _run_sweep
+
+    flags = frozenset({"deep"}) if deep else frozenset()
+    halt = stop if stop is not None else threading.Event()
+    while not halt.is_set():
+        try:
+            digest = _run_sweep(state_path, flags).splitlines()[0]
+        except Exception as exc:  # an unreachable fleet must never kill the warm-keeper
+            digest = f"sweep failed: {exc}"
+        typer.echo(f"[{datetime.now(UTC).strftime('%H:%M:%S')}] {digest}")
+        halt.wait(every_seconds)
+
+
+@app.command()
+def up(
+    channel: str = typer.Option(
+        "teams",
+        "--from",
+        help=f"Chat provider to listen for: {' | '.join(sorted(INBOUND))}.",
+    ),
+    port: int = typer.Option(8723, "--port", help="Port for the chat endpoint."),
+    sweep: str = typer.Option(
+        "10m",
+        "--sweep",
+        help="How often the background fleet sweep re-probes every target and refreshes state "
+        "(20s | 10m | 1h); `0`/`off` runs the listener alone (answers go stale between probes).",
+    ),
+    state: Path = _STATE_OPTION,
+    deep: bool = typer.Option(
+        False, "--deep", help="Each sweep also scans pod logs for errors (costlier)."
+    ),
+) -> None:
+    """Start the services: the chat **listener** plus the background **fleet sweep** that keeps its
+    answers fresh -- one process, the 'turn it on and the channel is live' verb. A channel question
+    is answered from recent state (a sweep just recorded it), which is what fits a chat provider's
+    short reply window -- a Teams Outgoing Webhook gives ~5s, no deferral. The sweep and the
+    listener share one state.db (WAL), and the MCP server (`steadystate mcp`, spawned by an agent's
+    client) reads the same file -- so chat and agents see one fleet. `listen` is the sweep-less
+    listener; a cron `scan` replaces the sweep if you'd rather schedule it."""
+    from .verbs import _parse_duration
+
+    try:
+        adapter = build_inbound(channel)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from None
+    problem = adapter.ready()
+    if problem:
+        raise typer.BadParameter(problem)
+    sweeping = sweep.strip().lower() not in ("0", "off", "none")
+    every = _parse_duration(sweep) if sweeping else None
+    if sweeping and every is None:
+        raise typer.BadParameter("--sweep must be like 20s, 10m, 1h -- or 0 to disable.")
+    if sweeping:
+        try:
+            targets = load_targets_from_env()
+        except (OSError, ValueError) as exc:  # a set-but-broken registry -> the reason, cleanly
+            raise typer.BadParameter(f"--sweep can't read the targets registry: {exc}") from None
+        if not targets:
+            raise typer.BadParameter(
+                "--sweep needs targets to probe -- run `discover --create` or set "
+                "STEADYSTATE_TARGETS (or `--sweep 0` to run the listener alone)."
+            )
+    state.parent.mkdir(parents=True, exist_ok=True)
+    keeping = f"fleet sweep every {sweep.strip()}" if sweeping else "sweep off (listener only)"
+    typer.echo(f"steadystate up -- {adapter.name} chat on :{port}, {keeping} (state: {state})")
+    if sweeping and every is not None:
+        threading.Thread(
+            target=_sweep_forever, args=(str(state), every.total_seconds(), deep), daemon=True
+        ).start()
     serve(adapter, port, str(state))
 
 

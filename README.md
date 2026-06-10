@@ -137,7 +137,11 @@ The *same* vetted command grammar, four ways in:
   failure live while you reproduce it (bounded, default 5m → then `analyze` it); `chat` for a local REPL.
 - **Chat** (Slack / Teams / Discord) — signed webhooks; `@steadystate probe <target>`, approve from a
   button. With an LLM, plain English works (*"why is web crashlooping?"*) — a read-only ask runs, an
-  effectful one is echoed back to confirm. Chat is a trigger, never a bypass.
+  effectful one is echoed back to confirm. **`ask`** answers *process* questions (*"how do I request
+  a new project?"*) from the team's **committed knowledge base** (`steadystate/kb/*.md`), source
+  cited — a Tier-1 desk in a channel, next to the live answers (`summary`/`health`).
+  **`steadystate up`** starts it as one process: the listener plus a periodic fleet sweep that keeps
+  the answers fresh. Chat is a trigger, never a bypass.
 - **Agents over MCP** — `steadystate mcp` runs as a Model Context Protocol server (stdio, stdlib-only)
   so Claude Code/Desktop or any agent drives the same verbs through the same guardrails. Three grant
   tiers: **read-only** (default) → **`--author`** (write checks + runbook solutions, *not* infra) →
@@ -180,7 +184,8 @@ your-iac-repo/
 ├── steadystate/                  # COMMITTED intent
 │   ├── config.toml               # [defaults] source/path · [bound] the envelope · [ci] the gate
 │   ├── solutions.json            # your runbook (problem → fix)
-│   └── checks.json               # what "healthy" means for your app
+│   ├── checks.json               # what "healthy" means for your app
+│   └── kb/                       # the docs `ask` answers from (services, how-tos, onboarding)
 └── .steadystate/                 # gitignored ephemeral state (state.db, patches)
 ```
 
