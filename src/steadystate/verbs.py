@@ -470,23 +470,47 @@ def _render_show(fingerprint: str, state_path: str, flags: frozenset[str] = froz
     return "\n".join(lines)
 
 
-def _refetch_logs(finding: Finding) -> str:
-    """Best-effort: re-fetch the finding's pod logs FRESH at analyze time (current + previous
-    container) so the model investigates the live picture, not just the scan-time snapshot. '' for a
-    non-k8s finding, a pod we can't name from the evidence, or any failure -- `analyze` then falls
-    back to the captured window. Read-only (`kubectl logs`), aimed at the finding's cluster."""
+def _analyze_probe(finding: Finding):
+    """A read-only kubectl probe aimed at the finding's cluster, plus the ``(namespace, pod)`` to
+    investigate -- or ``(None, "", "")`` for a non-k8s finding or a pod we can't name from the
+    evidence. Shared by the log re-fetch and the evidence collectors so they aim at the same
+    cluster. Read-only."""
     from .probe.kubectl import KubectlProbe
 
     fields = _finding_fields(finding)
     pod = (finding.details or {}).get("pods", "").split(",")[0].strip()  # the probe's pod list
     if not fields.namespace or not pod:
-        return ""  # not a k8s workload finding (or no pod named) -> nothing to re-fetch
+        return None, "", ""  # not a k8s workload finding (or no pod named)
     probe = KubectlProbe()
     if fields.context:
         probe.use_context(fields.context)
     if fields.kubeconfig:
         probe.use_kubeconfig(fields.kubeconfig)
-    return probe.logs_for_analysis(fields.namespace, pod)
+    return probe, fields.namespace, pod
+
+
+def _refetch_logs(finding: Finding) -> str:
+    """Best-effort: re-fetch the finding's pod logs FRESH at analyze time (current + previous
+    container) so the model investigates the live picture, not just the scan-time snapshot. '' for a
+    non-k8s finding, a pod we can't name from the evidence, or any failure -- `analyze` then falls
+    back to the captured window. Read-only (`kubectl logs`), aimed at the finding's cluster."""
+    probe, namespace, pod = _analyze_probe(finding)
+    if probe is None:
+        return ""
+    return probe.logs_for_analysis(namespace, pod)
+
+
+def _collect_evidence(finding: Finding) -> list:
+    """The read-only collectors (events, pod status) fattening the RCA's evidence beyond the logs --
+    each best-effort, each tagged with the read that produced it (the citation). [] for a non-k8s
+    finding. Layer 1 of the investigator: a fixed, grounded bundle; the model still writes the RCA.
+    Read-only."""
+    from .reason.collect import CollectCtx, gather
+
+    probe, namespace, pod = _analyze_probe(finding)
+    if probe is None:
+        return []
+    return gather(CollectCtx(finding=finding, probe=probe, namespace=namespace, pod=pod))
 
 
 def _render_analyze(fingerprint: str, state_path: str) -> str:
@@ -509,7 +533,10 @@ def _render_analyze(fingerprint: str, state_path: str) -> str:
             "over the captured evidence, not a guess. `show` gives the raw evidence; see `doctor`."
         )
     live = _refetch_logs(finding)  # fresh current + previous logs, best-effort -> investigate live
-    rca = analyze_finding(finding, analyst._complete, live_logs=live, prior=prior)
+    collected = _collect_evidence(finding)  # events + pod status, gathered live, each cited
+    rca = analyze_finding(
+        finding, analyst._complete, collected=collected, live_logs=live, prior=prior
+    )
     if not rca:
         return "the model returned no analysis -- try again, or `show` the captured evidence."
     with StateStore(state_path) as store:  # persist it -- don't lose the RCA, or re-pay the model
