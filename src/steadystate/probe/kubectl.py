@@ -314,6 +314,60 @@ def cap_log(text: str) -> str:
     return "\n".join(lines)[-_LOG_WINDOW_CHARS:]
 
 
+def _event_ts(event: dict) -> str:
+    """An event's timestamp for ordering -- ``lastTimestamp`` (the recurrence's latest), falling
+    back to ``eventTime`` (the newer events API) then ``firstTimestamp``. '' sorts oldest."""
+    return event.get("lastTimestamp") or event.get("eventTime") or event.get("firstTimestamp") or ""
+
+
+def render_events(doc: dict, *, limit: int = 15) -> str:
+    """A `kubectl get events -o json` doc as compact, oldest-last lines -- the cluster's account of
+    the lead-up (`OOMKilled`, `FailedScheduling`, `BackOff`, probe failures). Bounded to the last
+    ``limit``. Pure; '' when there are no events."""
+    items = doc.get("items", []) if isinstance(doc, dict) else []
+    lines: list[str] = []
+    for event in sorted(items, key=_event_ts)[-limit:]:
+        count = event.get("count")
+        repeat = f" x{count}" if isinstance(count, int) and count > 1 else ""
+        message = " ".join((event.get("message") or "").split())  # collapse whitespace/newlines
+        lines.append(
+            f"{_event_ts(event)}  {event.get('type', ''):<7} "
+            f"{event.get('reason', '')}{repeat}: {message}"
+        )
+    return "\n".join(lines)
+
+
+def render_pod_status(doc: dict) -> str:
+    """A `kubectl get pod -o json` doc as the operational facts an RCA needs beyond the logs: phase,
+    readiness, and per container the restart count + the LAST termination (reason + exit code --
+    137/OOMKilled is the smoking gun a log tail can't show). Pure; '' when there's no status."""
+    status = doc.get("status", {}) if isinstance(doc, dict) else {}
+    lines: list[str] = []
+    if status.get("phase"):
+        lines.append(f"phase: {status['phase']}")
+    for cond in status.get("conditions", []):
+        if cond.get("type") == "Ready":
+            reason = f" ({cond.get('reason')})" if cond.get("reason") else ""
+            lines.append(f"Ready: {cond.get('status')}{reason}")
+    for container in status.get("containerStatuses", []):
+        parts = [
+            f"container {container.get('name', '?')}: restarts={container.get('restartCount', 0)}"
+        ]
+        state = container.get("state", {})
+        if "waiting" in state:
+            parts.append(f"waiting={state['waiting'].get('reason', '')}")
+        elif "running" in state:
+            parts.append("running")
+        terminated = container.get("lastState", {}).get("terminated")
+        if terminated:
+            parts.append(
+                f"lastTerminated={terminated.get('reason', '')} "
+                f"exit={terminated.get('exitCode', '')} at {terminated.get('finishedAt', '')}"
+            )
+        lines.append("  " + "  ".join(parts))
+    return "\n".join(lines)
+
+
 class KubectlProbe:
     """Produces a Symptom per declared kubernetes workload whose pods are unhealthy now. With log
     scanning enabled (`probe --deep`), it also reads the tail of the *Running* pods' logs and
@@ -329,6 +383,8 @@ class KubectlProbe:
             "kubectl get nodes -o json",
             "kubectl get --raw /api/v1/nodes/<node>/proxy/stats/summary",  # --deep node disk %
             "kubectl logs --tail --previous",
+            "kubectl get pod <pod> -n <ns> -o json",  # analyze: pod status / last termination
+            "kubectl get events -n <ns> --field-selector involvedObject.name=<pod>",  # analyze
         ),
     )
 
@@ -661,6 +717,45 @@ class KubectlProbe:
         if cur.strip():
             parts.append("== current container ==\n" + cap_log(cur))
         return "\n\n".join(parts)
+
+    def pod_status(self, namespace: str, pod: str) -> str:
+        """The operational facts `analyze` needs beyond the logs -- restart count, the LAST
+        termination (reason + exit code: 137 = OOMKilled, the smoking gun a log tail can miss), the
+        current waiting reason, and readiness -- from one `kubectl get pod -o json`. Best-effort:
+        '' when the pod is gone / unreadable. Read-only."""
+        text = self._run_text(
+            self._kubectl("get", "pod", pod, "-n", namespace, "-o", "json"), best_effort=True
+        )
+        if not text.strip():
+            return ""
+        try:
+            return render_pod_status(json.loads(text))
+        except json.JSONDecodeError:
+            return ""
+
+    def events_for(self, namespace: str, pod: str) -> str:
+        """The cluster's recent events for this pod -- OOMKilled / FailedScheduling / image-pull /
+        probe failures: the lead-up at the CLUSTER level the pod's own logs don't carry. One
+        `kubectl get events`, oldest-last, bounded. Best-effort: '' when unreadable. Read-only."""
+        text = self._run_text(
+            self._kubectl(
+                "get",
+                "events",
+                "-n",
+                namespace,
+                "--field-selector",
+                f"involvedObject.name={pod}",
+                "-o",
+                "json",
+            ),
+            best_effort=True,
+        )
+        if not text.strip():
+            return ""
+        try:
+            return render_events(json.loads(text))
+        except json.JSONDecodeError:
+            return ""
 
     def _run_text(self, argv: list[str], *, best_effort: bool = False) -> str:
         try:

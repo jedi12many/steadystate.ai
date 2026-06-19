@@ -11,10 +11,11 @@ The analysis stays checkable without being gagged into a transcript that misses 
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 
 from ..evidence import EvidenceKeys
 from ..state import Finding
+from .collect import Evidence
 
 # The RCA prompt. It asks for the exact shape a senior on-call writes (and a vendor's support team
 # needs) and tells it to INVESTIGATE the lead-up -- reason, but quote + label inference.
@@ -41,12 +42,19 @@ _RCA_SYSTEM = (
 )
 
 
-def _evidence_bundle(finding: Finding, live_logs: str = "", prior: str = "") -> str:
+def _evidence_bundle(
+    finding: Finding,
+    collected: Sequence[Evidence] = (),
+    live_logs: str = "",
+    prior: str = "",
+) -> str:
     """The evidence as a labeled block for the model -- the finding's headline, then ``prior`` (this
-    fleet's earlier RCAs for the same failure, framing the analysis up front), then the structured
-    fields and the logs, verbatim and last (the meat the investigation reads). ``live_logs`` (the
-    pod's logs RE-FETCHED FRESH at analyze time -- current + previous container) lead the logs when
-    present; the scan-time LOG_WINDOW / trace follow as the captured snapshot (the fallback)."""
+    fleet's earlier RCAs for the same failure, framing the analysis up front), the structured keys,
+    the ``collected`` evidence (events / pod status gathered live by the read-only collectors,
+    each tagged with the read that produced it so the RCA stays checkable), and the logs verbatim
+    and last (the meat the investigation reads). ``live_logs`` (the pod's logs RE-FETCHED FRESH at
+    analyze time -- current + previous container) lead the logs when present; the scan-time
+    LOG_WINDOW / trace follow as the captured snapshot (the fallback)."""
     lines = [
         f"Finding: {finding.last_title}",
         f"Severity: {finding.last_severity}   Status: {finding.status}",
@@ -61,6 +69,8 @@ def _evidence_bundle(finding: Finding, live_logs: str = "", prior: str = "") -> 
     for key, value in details.items():
         if key not in bulky:
             lines.append(f"{key}: {value}")
+    for ev in collected:  # gathered live; operational facts + the event timeline frame the logs
+        lines.append(f"\n--- {ev.label} (via `{ev.provenance}`) ---\n{ev.body}")
     if live_logs:
         lines.append(
             "\n--- logs RE-FETCHED LIVE at analyze time (current + previous container) ---\n"
@@ -79,14 +89,16 @@ def analyze_finding(
     finding: Finding,
     complete: Callable[[str, str, str], str | None],
     *,
+    collected: Sequence[Evidence] = (),
     live_logs: str = "",
     prior: str = "",
 ) -> str | None:
     """The RCA for one finding, via the LLM seam (``complete``); None when no model is configured.
+    ``collected`` is the live read-only evidence the collectors gathered (events, pod status);
     ``live_logs`` (the pod's logs re-fetched FRESH at analyze time) lead when the caller could pull
     them; ``prior`` grounds it in this fleet's earlier RCAs for the same failure (recurrence + their
     root causes), so it can say 'same as before' or 'new'."""
-    return complete(_RCA_SYSTEM, _evidence_bundle(finding, live_logs, prior), "analyze")
+    return complete(_RCA_SYSTEM, _evidence_bundle(finding, collected, live_logs, prior), "analyze")
 
 
 def prior_incidents(store, finding: Finding, *, limit: int = 3) -> str:
