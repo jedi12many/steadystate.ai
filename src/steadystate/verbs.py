@@ -33,6 +33,7 @@ from .broker import target_credentials
 from .classify import APPLICATION, finding_layer
 from .engine import build_report
 from .evidence import EvidenceKeys
+from .guidance import HOW_TO
 from .health import IMPAIRED, NOTED, WORKING, finding_disposition, wall_verdict
 from .inbound.base import (
     ACTIONS_LIST,
@@ -66,6 +67,7 @@ from .inbound.base import (
     SMOKE,
     SNOOZE,
     SOLUTIONS,
+    START_HERE,
     SUMMARY,
     SURFACES_LIST,
     TARGETS,
@@ -908,6 +910,17 @@ def _freshness(findings: list[Finding]) -> str:
     return f"{secs // 86400}d ago"
 
 
+def _render_start_here(state_path: str) -> str:
+    """`start-here`: orient an agent that's just connected -- the how-to-drive guidance (shared with
+    the MCP server's instructions, so they can't drift) followed by the current fleet state, so the
+    agent learns the tool from THIS one call instead of reading files. Read-only -- a store read for
+    the summary, no scan. The verb exists because a client may drop the server's
+    ``initialize.instructions``; the tool list it can't drop, so the guidance rides here."""
+    snapshot = _render_summary(state_path).strip()
+    state = f"\n\nCurrent state (call `summary` to refresh):\n{snapshot}" if snapshot else ""
+    return f"{HOW_TO}{state}"
+
+
 def _render_summary(state_path: str) -> str:
     """A glanceable, deterministic rollup of the current state -- open findings by severity, what's
     pending your approval, the homeostat's posture, the single worst thing right now, and how fresh
@@ -1423,6 +1436,8 @@ def run_command(command: Command, state_path: str) -> str:
     (help, targets, pending, probe, cost, findings, history) answer directly; mute and
     approve/decline write through the SAME cores the CLI uses. probe is read-only -- it scans +
     reports, so chat stays a trigger, never a bypass; mute only silences a finding."""
+    if command.verb == START_HERE:
+        return _render_start_here(state_path)
     if command.verb == HELP:
         return render_help()
     if command.verb == SUMMARY:
