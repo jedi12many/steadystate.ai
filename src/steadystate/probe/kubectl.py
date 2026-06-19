@@ -368,6 +368,56 @@ def render_pod_status(doc: dict) -> str:
     return "\n".join(lines)
 
 
+def render_rollout(doc: dict) -> str:
+    """A `kubectl get deployment|statefulset -o json` doc as the rollout facts an RCA needs to spot
+    a deploy as the trigger: the container images (what's running -- and what a bad bump changed),
+    generation vs observedGeneration (a rollout still in flight), replica health, the StatefulSet
+    revisions, and the Deployment's own conditions (`Progressing` carries WHEN it last rolled + the
+    reason). Pure; '' when there's no usable doc."""
+    if not isinstance(doc, dict):
+        return ""
+    spec = doc.get("spec", {})
+    status = doc.get("status", {})
+    lines: list[str] = []
+    images = [
+        c["image"]
+        for c in spec.get("template", {}).get("spec", {}).get("containers", [])
+        if c.get("image")
+    ]
+    if images:
+        lines.append("images: " + ", ".join(images))
+    generation = doc.get("metadata", {}).get("generation")
+    observed = status.get("observedGeneration")
+    if generation is not None:
+        drift = "" if observed == generation else f" (observed {observed} -- rollout in progress)"
+        lines.append(f"generation: {generation}{drift}")
+    replicas = [("desired", spec.get("replicas"))] + [
+        (label, status.get(key))
+        for label, key in (
+            ("updated", "updatedReplicas"),
+            ("ready", "readyReplicas"),
+            ("available", "availableReplicas"),
+            ("unavailable", "unavailableReplicas"),
+        )
+    ]
+    counts = " ".join(f"{label}={value}" for label, value in replicas if value is not None)
+    if counts:
+        lines.append("replicas: " + counts)
+    current, update = status.get("currentRevision"), status.get("updateRevision")
+    if current or update:  # StatefulSet: a mismatch means a rollout is mid-flight
+        mid = "" if current == update else "  (mid-rollout: current != update)"
+        lines.append(f"revision: current={current} update={update}{mid}")
+    for cond in status.get("conditions", []):
+        if cond.get("type") in {"Progressing", "Available"}:
+            when = cond.get("lastUpdateTime") or cond.get("lastTransitionTime") or ""
+            message = " ".join((cond.get("message") or "").split())
+            lines.append(
+                f"{cond.get('type')}: {cond.get('status')} "
+                f"reason={cond.get('reason', '')} at {when}  {message}".rstrip()
+            )
+    return "\n".join(lines)
+
+
 class KubectlProbe:
     """Produces a Symptom per declared kubernetes workload whose pods are unhealthy now. With log
     scanning enabled (`probe --deep`), it also reads the tail of the *Running* pods' logs and
@@ -385,6 +435,7 @@ class KubectlProbe:
             "kubectl logs --tail --previous",
             "kubectl get pod <pod> -n <ns> -o json",  # analyze: pod status / last termination
             "kubectl get events -n <ns> --field-selector involvedObject.name=<pod>",  # analyze
+            "kubectl get deployment|statefulset <name> -n <ns> -o json",  # analyze: rollout trigger
         ),
     )
 
@@ -754,6 +805,21 @@ class KubectlProbe:
             return ""
         try:
             return render_events(json.loads(text))
+        except json.JSONDecodeError:
+            return ""
+
+    def rollout_status(self, namespace: str, kind: str, name: str) -> str:
+        """The owning controller's rollout facts for `analyze` -- images, generation, replicas,
+        and the rollout conditions (when it last rolled) -- from one `kubectl get <kind> -o json`.
+        ``kind`` is a Deployment / StatefulSet. Best-effort: '' when unreadable. Read-only."""
+        text = self._run_text(
+            self._kubectl("get", kind.lower(), name, "-n", namespace, "-o", "json"),
+            best_effort=True,
+        )
+        if not text.strip():
+            return ""
+        try:
+            return render_rollout(json.loads(text))
         except json.JSONDecodeError:
             return ""
 

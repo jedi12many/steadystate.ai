@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from steadystate.probe.kubectl import render_events, render_pod_status
+from steadystate.probe.kubectl import render_events, render_pod_status, render_rollout
 from steadystate.reason.analyze import _evidence_bundle
 from steadystate.reason.collect import CollectCtx, Evidence, gather
 from steadystate.state import Finding
@@ -95,36 +95,117 @@ def test_render_events_orders_oldest_last_and_bounds():
 # -- gather: best-effort, wraps probe output as cited Evidence --------------------
 
 
-class _FakeProbe:
-    """A duck-typed probe: returns canned strings for the two read methods."""
+def test_render_rollout_flags_an_in_progress_deploy_with_image_and_timing():
+    doc = {
+        "metadata": {"generation": 5},
+        "spec": {
+            "replicas": 3,
+            "template": {"spec": {"containers": [{"image": "api:v2-bad"}]}},
+        },
+        "status": {
+            "observedGeneration": 4,
+            "updatedReplicas": 1,
+            "availableReplicas": 2,
+            "unavailableReplicas": 1,
+            "conditions": [
+                {
+                    "type": "Progressing",
+                    "status": "True",
+                    "reason": "ReplicaSetUpdated",
+                    "lastUpdateTime": "2026-06-19T10:00:00Z",
+                    "message": 'ReplicaSet "api-abc" is progressing.',
+                }
+            ],
+        },
+    }
+    out = render_rollout(doc)
+    assert "images: api:v2-bad" in out  # what a bad bump changed
+    assert "rollout in progress" in out  # generation 5 != observed 4
+    assert "unavailable=1" in out and "desired=3" in out
+    assert "Progressing: True reason=ReplicaSetUpdated at 2026-06-19T10:00:00Z" in out  # WHEN/why
 
-    def __init__(self, status: str = "", events: str = "", raises: str = "") -> None:
-        self._status, self._events, self._raises = status, events, raises
+
+def test_render_rollout_surfaces_statefulset_mid_rollout_revisions():
+    doc = {
+        "metadata": {"generation": 2},
+        "spec": {"template": {"spec": {"containers": []}}},
+        "status": {"currentRevision": "web-1", "updateRevision": "web-2"},
+    }
+    out = render_rollout(doc)
+    assert "current=web-1 update=web-2" in out and "mid-rollout" in out
+
+
+# -- gather: best-effort, wraps probe output as cited Evidence --------------------
+
+
+class _FakeProbe:
+    """A duck-typed probe: canned strings per read method; ``raises`` names one that blows up."""
+
+    def __init__(
+        self,
+        status: str = "",
+        events: str = "",
+        rollout: str = "",
+        logs: str = "",
+        raises: str = "",
+    ) -> None:
+        self._status, self._events = status, events
+        self._rollout, self._logs, self._raises = rollout, logs, raises
+
+    def _maybe_raise(self, which: str) -> None:
+        if self._raises == which:
+            raise RuntimeError("boom")
 
     def pod_status(self, namespace: str, pod: str) -> str:
-        if self._raises == "pod_status":
-            raise RuntimeError("boom")
+        self._maybe_raise("pod_status")
         return self._status
 
     def events_for(self, namespace: str, pod: str) -> str:
-        if self._raises == "events":
-            raise RuntimeError("boom")
+        self._maybe_raise("events")
         return self._events
 
+    def rollout_status(self, namespace: str, kind: str, name: str) -> str:
+        self._maybe_raise("rollout")
+        return self._rollout
 
-def _ctx(probe) -> CollectCtx:
-    return CollectCtx(finding=_finding({}), probe=probe, namespace="prod", pod="api-7f9")
+    def logs_for_analysis(self, namespace: str, pod: str) -> str:
+        self._maybe_raise("pod_logs")
+        return self._logs
 
 
-def test_gather_wraps_each_nonempty_read_as_cited_evidence():
-    out = gather(_ctx(_FakeProbe(status="restarts=7", events="OOMKilling")))
+def _ctx(probe, details: dict | None = None) -> CollectCtx:
+    return CollectCtx(finding=_finding(details or {}), probe=probe, namespace="prod", pod="api-7f9")
+
+
+def test_gather_wraps_each_nonempty_read_as_cited_evidence_in_read_order():
+    probe = _FakeProbe(
+        status="restarts=7", events="OOMKilling", rollout="images: api:v2", logs="boom"
+    )
+    out = gather(_ctx(probe, {"kind": "Deployment", "workload": "api"}))
+    assert [e.label for e in out] == [  # registry order: facts, change, timeline, logs (last)
+        "pod status / last termination",
+        "recent rollout (a likely trigger)",
+        "cluster events for the pod",
+        "logs re-fetched live at analyze time (current + previous container)",
+    ]
     by_label = {e.label: e for e in out}
-    assert "pod status / last termination" in by_label and "cluster events for the pod" in by_label
-    status = by_label["pod status / last termination"]
-    assert status.body == "restarts=7"
-    assert status.provenance == "kubectl get pod api-7f9 -n prod -o json"  # the citation
-    events = by_label["cluster events for the pod"]
-    assert "involvedObject.name=api-7f9" in events.provenance
+    assert (
+        by_label["pod status / last termination"].provenance
+        == "kubectl get pod api-7f9 -n prod -o json"
+    )
+    assert by_label["recent rollout (a likely trigger)"].provenance == (
+        "kubectl get deployment api -n prod -o json"
+    )
+    assert "involvedObject.name=api-7f9" in by_label["cluster events for the pod"].provenance
+
+
+def test_rollout_collector_only_fires_for_a_deployment_or_statefulset():
+    probe = _FakeProbe(rollout="images: api:v2")
+    # a node / bare-pod finding carries no kind -> no rollout block
+    assert [e.label for e in gather(_ctx(probe, {}))] == []
+    # a StatefulSet finding does
+    out = gather(_ctx(probe, {"kind": "StatefulSet", "workload": "web"}))
+    assert [e.label for e in out] == ["recent rollout (a likely trigger)"]
 
 
 def test_gather_skips_empty_reads():
@@ -138,20 +219,23 @@ def test_gather_is_best_effort_a_raising_collector_is_skipped_not_fatal():
     assert [e.label for e in out] == ["cluster events for the pod"]
 
 
-# -- the bundle renders collected evidence, cited, before the logs ----------------
+# -- the bundle renders collected evidence, cited, in order -----------------------
 
 
-def test_evidence_bundle_renders_collected_blocks_with_provenance_before_logs():
+def test_evidence_bundle_renders_collected_blocks_with_provenance_and_logs_last():
     collected = [
         Evidence(
             "pod status / last termination",
             "lastTerminated=OOMKilled exit=137",
             "kubectl get pod api-7f9 -n prod -o json",
         ),
+        Evidence(
+            "logs re-fetched live at analyze time (current + previous container)",
+            "fresh tail here",
+            "kubectl logs api-7f9 -n prod --tail --previous / (current)",
+        ),
     ]
-    bundle = _evidence_bundle(
-        _finding({"workload": "api"}), collected=collected, live_logs="fresh tail here"
-    )
+    bundle = _evidence_bundle(_finding({"workload": "api"}), collected=collected)
     assert "pod status / last termination" in bundle
     assert "lastTerminated=OOMKilled exit=137" in bundle
     assert "via `kubectl get pod api-7f9 -n prod -o json`" in bundle  # the citation rides along

@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 
 from steadystate.probe.kubectl import scan_log_text
 from steadystate.reason.analyze import _RCA_SYSTEM, _evidence_bundle, analyze_finding
+from steadystate.reason.collect import Evidence
 from steadystate.state import Finding, StateStore
 
 _PANIC = """\
@@ -75,23 +76,30 @@ def test_evidence_bundle_leads_with_the_before_event_log_window():
 
 
 def test_evidence_bundle_leads_with_live_refetched_logs_when_present():
-    # logs re-fetched FRESH at analyze time lead; the scan-time capture follows as the snapshot.
+    # logs re-fetched FRESH at analyze time arrive as a collected, cited block and lead the
+    # scan-time capture, which follows as the fallback snapshot.
+    fresh = Evidence(
+        "logs re-fetched live at analyze time (current + previous container)",
+        "fresh: nil pointer on the ca client",
+        "kubectl logs gateway -n prod --tail --previous / (current)",
+    )
     bundle = _evidence_bundle(
         _finding({"workload": "gateway", "log_window": "old scan snapshot"}),
-        live_logs="fresh: nil pointer on the ca client",
+        collected=[fresh],
     )
-    assert "RE-FETCHED LIVE" in bundle and "fresh: nil pointer" in bundle
+    assert "re-fetched live" in bundle.lower() and "fresh: nil pointer" in bundle
     assert bundle.index("fresh: nil pointer") < bundle.index("old scan snapshot")  # live first
 
 
-def test_analyze_feeds_the_live_logs_to_the_model():
+def test_analyze_feeds_the_collected_evidence_to_the_model():
     seen = {}
 
     def fake(system: str, user: str, caller: str):
         seen["user"] = user
         return "rca"
 
-    analyze_finding(_finding({"trace": _PANIC}), fake, live_logs="freshly re-fetched lead-up")
+    logs = Evidence("logs re-fetched live", "freshly re-fetched lead-up", "kubectl logs ...")
+    analyze_finding(_finding({"trace": _PANIC}), fake, collected=[logs])
     assert "freshly re-fetched lead-up" in seen["user"]
 
 

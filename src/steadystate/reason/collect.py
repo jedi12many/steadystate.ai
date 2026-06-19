@@ -19,6 +19,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
+from ..evidence import EvidenceKeys
+
 if TYPE_CHECKING:
     from ..state import Finding
 
@@ -74,6 +76,29 @@ class PodStatusCollector:
         )
 
 
+class RolloutCollector:
+    """The owning controller's recent rollout -- images, revision/generation, replica health, and
+    the rollout's own conditions (when it last rolled + why). A deploy minutes before a crash is the
+    trigger an RCA keeps missing; only meaningful for a Deployment / StatefulSet."""
+
+    name = "rollout"
+
+    def collect(self, ctx: CollectCtx) -> Evidence | None:
+        details = ctx.finding.details or {}
+        kind = details.get(EvidenceKeys.KIND, "")
+        workload = details.get(EvidenceKeys.WORKLOAD, "")
+        if not workload or kind not in {"Deployment", "StatefulSet"}:
+            return None  # a node / bare-pod finding has no controller rollout to read
+        body = ctx.probe.rollout_status(ctx.namespace, kind, workload)
+        if not body.strip():
+            return None
+        return Evidence(
+            "recent rollout (a likely trigger)",
+            body,
+            f"kubectl get {kind.lower()} {workload} -n {ctx.namespace} -o json",
+        )
+
+
 class EventsCollector:
     """The cluster's recent events for the pod -- OOMKilled / FailedScheduling / image-pull / probe
     failures: the lead-up at the CLUSTER level the pod's own logs can't carry."""
@@ -91,14 +116,36 @@ class EventsCollector:
         )
 
 
+class LogsCollector:
+    """The pod's logs re-fetched FRESH at analyze time -- the ``--previous`` (crashed) container's
+    tail (the lead-up to the crash) plus the current container's (what's happened since the
+    restart). The meat the investigation reads, so it sorts last. Empty -> `analyze` falls back
+    to the scan-time captured window."""
+
+    name = "pod_logs"
+
+    def collect(self, ctx: CollectCtx) -> Evidence | None:
+        body = ctx.probe.logs_for_analysis(ctx.namespace, ctx.pod)
+        if not body.strip():
+            return None
+        return Evidence(
+            "logs re-fetched live at analyze time (current + previous container)",
+            body,
+            f"kubectl logs {ctx.pod} -n {ctx.namespace} --tail --previous / (current)",
+        )
+
+
 # The registry -- mirrors reason/enrich.py's ENRICHERS: a name -> factory map an out-of-tree
-# collector can extend. DEFAULT_COLLECTORS is the fixed Layer-1 bundle `analyze` gathers, ordered
-# facts-then-timeline: pod status frames, the event stream tells the story.
+# collector can extend. DEFAULT_COLLECTORS is the fixed Layer-1 bundle `analyze` gathers, ordered as
+# the RCA reads: the pod's state (facts), what changed (rollout), what the cluster saw (events),
+# what the logs say (the meat, last).
 COLLECTORS: dict[str, Callable[[], Collector]] = {
     "pod_status": PodStatusCollector,
+    "rollout": RolloutCollector,
     "events": EventsCollector,
+    "pod_logs": LogsCollector,
 }
-DEFAULT_COLLECTORS: tuple[str, ...] = ("pod_status", "events")
+DEFAULT_COLLECTORS: tuple[str, ...] = ("pod_status", "rollout", "events", "pod_logs")
 
 
 def gather(ctx: CollectCtx, names: tuple[str, ...] | None = None) -> list[Evidence]:
