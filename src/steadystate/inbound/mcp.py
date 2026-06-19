@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import __version__
+from ..guidance import HOW_TO as _HOW_TO
 from ..probe.custom import CHECK_SCHEMA_HINT
 from ..probe.solutions import SOLUTION_SCHEMA_HINT
 from ..state import StateStore, filter_findings
@@ -292,28 +293,6 @@ def _tools_call(
             req_id, {"content": [{"type": "text", "text": f"error: {exc}"}], "isError": True}
         )
     return _result(req_id, {"content": [{"type": "text", "text": output}], "isError": False})
-
-
-_HOW_TO = (
-    "steadystate watches deployed infrastructure: it detects drift + live malfunction, answers "
-    "'is it WORKING?', carries the operator's runbook of fixes, and remediates within a committed "
-    "bound.\n\n"
-    "Working with the operator:\n"
-    "- The verbs are a SMALL, FIXED set -- the tools listed here are ALL of them. You never need "
-    "to search or guess a command, and you don't need to call `help`. When the operator writes in "
-    "plain English, treat it as a question to ANSWER, not a command to hunt for: reach for a tool "
-    "only to GET data, otherwise just reply. Start at `summary` (the one-glance state), then "
-    "`findings` / `show <fp>` to inspect, `health` for the working/degraded/down verdict, `analyze "
-    "<fp>` for a crash's root cause -- and answer from that real data, never a guess.\n"
-    "- COACH the operator -- there's a lot here and it's a lot to pick up, so be a guide, not a "
-    "vending machine. After you answer, name the natural NEXT step AND the exact verb for it: a "
-    "panic -> `analyze <fp>`; a fix they keep doing by hand -> capture it (`define-solution`); a "
-    "finding that keeps recurring -> `learn`; 'are you bounding me?' -> `posture`. Surface the "
-    "capability that fits the moment; don't make them already know the command exists.\n"
-    "- Effectful verbs (approve / fix / run / ...) appear only with the write grant; they pass the "
-    "impact x reversibility bound + the vetted catalog and are audited. Acting is ALWAYS the "
-    "operator's call -- propose it WITH the verb and let them approve; never run one unasked."
-)
 
 
 def _server_instructions(state_path: str, label: str) -> str:
