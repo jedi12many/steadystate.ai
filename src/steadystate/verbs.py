@@ -489,22 +489,11 @@ def _analyze_probe(finding: Finding):
     return probe, fields.namespace, pod
 
 
-def _refetch_logs(finding: Finding) -> str:
-    """Best-effort: re-fetch the finding's pod logs FRESH at analyze time (current + previous
-    container) so the model investigates the live picture, not just the scan-time snapshot. '' for a
-    non-k8s finding, a pod we can't name from the evidence, or any failure -- `analyze` then falls
-    back to the captured window. Read-only (`kubectl logs`), aimed at the finding's cluster."""
-    probe, namespace, pod = _analyze_probe(finding)
-    if probe is None:
-        return ""
-    return probe.logs_for_analysis(namespace, pod)
-
-
 def _collect_evidence(finding: Finding) -> list:
-    """The read-only collectors (events, pod status) fattening the RCA's evidence beyond the logs --
-    each best-effort, each tagged with the read that produced it (the citation). [] for a non-k8s
-    finding. Layer 1 of the investigator: a fixed, grounded bundle; the model still writes the RCA.
-    Read-only."""
+    """The read-only collectors (pod status, rollout, cluster events, the re-fetched logs) gathering
+    the RCA's evidence -- each best-effort, each tagged with the read that produced it (the
+    citation). [] for a non-k8s finding. Layer 1 of the investigator: a fixed, grounded bundle; the
+    model still writes the RCA. Read-only."""
     from .reason.collect import CollectCtx, gather
 
     probe, namespace, pod = _analyze_probe(finding)
@@ -532,11 +521,8 @@ def _render_analyze(fingerprint: str, state_path: str) -> str:
             "analyze needs an LLM (ANTHROPIC_API_KEY or a custom endpoint) -- it's a grounded RCA "
             "over the captured evidence, not a guess. `show` gives the raw evidence; see `doctor`."
         )
-    live = _refetch_logs(finding)  # fresh current + previous logs, best-effort -> investigate live
-    collected = _collect_evidence(finding)  # events + pod status, gathered live, each cited
-    rca = analyze_finding(
-        finding, analyst._complete, collected=collected, live_logs=live, prior=prior
-    )
+    collected = _collect_evidence(finding)  # status, rollout, events, fresh logs -- each cited
+    rca = analyze_finding(finding, analyst._complete, collected=collected, prior=prior)
     if not rca:
         return "the model returned no analysis -- try again, or `show` the captured evidence."
     with StateStore(state_path) as store:  # persist it -- don't lose the RCA, or re-pay the model
