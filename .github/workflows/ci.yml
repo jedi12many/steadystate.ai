@@ -23,7 +23,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           # The supported floor (pyproject requires-python >=3.11); passing here
           # means we don't lean on any 3.12+-only behavior.
