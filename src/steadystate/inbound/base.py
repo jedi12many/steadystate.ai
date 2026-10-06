@@ -34,6 +34,7 @@ REQUEST = "request"
 REQUESTS_LIST = "requests"
 RUNS = "runs"
 HELP = "help"
+START_HERE = "start-here"
 PENDING = "pending"
 SUMMARY = "summary"
 PROBE = "probe"
@@ -67,11 +68,20 @@ ACTIONS_LIST = "actions"
 # ``help`` renders itself from this table, so a newly added verb is discoverable the moment it
 # lands -- the table is the single source of truth for both dispatch and self-documentation.
 COMMANDS: dict[str, tuple[str, str]] = {
+    START_HERE: (
+        "start-here",
+        "NEW HERE? CALL THIS FIRST. Returns how to drive steadystate + the current "
+        "state. The tools you see ARE the complete, fixed verb set -- never read "
+        "files, grep the source, or guess a command to learn this tool; everything "
+        "is in these verbs. Then start at `summary`",
+    ),
     HELP: ("help", "list the commands this listener accepts"),
     SUMMARY: (
         "summary",
-        "a one-glance status -- open findings by severity, what's pending your approval, the "
-        "homeostat's posture, and the single worst thing right now",
+        "START HERE for the fleet's state -- a one-glance status (open findings by "
+        "severity, what's pending your approval, the homeostat's posture, the single "
+        "worst thing now); from here go to `findings`/`show <fp>` to inspect, "
+        "`health` for the verdict, `analyze <fp>` for a cause",
     ),
     ASK: (
         "ask <question>",
@@ -102,9 +112,10 @@ COMMANDS: dict[str, tuple[str, str]] = {
     ),
     ANALYZE: (
         "analyze <fingerprint>",
-        "grounded root-cause analysis of a captured crash/panic -- root cause, the call chain, the "
-        "smoking gun, the trigger, the operational facts -- anchored to the captured evidence (the "
-        "stack trace), told to cite it and never invent. Needs an LLM",
+        "the next step after a crash/panic finding: a grounded root-cause analysis -- root cause, "
+        "the call chain, the smoking gun, the trigger, the operational facts -- anchored to the "
+        "captured evidence (logs, events, pod status, rollout), told to cite it and never invent. "
+        "Needs an LLM",
     ),
     HISTORY: ("history", "show the remediation audit log (newest first)"),
     HOLD: (
@@ -294,6 +305,7 @@ def render_help() -> str:
 # The positional argument(s) each verb takes, for the machine tool schema -- (name, required).
 # A two-arg verb (send) lists both; a verb with an optional arg marks it not-required.
 _TOOL_ARGS: dict[str, tuple[tuple[str, bool], ...]] = {
+    START_HERE: (),
     HELP: (),
     SUMMARY: (),
     ASK: (("question", True),),  # the question, free text -- taken verbatim
@@ -335,6 +347,7 @@ _TOOL_ARGS: dict[str, tuple[tuple[str, bool], ...]] = {
 # read-only (no change), state-write (mutes/dismissals -- reversible, no infra), guardrailed-write
 # (approve -> applies a remediation through the executor guardrails), external-send (push outward).
 _TOOL_EFFECT: dict[str, str] = {
+    START_HERE: "read-only",
     HELP: "read-only",
     SUMMARY: "read-only",
     ASK: "read-only",  # reads the committed docs + an LLM egress (like analyze); never mutates
